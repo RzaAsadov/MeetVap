@@ -1,0 +1,10 @@
+{
+  "port": 4300,
+  "databaseUrl": "postgresql://meetvap:change-me@127.0.0.1:5432/meetvap",
+  "admin": {
+    "username": "admin",
+    "password": "change-me-now"
+  },
+  "sessionSecret": "change-this-admin-session-secret",
+  "backendPublicUrl": "https://mm.meetvap.com"
+}

@@ -1,0 +1,1 @@
+ALTER TABLE "User" ADD COLUMN "hideNickname" BOOLEAN NOT NULL DEFAULT true;

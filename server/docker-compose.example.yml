@@ -1,0 +1,14 @@
+services:
+  api:
+    build:
+      context: .
+    container_name: messenger-api
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "4000:4000"
+    volumes:
+      - ../uploads:/uploads
+    environment:
+      UPLOAD_DIR: /uploads
