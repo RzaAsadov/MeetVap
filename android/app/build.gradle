@@ -175,8 +175,8 @@ dependencies {
     implementation("com.facebook.react:react-android")
     implementation(platform("com.google.firebase:firebase-bom:33.7.0"))
     implementation("com.google.firebase:firebase-messaging")
-    implementation("androidx.media3:media3-common:1.8.0")
-    implementation("androidx.media3:media3-transformer:1.8.0")
+    implementation("androidx.media3:media3-common:1.10.1")
+    implementation("androidx.media3:media3-transformer:1.10.1")
     implementation("com.google.android.play:integrity:1.4.0")
 
     def isGifEnabled = (findProperty('expo.gif.enabled') ?: "") == "true";
