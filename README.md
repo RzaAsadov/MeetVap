@@ -113,7 +113,7 @@ The current Catalog is a server-selected WebView destination. Operators can conf
   <tr>
     <td align="center"><strong>MeetLinks (Like Zoom links)</strong><br><img src="docs/screenshots/meetlinks.jpg" alt="Meetlinks" width="260"></td>
     <td align="center"><strong>Settings</strong><br><img src="docs/screenshots/settings.jpg" alt="Settings" width="260"></td>
-    <td align="center"><strong>More product views</strong><br><a href="MeetVap.md">Read the product guide</a></td>
+    <td align="center"><strong>Explore MeetVap</strong><br><a href="docs/SCREENSHOTS.md">More product views</a><br><a href="MeetVap.md">More features information</a></td>
   </tr>
     <tr>
     <td align="center"><strong>Web version</strong><br><img src="docs/screenshots/webversion.png" alt="Web version" width="390"></td>
