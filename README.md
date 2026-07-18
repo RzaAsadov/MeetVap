@@ -7,7 +7,14 @@
 
   MeetVap is an open-source communication platform with native iOS and Android clients, a browser messenger, voice and video calling, moderated groups, stories, public meeting links, and an operator administration console.
 
-  <sub><strong>Solo-built with OpenAI Codex.</strong> Development began with GPT-5.5 and later transitioned to GPT-5.6. This project explains how Codex and GPT-5.6 were used for repository analysis, architecture, implementation, debugging, code review, and release preparation, while the solo developer directed the product and validated it on real devices.</sub>
+  <h2>Solo-built with OpenAI Codex</h2>
+  <p>Development began with GPT-5.5 and later transitioned to GPT-5.6. This project explains how Codex and GPT-5.6 were used for repository analysis, architecture, implementation, debugging, code review, and release preparation, while the solo developer directed the product and validated it on real devices.</p>
+
+  <h3>Download and test the published apps</h3>
+  <p>MeetVap is a working product available through both official mobile stores.</p>
+
+  <a href="https://apps.apple.com/tr/app/meetvap/id6767963508"><img src="https://img.shields.io/badge/Download_on_the_App_Store-0d96f6?style=for-the-badge&amp;logo=apple&amp;logoColor=white" alt="Download MeetVap on the App Store"></a>
+  <a href="https://play.google.com/store/apps/details?id=com.meetvap.messenger"><img src="https://img.shields.io/badge/Get_it_on_Google_Play-34a853?style=for-the-badge&amp;logo=googleplay&amp;logoColor=white" alt="Get MeetVap on Google Play"></a>
 
   [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-663399.svg)](LICENSE)
   ![Node.js 22](https://img.shields.io/badge/Node.js-22-339933?logo=nodedotjs&logoColor=white)
