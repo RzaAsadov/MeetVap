@@ -1,0 +1,34 @@
+title: "[Idea] "
+labels:
+  - ideas
+body:
+  - type: markdown
+    attributes:
+      value: Use this template for early product, protocol, architecture, and roadmap proposals.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem to solve
+      description: Describe the affected users and current limitation.
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: What should become possible? Define success without prescribing every implementation detail.
+    validations:
+      required: true
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Constraints and risks
+      description: Consider backward compatibility, message durability, privacy, abuse, platform limits, operations, and cost.
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Possible approach
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives

@@ -9,7 +9,7 @@ import { getAuthedUser, requireAuth } from '../auth';
 import { config } from '../config';
 import { HttpError } from '../httpError';
 import { prisma } from '../prisma';
-import { serializeMessage, serializeUser } from '../serializers';
+import { serializeUser } from '../serializers';
 import { assertNotBlockedBetween } from './userRoutes';
 import { createAndBroadcastConversationMessage } from './conversationRoutes';
 
