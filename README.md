@@ -7,6 +7,8 @@
 
   MeetVap is an open-source communication platform with native iOS and Android clients, a browser messenger, voice and video calling, moderated groups, stories, public meeting links, and an operator administration console.
 
+  <sub><strong>Solo-developed with ChatGPT Code.</strong> Development began with ChatGPT Code 5.5 and later transitioned to ChatGPT Code 5.6 sol.</sub>
+
   [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-663399.svg)](LICENSE)
   ![Node.js 22](https://img.shields.io/badge/Node.js-22-339933?logo=nodedotjs&logoColor=white)
   ![React Native 0.83](https://img.shields.io/badge/React_Native-0.83-20232a?logo=react&logoColor=61dafb)
