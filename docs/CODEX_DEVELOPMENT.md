@@ -1,0 +1,25 @@
+# How I Built MeetVap with Codex
+
+MeetVap started while I was working with ChatGPT 5.5. When GPT-5.6 sol became available, I moved the project to it. That change had a noticeable positive impact, especially while improving the communication stack. It handled the relationships between mobile clients, local storage, the server, browser sessions, push delivery, and realtime calls more consistently, and it was better at following a problem across several parts of the repository.
+
+I developed MeetVap as a solo developer. I defined the product, planned the architecture, decided how each workflow should behave, and tested the results. Codex was the engineering tool I used to inspect the repository, implement changes, trace problems, and keep work coordinated across the complete stack.
+
+The project is more than a mobile interface. It includes the iOS and Android applications, the Node.js backend, PostgreSQL and Prisma data models, Redis-backed operations, browser messaging, public Meet links, the administration panel, push notifications, local SQLite history, media transfer, and LiveKit voice and video communication. I planned how these parts should work together, then worked with Codex to implement them without treating each component as an isolated project.
+
+A typical task started with a real product requirement or a problem I had reproduced. I described the expected behavior and the constraints that could not be broken. Codex then inspected the relevant code instead of working from a generic example. For larger changes, we followed the path from the user interface through local persistence and network events to the server and database. This was particularly important for message delivery, offline synchronization, edits, deletions, read states, media, calls, groups, and multi-device behavior.
+
+Debugging was based on evidence from real devices. I tested on both newer and older Android phones, as well as iPhones and the browser application. When a problem could not be understood from the interface alone, Codex added focused diagnostics and gave me exact ADB commands. I recorded `logcat` output into files, reproduced the issue, and returned the logs for analysis. We used the same process for slow chat rendering, keyboard and scroll behavior, missing messages, native incoming calls, voice rooms, media downloads, and delayed LiveKit video subscriptions.
+
+Screen recordings were also important. They showed timing and layout problems that normal logs could not explain, such as a chat jumping after hydration, a composer moving when the keyboard opened, or remote video appearing too late. I supplied recordings from different devices, and Codex compared the visible behavior with lifecycle events and diagnostic timestamps before changing the implementation.
+
+I did not accept changes only because they compiled. After implementation, I reviewed the code and tested the actual behavior. I then told Codex what was still wrong, what needed to be changed, and which existing behavior had to remain untouched. When a patch fixed only the symptom, I asked for a deeper analysis or a refactor. This review loop was repeated until the result worked across the affected platforms and devices.
+
+Backward compatibility was part of that process. MeetVap has mobile applications already in use, so server changes could not assume that every client would be updated at the same time. I required old applications to continue working while new message acknowledgements, synchronization paths, app attestation, diagnostics, stories, meetings, and other features were introduced. Where old APIs still had to remain, they were kept as compatibility paths and marked for later removal.
+
+GPT-5.6 sol was most useful when a problem crossed several boundaries. A message appearing in a push notification but not in a chat could involve native background handling, server queue state, local SQLite writes, acknowledgement order, and chat hydration. A delayed video could involve publication, subscription permissions, LiveKit events, adaptive quality logic, and rendering. Working with the repository as one system made it possible to find these causes instead of repeatedly adding UI-level patches.
+
+Codex was also used for code review, documentation, configuration checks, migration review, deployment scripts, localization work, and open-source preparation. I remained responsible for product decisions, architecture direction, credentials, deployments, store releases, and final validation. Codex accelerated implementation and analysis, but real-device testing and human review determined whether a change was ready.
+
+This way of working allowed one developer to build and maintain a communication platform with mobile, web, backend, realtime media, administration, and operational components. The main lesson was that AI-assisted development worked best when I provided clear requirements, preserved technical constraints, collected useful diagnostics, reviewed the output critically, and continued testing beyond the first successful build.
+
+[Back to README](../README.md)

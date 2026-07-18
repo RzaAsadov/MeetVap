@@ -10,7 +10,7 @@
   <p><strong><a href="https://meetvap.com">Official website: meetvap.com</a></strong></p>
 
   <h2>Solo-built with OpenAI Codex</h2>
-  <p>Development began with GPT-5.5 and later transitioned to GPT-5.6. This project explains how Codex and GPT-5.6 were used for repository analysis, architecture, implementation, debugging, code review, and release preparation, while the solo developer directed the product and validated it on real devices.</p>
+  <p>Development began with GPT-5.5 and later transitioned to GPT-5.6. This project <a href="docs/CODEX_DEVELOPMENT.md">explains</a> how Codex and GPT-5.6 were used for repository analysis, architecture, implementation, debugging, code review, and release preparation, while the solo developer directed the product and validated it on real devices.</p>
 
   <h3>Download and test the published apps</h3>
   <p>MeetVap is a working product available through both official mobile stores.</p>
