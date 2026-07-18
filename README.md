@@ -97,7 +97,7 @@ The current Catalog is a server-selected WebView destination. Operators can conf
 
 <table>
   <tr>
-    <td align="center"><strong>Chat</strong><br><img src="docs/screenshots/chat.jpg" alt="Chat" width="260"></td>
+    <td align="center"><strong>Chat</strong><br><img src="docs/screenshots/chats.jpg" alt="Chat" width="260"></td>
     <td align="center"><strong>Groups</strong><br><img src="docs/screenshots/groups.jpg" alt="Groups" width="260"></td>
     <td align="center"><strong>Calls</strong><br><img src="docs/screenshots/calls.jpg" alt="Calls" width="260"></td>
   </tr>
@@ -108,7 +108,7 @@ The current Catalog is a server-selected WebView destination. Operators can conf
   </tr>
     <tr>
     <td align="center"><strong>Web version</strong><br><img src="docs/screenshots/webversion.png" alt="Web version" width="390"></td>
-    <td align="center"><strong>Admin panel</strong><br><img src="docs/screenshots/adminscr.jpg" alt="Admin panel" width="390"></td>
+    <td align="center"><strong>Admin panel</strong><br><img src="docs/screenshots/adminscr.png" alt="Admin panel" width="390"></td>
 
   </tr>
 </table>
