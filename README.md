@@ -102,9 +102,14 @@ The current Catalog is a server-selected WebView destination. Operators can conf
     <td align="center"><strong>Calls</strong><br><img src="docs/screenshots/calls.jpg" alt="Calls" width="260"></td>
   </tr>
   <tr>
-    <td align="center"><strong>Mini Apps</strong><br><img src="docs/screenshots/meetlinks.jpg" alt="Meetlinks" width="260"></td>
+    <td align="center"><strong>MeetLinks (Like Zoom links)</strong><br><img src="docs/screenshots/meetlinks.jpg" alt="Meetlinks" width="260"></td>
     <td align="center"><strong>Settings</strong><br><img src="docs/screenshots/settings.jpg" alt="Settings" width="260"></td>
     <td align="center"><strong>More product views</strong><br><a href="MeetVap.md">Read the product guide</a></td>
+  </tr>
+    <tr>
+    <td align="center"><strong>Web version</strong><br><img src="docs/screenshots/webversion.png" alt="Web version" width="390"></td>
+    <td align="center"><strong>Admin panel</strong><br><img src="docs/screenshots/adminscr.jpg" alt="Admin panel" width="390"></td>
+
   </tr>
 </table>
 
