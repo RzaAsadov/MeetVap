@@ -177,7 +177,7 @@ dependencies {
     implementation("com.google.firebase:firebase-messaging")
     implementation("androidx.media3:media3-common:1.8.0")
     implementation("androidx.media3:media3-transformer:1.8.0")
-    implementation("com.google.android.play:integrity:1.4.0")
+    implementation("com.google.android.play:integrity:1.6.0")
 
     def isGifEnabled = (findProperty('expo.gif.enabled') ?: "") == "true";
     def isWebpEnabled = (findProperty('expo.webp.enabled') ?: "") == "true";
