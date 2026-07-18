@@ -1,0 +1,91 @@
+name: Bug report
+description: Report a reproducible defect in MeetVap.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting a defect. Remove credentials, message content, personal data, and production identifiers. Security vulnerabilities belong in the private process described in `SECURITY.md`.
+  - type: dropdown
+    id: component
+    attributes:
+      label: Affected component
+      options:
+        - Android app
+        - iOS app
+        - Browser messenger
+        - Public Meet client
+        - Backend API / workers
+        - Admin console
+        - Catalog / Help / PHP surface
+        - Build or deployment
+        - Documentation
+        - Multiple components
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: App version/build, server commit, or branch.
+      placeholder: "Android 22.1 (291), server abc1234"
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Device/OS, browser, deployment type, and relevant network state.
+      placeholder: "Huawei P20 Lite, Android 9, Wi-Fi; self-hosted server"
+    validations:
+      required: true
+  - type: textarea
+    id: summary
+    attributes:
+      label: Problem
+      description: Describe the observable failure and its impact.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      placeholder: |
+        1. Start from ...
+        2. Open ...
+        3. Perform ...
+        4. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Redacted evidence
+      description: Add short logs, screenshots, recordings, timing data, or database observations. Do not include secrets or user content.
+      render: shell
+  - type: textarea
+    id: regression
+    attributes:
+      label: Regression information
+      description: Did this work before? If known, identify the last working version or change.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched existing issues.
+          required: true
+        - label: I reproduced this on the latest available version or current `main`.
+          required: true
+        - label: I removed credentials, tokens, personal data, and message content.
+          required: true
+        - label: This is not a security vulnerability.
+          required: true

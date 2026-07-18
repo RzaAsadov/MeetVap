@@ -1,0 +1,38 @@
+title: "[Q&A] "
+labels:
+  - q-and-a
+body:
+  - type: markdown
+    attributes:
+      value: Ask installation, architecture, development, or self-hosting questions here. Use issues for reproducible defects and the private security process for vulnerabilities.
+  - type: dropdown
+    id: topic
+    attributes:
+      label: Topic
+      options:
+        - Local development
+        - Self-hosting and deployment
+        - Mobile builds and signing
+        - Backend and database
+        - Calls and LiveKit
+        - Browser applications
+        - Administration
+        - Architecture or API
+        - Contributing
+    validations:
+      required: true
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+    validations:
+      required: true
+  - type: textarea
+    id: attempted
+    attributes:
+      label: What have you tried?
+  - type: textarea
+    id: environment
+    attributes:
+      label: Relevant environment
+      description: Include versions and deployment shape, with secrets removed.

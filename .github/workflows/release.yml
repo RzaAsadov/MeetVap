@@ -1,0 +1,75 @@
+name: Release server and web bundles
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgresql://messenger:messenger@127.0.0.1:5432/messenger?schema=public
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            server/package-lock.json
+            web/package-lock.json
+            meet/package-lock.json
+
+      - name: Build server
+        working-directory: server
+        run: |
+          npm ci
+          npm run prisma:generate
+          npm run build
+
+      - name: Build browser messenger
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+
+      - name: Build public Meet client
+        working-directory: meet
+        run: |
+          npm ci
+          npm run build
+
+      - name: Package release bundles
+        shell: bash
+        run: |
+          mkdir -p release/server
+          cp -R server/dist server/prisma release/server/
+          cp server/package.json server/package-lock.json server/prisma.config.ts server/Dockerfile release/server/
+          cp server/.env.example release/server/
+          cp config.json release/server/config.example.json
+          tar -czf "meetvap-server-${GITHUB_REF_NAME}.tar.gz" -C release server
+          tar -czf "meetvap-web-${GITHUB_REF_NAME}.tar.gz" -C web dist
+          tar -czf "meetvap-meet-${GITHUB_REF_NAME}.tar.gz" -C meet dist
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            "meetvap-server-${GITHUB_REF_NAME}.tar.gz" \
+            "meetvap-web-${GITHUB_REF_NAME}.tar.gz" \
+            "meetvap-meet-${GITHUB_REF_NAME}.tar.gz" \
+            --verify-tag \
+            --generate-notes \
+            --title "MeetVap ${GITHUB_REF_NAME}"
+
+      - name: Mobile release notice
+        run: |
+          echo "Android and iOS binaries are intentionally not produced here."
+          echo "They require protected signing credentials and platform-specific release validation."

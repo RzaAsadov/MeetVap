@@ -1,0 +1,67 @@
+name: Feature request
+description: Propose a focused product or engineering improvement.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Large protocol, schema, security, or product changes should begin as a Discussion. Explain the user problem before proposing an implementation.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Messaging and local storage
+        - Calls, meetings, or voice rooms
+        - Groups and statuses
+        - Privacy, safety, or security
+        - Android
+        - iOS
+        - Browser messenger
+        - Backend and API
+        - Administration
+        - Deployment and operations
+        - Catalog / Mini Apps
+        - Accessibility or localization
+        - Documentation
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: User problem
+      description: Who is affected, what are they trying to do, and why is the current behavior insufficient?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe observable behavior and acceptance criteria, not only implementation details.
+    validations:
+      required: true
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: Compatibility and migration
+      description: Consider old mobile builds, API contracts, Prisma migrations, local databases, and rollback.
+  - type: textarea
+    id: security
+    attributes:
+      label: Privacy and security impact
+      description: Identify new data, permissions, trust boundaries, retention, or abuse risks.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched issues, discussions, and the roadmap.
+          required: true
+        - label: I described a user problem rather than only a preferred implementation.
+          required: true

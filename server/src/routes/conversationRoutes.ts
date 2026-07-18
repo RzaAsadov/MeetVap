@@ -1,4 +1,4 @@
-import { ConversationMember, Message, MessageKind, MessageStatus, Prisma, ScheduledMessage, StatusAudience } from '@prisma/client';
+import { ConversationMember, Message, MessageKind, MessageStatus, Prisma, ScheduledMessage, StatusAudience, StatusUpdate } from '@prisma/client';
 import { NextFunction, Request, Response, Router } from 'express';
 import { AccessToken } from 'livekit-server-sdk';
 import crypto from 'crypto';
@@ -14,7 +14,7 @@ import { getMessageClientKind, normalizeMessageClient, type MessageClientIdentit
 import { config } from '../config';
 import { HttpError } from '../httpError';
 import { createUniqueGroupInviteCode } from '../groupInviteCodes';
-import { selectLiveKitServer, selectLiveKitServerForRoom } from '../livekitPool';
+import { selectLiveKitServerForRoom } from '../livekitPool';
 import { prisma } from '../prisma';
 import { sendMessagePush } from '../pushNotifications';
 import { serializeConversation, serializeMessage } from '../serializers';
@@ -45,7 +45,6 @@ const RECEIPT_WRITE_BATCH_SIZE = 50;
 const CONVERSATION_LIST_CACHE_TTL_SECONDS = 8;
 const HOUR_MS = 60 * 60 * 1000;
 type CreateConversationMessageInput = ReturnType<typeof createMessageSchema.parse>;
-type CreateScheduledMessageInput = ReturnType<typeof createScheduledMessageSchema.parse>;
 
 conversationRoutes.get('/public-invites/:inviteCode', async (req, res, next) => {
   try {
@@ -4655,7 +4654,7 @@ async function assertMessageMediaAvailable(mediaId: string, userId: string) {
 
 async function canUserAccessStatusMedia(
   userId: string,
-  status: Pick<Prisma.StatusUpdateGetPayload<{}>, 'audience' | 'authorId' | 'exceptUserIds' | 'onlyUserIds'>,
+  status: Pick<StatusUpdate, 'audience' | 'authorId' | 'exceptUserIds' | 'onlyUserIds'>,
 ) {
   if (status.authorId === userId) {
     return true;
