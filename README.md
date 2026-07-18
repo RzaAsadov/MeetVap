@@ -7,6 +7,8 @@
 
   MeetVap is an open-source communication platform with native iOS and Android clients, a browser messenger, voice and video calling, moderated groups, stories, public meeting links, and an operator administration console.
 
+  <p><strong><a href="https://meetvap.com">Official website: meetvap.com</a></strong></p>
+
   <h2>Solo-built with OpenAI Codex</h2>
   <p>Development began with GPT-5.5 and later transitioned to GPT-5.6. This project explains how Codex and GPT-5.6 were used for repository analysis, architecture, implementation, debugging, code review, and release preparation, while the solo developer directed the product and validated it on real devices.</p>
 
