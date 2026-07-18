@@ -1,0 +1,144 @@
+{
+  "expo": {
+    "name": "MeetVap",
+    "slug": "meetvap",
+    "version": "17.0",
+    "icon": "./assets/icon.png",
+    "orientation": "portrait",
+    "scheme": "meetvap",
+    "splash": {
+      "backgroundColor": "#ffffff"
+    },
+    "userInterfaceStyle": "automatic",
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.meetvap.app",
+      "buildNumber": "4",
+      "associatedDomains": [
+        "applinks:meetvap.com",
+        "applinks:www.meetvap.com",
+        "applinks:meet.meetvap.com"
+      ],
+      "entitlements": {
+        "com.apple.developer.avfoundation.multitasking-camera-access": true,
+        "com.apple.security.application-groups": [
+          "group.com.meetvap.app"
+        ]
+      },
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false,
+        "UIBackgroundModes": [
+          "audio",
+          "voip",
+          "remote-notification",
+          "location"
+        ],
+        "NSCameraUsageDescription": "MeetVap needs camera access for video calls and photo sharing.",
+        "NSLocationWhenInUseUsageDescription": "MeetVap needs location access so you can share your current location in chats.",
+        "NSMicrophoneUsageDescription": "MeetVap needs microphone access for calls and voice messages.",
+        "NSPhotoLibraryUsageDescription": "MeetVap needs photo library access so you can share media."
+      }
+    },
+    "android": {
+      "package": "com.meetvap.messenger",
+      "googleServicesFile": "./google-services.json",
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ],
+          "data": [
+            {
+              "host": "meetvap.com",
+              "pathPrefix": "/u",
+              "scheme": "https"
+            },
+            {
+              "host": "meetvap.com",
+              "pathPrefix": "/g",
+              "scheme": "https"
+            },
+            {
+              "host": "www.meetvap.com",
+              "pathPrefix": "/u",
+              "scheme": "https"
+            },
+            {
+              "host": "www.meetvap.com",
+              "pathPrefix": "/g",
+              "scheme": "https"
+            },
+            {
+              "host": "meet.meetvap.com",
+              "pathPrefix": "/",
+              "scheme": "https"
+            }
+          ]
+        }
+      ],
+      "adaptiveIcon": {
+        "backgroundColor": "#ffffff",
+        "foregroundImage": "./assets/adaptive-icon.png"
+      },
+      "permissions": [
+        "CAMERA",
+        "RECORD_AUDIO",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_CAMERA",
+        "FOREGROUND_SERVICE_MICROPHONE",
+        "FOREGROUND_SERVICE_MEDIA_PLAYBACK",
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION",
+        "FOREGROUND_SERVICE_LOCATION",
+        "READ_MEDIA_IMAGES",
+        "READ_MEDIA_VIDEO",
+        "USE_FULL_SCREEN_INTENT",
+        "VIBRATE",
+        "POST_NOTIFICATIONS"
+      ]
+    },
+    "plugins": [
+      "expo-secure-store",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "MeetVap needs access to photos and videos so you can share them in chats."
+        }
+      ],
+      "expo-audio",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "MeetVap needs location access so you can share your current location in chats.",
+          "locationAlwaysAndWhenInUsePermission": "MeetVap collects and transmits precise location data for timed Live Location sharing and PANIC PIN emergency location messages, including when the app is closed or not in use."
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "enableBackgroundRemoteNotifications": true,
+          "sounds": [
+            "./assets/ringtone.wav"
+          ]
+        }
+      ],
+      "expo-video",
+      "expo-sqlite",
+      "expo-font",
+      "expo-asset",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ],
+      "expo-localization"
+    ]
+  }
+}

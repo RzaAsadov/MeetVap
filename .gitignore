@@ -1,0 +1,215 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Package-manager caches
+.npm/
+.yarn/
+!.yarn/releases/
+!.yarn/plugins/
+!.yarn/sdks/
+!.yarn/versions/
+
+# Expo / Metro / React Native generated files
+.expo/
+.expo-shared/
+web-build/
+*.jsbundle
+
+# JavaScript / TypeScript build outputs
+dist/
+build/
+*.tsbuildinfo
+*.map
+coverage/
+.nyc_output/
+.eslintcache
+
+# App and panel build outputs
+admin/build/
+admin/dist/
+admin/.cache/
+partner/build/
+partner/dist/
+partner/.cache/
+meet/dist/
+meet/build/
+web/dist/
+web/build/
+web/.next/
+website/.next/
+server/dist/
+
+# Android generated files
+android/.gradle/
+android/.idea/
+android/.cxx/
+android/build/
+android/app/.cxx/
+android/app/build/
+android/app/debug/
+android/app/release/
+android/app/src/main/gen/
+android/android/
+android/local.properties
+android/crash.log
+*.apk
+*.aab
+
+# Keep Android source/build inputs trackable:
+# - android/build.gradle
+# - android/settings.gradle
+# - android/gradle.properties
+# - android/gradle/wrapper/*
+# - android/gradlew / android/gradlew.bat
+
+# Android signing secrets
+android/keystore.properties
+android/app/keystore.properties
+android/app/*.jks
+android/app/*.keystore
+android/app/*release*.keystore
+keystore.properties
+*.jks
+*.keystore
+
+# iOS generated files
+ios/Pods/
+ios/build/
+ios/DerivedData/
+ios/.xcode.env.local
+ios/MeetVap.xcodeproj/xcuserdata/
+ios/MeetVap.xcodeproj/project.xcworkspace/xcuserdata/
+ios/MeetVap.xcworkspace/xcuserdata/
+*.xcarchive
+*.ipa
+*.xcuserstate
+*.pbxuser
+*.perspectivev3
+*.xccheckout
+*.moved-aside
+*.hmap
+
+# Keep iOS source/build inputs trackable:
+# - ios/Podfile
+# - ios/Podfile.lock
+# - ios/Podfile.properties.json
+# - ios/MeetVap.xcworkspace/contents.xcworkspacedata
+# - ios/MeetVap.xcodeproj/project.pbxproj
+
+# Environment files
+.env
+.env.*
+!.env.example
+!.env*.example
+
+# Config files
+admin/config.json
+**/config.local.json
+**/config.prod.json
+**/config.production.json
+
+# Keep sanitized configuration templates trackable
+!**/config.example.json
+
+# Logs and runtime files
+*.log
+*.log.*
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+pids/
+*.pid
+*.seed
+*.pid.lock
+
+# Local databases / generated Prisma files
+*.db
+*.sqlite
+*.sqlite3
+server/.prisma/
+server/prisma/dev.db
+
+# Crash reports and diagnostics
+ioscrashes/
+crash-reports/
+*.crash
+.crashlytics-build/
+.firebase/
+
+# Certificates and private keys
+*.p8
+*.p12
+*.pfx
+*.pem
+*.key
+*.mobileprovision
+*.provisionprofile
+
+# Common SSH private-key filenames
+**/id_rsa
+**/id_dsa
+**/id_ecdsa
+**/id_ed25519
+
+# Server credentials and Firebase Admin service accounts
+**/credentials.json
+**/credential.json
+**/secrets.json
+**/secret.json
+**/service-account*.json
+**/serviceAccount*.json
+**/*-service-account.json
+**/firebase-adminsdk-*.json
+
+# Keep sanitized credential templates trackable
+!**/*.example.json
+
+# Private LiveKit server configuration
+livekit.yaml
+livekit.yml
+**/livekit.local.yaml
+**/livekit.local.yml
+**/livekit.prod.yaml
+**/livekit.prod.yml
+**/livekit.production.yaml
+**/livekit.production.yml
+
+# Keep sanitized LiveKit templates trackable
+!**/livekit.example.yaml
+!**/livekit.example.yml
+
+# IDE / editor / OS files
+.vscode/
+.idea/
+*.iml
+*.iws
+*.ipr
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+*.sublime-project
+*.sublime-workspace
+.history/
+
+# Temporary and backup files
+*.bak
+*.tmp
+*.temp
+backup/
+
+# Docker local overrides
+docker-compose.override.yml
+
+# Credential files
+GoogleService-Info.plist
+google-services.json
+**/google-services.json
+
+
+# Other files to ignore
+/*.sh
+/website

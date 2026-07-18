@@ -1,0 +1,1 @@
+ALTER TABLE "User" ADD COLUMN "hideFromSearch" BOOLEAN NOT NULL DEFAULT false;

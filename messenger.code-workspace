@@ -1,0 +1,11 @@
+{
+	"folders": [
+		{
+			"path": "."
+		}
+	],
+	"settings": {
+		"svg.preview.background": "editor",
+		"git.ignoreLimitWarning": true
+	}
+}

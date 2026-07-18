@@ -1,0 +1,1 @@
+ALTER TABLE "DevicePushToken" ADD COLUMN "locale" TEXT NOT NULL DEFAULT 'en';

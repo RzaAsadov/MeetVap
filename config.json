@@ -1,0 +1,66 @@
+{
+  "attestation": {
+    "androidRequiredBuild": 999999,
+    "challengeTtlMinutes": 2,
+    "iosRequiredBuild": 999999,
+    "legacyAllowUntil": "2026-09-01T00:00:00.000Z",
+    "mode": "observe",
+    "trustTtlHours": 24
+  },
+  "catalog": {
+    "url": "https://catalog.meetvap.com/index.php"
+  },
+  "help": {
+    "url": "https://help.meetvap.com/index.php"
+  },
+  "appVersions": {
+    "android": {
+      "latest": "21.6",
+      "minimum": "19.8",
+      "storeUrl": "https://play.google.com/store/apps/details?id=com.meetvap.messenger&hl=en"
+    },
+    "ios": {
+      "latest": "18.7",
+      "minimum": "17.8",
+      "storeUrl": "https://apps.apple.com/tr/app/meetvap/id6767963508"
+    }
+  },
+  "maintenance": {
+    "cleanupIntervalMinutes": 15,
+    "expiredSessionRetentionDays": 7,
+    "orphanMediaRetentionHours": 24,
+    "partialUploadRetentionHours": 24,
+    "staleCallTimeoutHours": 12
+  },
+  "retention": {
+    "clientContentAckHours": 72,
+    "textMessageDays": 30,
+    "mediaMessageDays": 15,
+    "locationMessageDays": 10
+  },
+  "messageQueue": {
+    "hardDeleteMinBuild": {
+      "android": 175,
+      "ios": 178
+    },
+    "activePushTokenDays": 45
+  },
+  "premium": {
+    "trialDays": 15
+  },
+  "uploads": {
+    "maxAttachmentBytes": 1073741824,
+    "maxBatchAttachmentBytes": 1073741824,
+    "maxChunkBytes": 4194304,
+    "maxDirectUploadBytes": 104857600
+  },
+  "webMediaCache": {
+    "maxSingleMediaBytes": 524288000,
+    "maxTotalBytes": 10737418240
+  },
+  "rateLimits": {
+    "textMessagesPerMinute": 90,
+    "mediaMessagesPerMinute": 20,
+    "uploadsPerMinute": 24
+  }
+}
