@@ -356,6 +356,19 @@ The console connects directly to the MeetVap PostgreSQL database. Do not expose 
 
 ## Configuration
 
+### Android Google Maps key
+
+Never add a Google Maps API key to `android/gradle.properties`. Supply it through
+the `GOOGLE_MAPS_ANDROID_API_KEY` environment variable or place it in your local
+`~/.gradle/gradle.properties` file:
+
+```properties
+GOOGLE_MAPS_ANDROID_API_KEY=your_restricted_android_key
+```
+
+Restrict the key to the MeetVap Android package, its signing-certificate SHA-1
+fingerprints, and only the Google APIs required by the application.
+
 ### Backend environment
 
 | Variable | Required | Purpose |
