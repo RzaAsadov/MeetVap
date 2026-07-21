@@ -10,11 +10,11 @@
   },
   "dependencies": {
     "@vitejs/plugin-react": "^5.1.1",
-    "livekit-client": "^2.18.8",
+    "livekit-client": "^2.20.2",
     "lucide-react": "^0.468.0",
     "qrcode": "^1.5.4",
-    "react": "19.2.0",
-    "react-dom": "19.2.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
     "socket.io-client": "^4.8.1",
     "vite": "^7.2.7"
   },

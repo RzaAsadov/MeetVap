@@ -9,7 +9,7 @@ for (const envPath of [
   path.resolve(process.cwd(), '.env'),
   path.resolve(__dirname, '../.env'),
 ]) {
-  dotenv.config({ path: envPath });
+  dotenv.config({ path: envPath, quiet: true });
 }
 
 const prisma = new PrismaClient();

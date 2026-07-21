@@ -9,7 +9,7 @@ const envPaths = [
 ];
 
 for (const envPath of envPaths) {
-  dotenv.config({ path: envPath });
+  dotenv.config({ path: envPath, quiet: true });
 }
 
 process.env.DATABASE_URL ??= 'postgresql://messenger:messenger@localhost:5432/messenger?schema=public';

@@ -10,7 +10,7 @@ const envPaths = [
 ];
 
 for (const envPath of envPaths) {
-  dotenv.config({ path: envPath });
+  dotenv.config({ path: envPath, quiet: true });
 }
 
 const optionalString = z.preprocess(

@@ -14,10 +14,10 @@ jobs:
     env:
       DATABASE_URL: postgresql://messenger:messenger@127.0.0.1:5432/messenger?schema=public
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
