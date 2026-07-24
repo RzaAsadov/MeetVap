@@ -1,9 +1,13 @@
 import { Request, Router } from 'express';
+import { Prisma } from '@prisma/client';
+import { z } from 'zod';
 
 import { getAuthedUser, hashPassword, isAdminBlocked, requireAuth, signAccessToken, toAuthUser, verifyPassword } from '../auth';
 import { getClientMetadataWriteData, getRequestClientMetadata, hashAccessToken } from '../clientCompatibility';
 import { HttpError } from '../httpError';
+import { operationalConfig } from '../operationalConfig';
 import { prisma } from '../prisma';
+import { enforceRateLimit } from '../rateLimits';
 import { serializeUser } from '../serializers';
 import { notifyServerUserRegistered } from '../serverEventMessages';
 import { ensureUserPublicShareCode } from '../shareCodes';
@@ -11,6 +15,61 @@ import { CURRENT_TERMS_VERSION } from '../terms';
 import { loginSchema, registerSchema, usernameAvailabilitySchema } from '../validators';
 
 export const authRoutes = Router();
+
+const domainResolutionSchema = z.object({
+  domain: z.string().trim().toLowerCase().min(1).max(253).regex(/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/),
+  platform: z.string().trim().max(32).optional(),
+  username: z.string().trim().toLowerCase().min(1).max(32).regex(/^[a-z0-9_]+$/),
+});
+
+authRoutes.post('/domain-resolution', async (req, res, next) => {
+  try {
+    if (operationalConfig.serverRole !== 'main') {
+      throw new HttpError(404, 'Route not found');
+    }
+
+    const input = domainResolutionSchema.parse(req.body);
+    await enforceRateLimit(`${getRequestIp(req)}:${input.domain}`, 'domain-resolution', 30);
+
+    const result = await prisma.$transaction(async (tx) => {
+      const domain = await tx.loginDomain.findUnique({ where: { domain: input.domain } });
+
+      if (!domain) throw new HttpError(404, 'Login domain not found', { code: 'LOGIN_DOMAIN_NOT_FOUND' });
+      if (!domain.isActive) throw new HttpError(403, 'Login domain is inactive', { code: 'LOGIN_DOMAIN_INACTIVE' });
+      if (domain.expiresAt && domain.expiresAt <= new Date()) {
+        throw new HttpError(403, 'Login domain has expired', { code: 'LOGIN_DOMAIN_EXPIRED' });
+      }
+
+      const existing = await tx.loginDomainUsername.findUnique({
+        where: { domainId_username: { domainId: domain.id, username: input.username } },
+      });
+
+      if (!existing && domain.maxUserCount !== null) {
+        const allocated = await tx.loginDomainUsername.count({ where: { domainId: domain.id } });
+        if (allocated >= domain.maxUserCount) {
+          throw new HttpError(403, 'Login domain user limit reached', { code: 'LOGIN_DOMAIN_LIMIT_REACHED' });
+        }
+      }
+
+      await tx.loginDomainUsername.upsert({
+        create: { domainId: domain.id, platform: input.platform, username: input.username },
+        update: { lastRequestedAt: new Date(), platform: input.platform, requestCount: { increment: 1 } },
+        where: { domainId_username: { domainId: domain.id, username: input.username } },
+      });
+
+      return domain;
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({
+      domain: result.domain,
+      expiresAt: result.expiresAt?.toISOString() ?? null,
+      hostname: result.hostname,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
 
 authRoutes.get('/username-availability', async (req, res, next) => {
   try {

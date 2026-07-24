@@ -6,6 +6,9 @@ const positiveInteger = z.number().int().positive();
 const nonNegativeInteger = z.number().int().nonnegative();
 
 const operationalConfigSchema = z.object({
+  serverRole: z.enum(['main', 'child']).default('main'),
+  mainServerHost: z.string().url().refine((value) => new URL(value).protocol === 'https:', 'mainServerHost must use HTTPS').optional(),
+  mainServerKey: z.string().trim().min(24).optional(),
   appVersions: z.object({
     android: z.object({
       latest: z.string().trim().min(1).default('0.1.0'),
@@ -119,6 +122,10 @@ if (!configPath) {
 export const operationalConfig = operationalConfigSchema.parse(
   JSON.parse(fs.readFileSync(configPath, 'utf8')),
 );
+
+if (operationalConfig.serverRole === 'child' && (!operationalConfig.mainServerHost || !operationalConfig.mainServerKey)) {
+  throw new Error('Child servers require mainServerHost and mainServerKey in config.json');
+}
 
 export function getClientPolicy() {
   return {

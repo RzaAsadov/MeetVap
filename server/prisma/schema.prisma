@@ -1029,3 +1029,38 @@ model UserMessageStats {
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
+
+model LoginDomain {
+  id                     String   @id @default(cuid())
+  domain                 String   @unique
+  hostname               String
+  description            String?
+  contacts               String?
+  originIpAddresses      String[] @default([])
+  mainServerKeyHash      String   @unique
+  expiresAt              DateTime?
+  maxUserCount           Int?
+  isActive               Boolean  @default(true)
+  createdByAdminUsername String?
+  updatedByAdminUsername String?
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+  usernames              LoginDomainUsername[]
+
+  @@index([isActive, expiresAt])
+  @@index([createdAt])
+}
+
+model LoginDomainUsername {
+  id               String   @id @default(cuid())
+  domainId         String
+  username         String
+  platform         String?
+  requestCount     Int      @default(1)
+  firstRequestedAt DateTime @default(now())
+  lastRequestedAt  DateTime @default(now())
+  domain           LoginDomain @relation(fields: [domainId], references: [id], onDelete: Cascade)
+
+  @@unique([domainId, username])
+  @@index([domainId, lastRequestedAt])
+}

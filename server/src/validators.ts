@@ -65,7 +65,7 @@ export const usernameAvailabilitySchema = z.object({
 
 export const loginSchema = z.object({
   password: z.string().min(1),
-  locale: z.enum(['en', 'tr', 'ru']).optional(),
+  locale: z.enum(['en', 'tr', 'ru', 'az', 'de', 'fr', 'it', 'es', 'pt', 'ptBR']).optional(),
   platform: z.string().trim().min(1).max(32).optional(),
   termsAccepted: z.literal(true),
   termsVersion: z.literal(CURRENT_TERMS_VERSION),

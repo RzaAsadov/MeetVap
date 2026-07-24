@@ -3,6 +3,7 @@ import { cert, getApps, initializeApp } from 'firebase-admin/app';
 import { getMessaging } from 'firebase-admin/messaging';
 import jwt from 'jsonwebtoken';
 
+import { relayPushToMainServer } from './childPushRelay';
 import { config } from './config';
 import { prisma } from './prisma';
 
@@ -10,15 +11,16 @@ const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
 const INCOMING_CALL_CHANNEL_ID = 'incoming-calls-ringtone';
 const INCOMING_CALL_FCM_SOUND = 'ringtone';
 
-type StoredPushToken = {
+export type StoredPushToken = {
   locale?: string | null;
   platform?: string | null;
   provider: string;
   token: string;
   userId?: string | null;
+  quickReplyToken?: string;
 };
 
-type IncomingCallPush = {
+export type IncomingCallPush = {
   autoJoin?: boolean;
   avatarUrl?: string | null;
   body: string;
@@ -32,7 +34,7 @@ type IncomingCallPush = {
   tokens: StoredPushToken[];
 };
 
-type CallEndedPush = {
+export type CallEndedPush = {
   callId: string;
   callStatus?: 'CANCELLED' | 'DECLINED' | 'ENDED' | 'MISSED';
   conversationId: string;
@@ -42,7 +44,7 @@ type CallEndedPush = {
   tokens: StoredPushToken[];
 };
 
-type MessagePush = {
+export type MessagePush = {
   avatarUrl?: string | null;
   body: string;
   conversationId: string;
@@ -55,6 +57,7 @@ let apnsProvider: apn.Provider | null = null;
 let hasWarnedMissingFirebaseServiceAccount = false;
 
 export async function sendIncomingCallPush(input: IncomingCallPush) {
+  if (await relayPushToMainServer('incoming-call', input)) return;
   const issuedAt = Date.now();
   const expiresAt = issuedAt + 45_000;
   const callerTitle = input.title.trim() || 'Incoming call';
@@ -182,6 +185,7 @@ export async function sendIncomingCallPush(input: IncomingCallPush) {
 }
 
 export async function sendCallEndedPush(input: CallEndedPush) {
+  if (await relayPushToMainServer('call-ended', input)) return;
   const baseData = {
     callId: input.callId,
     callStatus: input.callStatus ?? 'ENDED',
@@ -300,6 +304,14 @@ function createQuickReplyToken(conversationId: string, userId?: string | null) {
 }
 
 export async function sendMessagePush(input: MessagePush) {
+  const relayInput = {
+    ...input,
+    tokens: input.tokens.map((item) => ({
+      ...item,
+      quickReplyToken: item.quickReplyToken ?? createQuickReplyToken(input.conversationId, item.userId),
+    })),
+  };
+  if (await relayPushToMainServer('message', relayInput)) return;
   const baseData = {
     categoryId: 'message',
     categoryIdentifier: 'message',
@@ -311,7 +323,7 @@ export async function sendMessagePush(input: MessagePush) {
     ...(input.avatarUrl ? { imageUrl: input.avatarUrl } : {}),
   };
   const dataForToken = (item: StoredPushToken) => {
-    const quickReplyToken = createQuickReplyToken(input.conversationId, item.userId);
+    const quickReplyToken = item.quickReplyToken ?? createQuickReplyToken(input.conversationId, item.userId);
 
     return {
       ...baseData,

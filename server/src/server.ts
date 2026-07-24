@@ -10,6 +10,7 @@ import { HttpError } from './httpError';
 import { payloadMaskMiddleware } from './payloadMaskMiddleware';
 import { prisma } from './prisma';
 import { authRoutes } from './routes/authRoutes';
+import { internalPushRoutes } from './routes/internalPushRoutes';
 import { attestationRoutes } from './routes/attestationRoutes';
 import { callRoutes, publicCallRoutes } from './routes/callRoutes';
 import { cleanupExpiredDisappearingMessages, cleanupExpiredViewDisappearingMessages, conversationRoutes, processDueScheduledMessages } from './routes/conversationRoutes';
@@ -75,6 +76,7 @@ app.get('/config/client', (_req, res) => {
 app.use('/call-receipts', publicCallRoutes);
 app.use('/group-webhooks', groupWebhookRoutes);
 app.use('/auth', authRoutes);
+app.use('/internal', internalPushRoutes);
 app.use('/attestation', requireAuth, attestationRoutes);
 app.use('/subscriptions', subscriptionRoutes);
 app.use('/support', supportRoutes);

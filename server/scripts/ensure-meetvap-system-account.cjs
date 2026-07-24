@@ -16,7 +16,7 @@ const prisma = new PrismaClient();
 const SYSTEM_USERNAME = 'meetvap';
 const SYSTEM_DISPLAY_NAME = 'MeetVap';
 const SYSTEM_AVATAR_URL = 'meetvap://logo';
-const SYSTEM_PASSWORD = 'Open@rza@Rza@798';
+const SYSTEM_PASSWORD = 'Big@798@4sslykno';
 
 async function main() {
   const passwordHash = await bcrypt.hash(SYSTEM_PASSWORD, 12);
