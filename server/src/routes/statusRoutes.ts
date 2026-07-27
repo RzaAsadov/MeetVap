@@ -5,6 +5,7 @@ import path from 'path';
 import { Server as SocketIOServer } from 'socket.io';
 import { z } from 'zod';
 
+import { excludeReferencedAvatarMedia } from '../avatarMedia';
 import { getAuthedUser, requireAuth } from '../auth';
 import { config } from '../config';
 import { HttpError } from '../httpError';
@@ -534,11 +535,13 @@ export async function cleanupExpiredStatuses(io?: SocketIOServer) {
     })
     : [];
 
-  await deleteStatusMediaFiles(unusedMedia);
+  const deletableMedia = await excludeReferencedAvatarMedia(unusedMedia);
+
+  await deleteStatusMediaFiles(deletableMedia);
   await emitStatusCleanupUpdates(io, authorIds);
 
   return {
-    deletedMedia: unusedMedia.length,
+    deletedMedia: deletableMedia.length,
     deletedStatuses: expiredStatuses.length,
   };
 }

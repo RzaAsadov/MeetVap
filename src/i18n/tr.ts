@@ -96,6 +96,7 @@ export const tr: Record<string, TranslationValue> = {
   serverNotConfigured: 'Sunucu ayarlı değil',
   serverUrlNotConfigured: 'Sunucu adresi ayarlı değil',
   serverNotReachable: 'Sunucuya ulaşılamıyor',
+  loginHostNotReachable: 'Seçilen giriş sunucusuna ulaşılamadı. Bağlantınızı kontrol edin veya yeniden deneyin.',
   pleaseCheckUrl: 'Lütfen adresi kontrol et.',
   serverSetupSubtitle: 'Bu uygulamayı özel sohbet sunucuna bağla.',
   serverUrl: 'Sunucu adresi',
@@ -240,6 +241,7 @@ export const tr: Record<string, TranslationValue> = {
   logoutWebAccess: 'Web erişimini kapat',
   webLogoutFailed: 'Web erişimi kapatılamadı',
   webPairingFailed: 'Web eşleştirme başarısız',
+  webPairingServerMismatch: ({ activeHost, pairingHost }) => `Bu QR kodu ${pairingHost} sunucusuna ait, ancak hesabınız ${activeHost} sunucusuna bağlı. Hesap sunucunuzun Web sayfasını açıp yeni QR kodunu tarayın.`,
   invalidQrCode: 'Geçersiz QR kod',
   invalidWebPairingQr: 'Bu MeetVap Web eşleştirme kodu değil.',
   cameraPermissionNeeded: 'Kamera izni gerekiyor',
@@ -915,4 +917,8 @@ export const tr: Record<string, TranslationValue> = {
   updateNow: 'Güncelle',
   discardVoiceMessage: 'Sesli mesajı sil',
   you: 'Sen',
+  welcomeHeroTitle: "Özel mesajlaşma, doğru şekilde",
+  welcomeHeroSubtitle: "Güvenle konuş ve ara — MeetVap sohbetlerini yalnızca sana ait tutar.",
+  welcomeNewUserCta: "Yani bir hesap oluştur",
+  welcomeExistingUserCta: "Zaten bir hesabım var"  
 };

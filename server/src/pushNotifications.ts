@@ -12,6 +12,8 @@ const INCOMING_CALL_CHANNEL_ID = 'incoming-calls-ringtone';
 const INCOMING_CALL_FCM_SOUND = 'ringtone';
 
 export type StoredPushToken = {
+  deliveryReceiptUrl?: string;
+  id?: string;
   locale?: string | null;
   platform?: string | null;
   provider: string;
@@ -53,11 +55,18 @@ export type MessagePush = {
   tokens: StoredPushToken[];
 };
 
+export type PushDispatchResult = {
+  acceptedCount: number;
+  failedCount: number;
+  invalidTokenIds: string[];
+  skippedCount: number;
+};
+
 let apnsProvider: apn.Provider | null = null;
 let hasWarnedMissingFirebaseServiceAccount = false;
 
 export async function sendIncomingCallPush(input: IncomingCallPush) {
-  if (await relayPushToMainServer('incoming-call', input)) return;
+  if (await relayPushToMainServer('incoming-call', input)) return emptyPushDispatchResult();
   const issuedAt = Date.now();
   const expiresAt = issuedAt + 45_000;
   const callerTitle = input.title.trim() || 'Incoming call';
@@ -105,7 +114,7 @@ export async function sendIncomingCallPush(input: IncomingCallPush) {
   ));
   const failedVoipUserIds = new Set<string>();
 
-  await Promise.all([
+  const initialResults = await Promise.all([
     sendExpoPushNotifications(expoTokens.map((item) => {
       const body = getIncomingCallBody(input, item.locale);
       const labels = getCallNotificationLabels(item.locale);
@@ -114,22 +123,23 @@ export async function sendIncomingCallPush(input: IncomingCallPush) {
         body,
         categoryId: 'incoming-call',
         channelId: INCOMING_CALL_CHANNEL_ID,
-        data: { ...baseData, ...labels, body },
+        data: { ...baseData, ...labels, body, ...getDeliveryReceiptData(item) },
         priority: 'high',
         sound: 'ringtone.wav',
         title: callerTitle,
         to: item.token,
+        tokenId: item.id,
       };
     })),
     Promise.all(fcmTokens.map((item) => {
       const body = getIncomingCallBody(input, item.locale);
       const labels = getCallNotificationLabels(item.locale);
 
-      return sendFcmNotifications([item.token], {
+      return sendFcmNotifications([item], {
         body,
         categoryId: 'incoming-call',
         channelId: INCOMING_CALL_CHANNEL_ID,
-        data: { ...baseData, ...labels, body },
+        data: { ...baseData, ...labels, body, ...getDeliveryReceiptData(item) },
         dataOnly: true,
         priority: 'high',
         sound: INCOMING_CALL_FCM_SOUND,
@@ -141,19 +151,28 @@ export async function sendIncomingCallPush(input: IncomingCallPush) {
       const body = getIncomingCallBody(input, item.locale);
       const labels = getCallNotificationLabels(item.locale);
 
-      return sendApnsVoipNotifications([item.token], {
+      return sendApnsVoipNotifications([item], {
         body,
-        data: { ...baseData, ...labels, body },
+        data: { ...baseData, ...labels, body, ...getDeliveryReceiptData(item) },
         title: callerTitle,
-      }).then((failedTokens) => {
+      }).then((voipResult) => {
+        const { failedTokens } = voipResult;
         if (failedTokens.length > 0 && item.userId) {
           failedVoipUserIds.add(item.userId);
         }
+        return voipResult;
       }).catch((error) => {
         console.warn('APNs VoIP push send threw', error);
         if (item.userId) {
           failedVoipUserIds.add(item.userId);
         }
+        return {
+          failedTokens: [item.token],
+          result: {
+            ...emptyPushDispatchResult(),
+            failedCount: 1,
+          },
+        };
       });
     })),
   ]);
@@ -168,24 +187,31 @@ export async function sendIncomingCallPush(input: IncomingCallPush) {
     )),
   ]);
 
-  await Promise.all([
+  const fallbackResults = await Promise.all([
     Promise.all(apnsAlertFallbackTokens.map((item) => {
       const body = getIncomingCallBody(input, item.locale);
       const labels = getCallNotificationLabels(item.locale);
 
-      return sendApnsNotifications([item.token], {
+      return sendApnsNotifications([item], {
         body,
         categoryId: 'incoming-call',
-        data: { ...baseData, ...labels, body },
+        data: { ...baseData, ...labels, body, ...getDeliveryReceiptData(item) },
         sound: 'ringtone.wav',
         title: callerTitle,
       });
     })),
   ]);
+
+  return mergePushDispatchResults([
+    initialResults[0],
+    ...initialResults[1],
+    ...initialResults[2].map((item) => item.result),
+    ...fallbackResults[0],
+  ]);
 }
 
 export async function sendCallEndedPush(input: CallEndedPush) {
-  if (await relayPushToMainServer('call-ended', input)) return;
+  if (await relayPushToMainServer('call-ended', input)) return emptyPushDispatchResult();
   const baseData = {
     callId: input.callId,
     callStatus: input.callStatus ?? 'ENDED',
@@ -200,26 +226,29 @@ export async function sendCallEndedPush(input: CallEndedPush) {
   const fcmTokens = input.tokens.filter((item) => item.provider === 'fcm');
   const apnsTokens = input.tokens.filter((item) => item.provider === 'apns');
 
-  await Promise.all([
+  const results = await Promise.all([
     sendExpoPushNotifications(expoTokens.map((item) => ({
       channelId: INCOMING_CALL_CHANNEL_ID,
       contentAvailable: true,
-      data: { ...baseData, locale: getPushLanguage(item.locale) },
+      data: { ...baseData, locale: getPushLanguage(item.locale), ...getDeliveryReceiptData(item) },
       priority: 'high',
       to: item.token,
+      tokenId: item.id,
     }))),
-    Promise.all(fcmTokens.map((item) => sendFcmNotifications([item.token], {
+    Promise.all(fcmTokens.map((item) => sendFcmNotifications([item], {
       body: '',
       channelId: INCOMING_CALL_CHANNEL_ID,
-      data: { ...baseData, locale: getPushLanguage(item.locale) },
+      data: { ...baseData, locale: getPushLanguage(item.locale), ...getDeliveryReceiptData(item) },
       dataOnly: true,
       priority: 'high',
       title: '',
     }))),
-    sendApnsBackgroundNotifications(apnsTokens.map((item) => item.token), {
-      data: { ...baseData, locale: 'en' },
-    }),
+    Promise.all(apnsTokens.map((item) => sendApnsBackgroundNotifications([item], {
+      data: { ...baseData, locale: getPushLanguage(item.locale), ...getDeliveryReceiptData(item) },
+    }))),
   ]);
+
+  return mergePushDispatchResults([results[0], ...results[1], ...results[2]]);
 }
 
 function getIncomingCallBody(input: { isGroupCall?: boolean; mode: 'VOICE' | 'VIDEO' }, locale?: string | null) {
@@ -311,7 +340,7 @@ export async function sendMessagePush(input: MessagePush) {
       quickReplyToken: item.quickReplyToken ?? createQuickReplyToken(input.conversationId, item.userId),
     })),
   };
-  if (await relayPushToMainServer('message', relayInput)) return;
+  if (await relayPushToMainServer('message', relayInput)) return emptyPushDispatchResult();
   const baseData = {
     categoryId: 'message',
     categoryIdentifier: 'message',
@@ -328,6 +357,7 @@ export async function sendMessagePush(input: MessagePush) {
     return {
       ...baseData,
       ...(quickReplyToken ? { quickReplyToken } : {}),
+      ...getDeliveryReceiptData(item),
     };
   };
 
@@ -340,7 +370,7 @@ export async function sendMessagePush(input: MessagePush) {
     type: 'message-prefetch',
   };
 
-  await Promise.all([
+  const results = await Promise.all([
     sendExpoPushNotifications(expoTokens.map((item) => ({
       body: input.body,
       categoryId: 'message',
@@ -349,6 +379,7 @@ export async function sendMessagePush(input: MessagePush) {
       priority: 'high',
       title: input.title,
       to: item.token,
+      tokenId: item.id,
     }))),
     sendExpoPushNotifications(expoTokens.map((item) => ({
       channelId: 'messages',
@@ -356,8 +387,9 @@ export async function sendMessagePush(input: MessagePush) {
       data: prefetchData,
       priority: 'normal',
       to: item.token,
+      tokenId: item.id,
     }))),
-    ...fcmTokens.map((item) => sendFcmNotifications([item.token], {
+    ...fcmTokens.map((item) => sendFcmNotifications([item], {
         body: input.body,
         categoryId: 'message',
         channelId: 'messages',
@@ -367,7 +399,7 @@ export async function sendMessagePush(input: MessagePush) {
         title: input.title,
         imageUrl: input.avatarUrl,
       })),
-    sendFcmNotifications(fcmTokens.map((item) => item.token), {
+    sendFcmNotifications(fcmTokens, {
       body: '',
       channelId: 'messages',
       data: prefetchData,
@@ -375,16 +407,18 @@ export async function sendMessagePush(input: MessagePush) {
       priority: 'high',
       title: '',
     }),
-    ...apnsTokens.map((item) => sendApnsNotifications([item.token], {
+    ...apnsTokens.map((item) => sendApnsNotifications([item], {
         body: input.body,
         categoryId: 'message',
         data: dataForToken(item),
         title: input.title,
       })),
-    sendApnsBackgroundNotifications(apnsTokens.map((item) => item.token), {
+    sendApnsBackgroundNotifications(apnsTokens, {
       data: prefetchData,
     }),
   ]);
+
+  return mergePushDispatchResults(results);
 }
 
 async function sendExpoPushNotifications(messages: Array<{
@@ -396,17 +430,18 @@ async function sendExpoPushNotifications(messages: Array<{
   priority: 'normal' | 'high';
   title?: string;
   to: string;
+  tokenId?: string;
   imageUrl?: string | null;
   sound?: string;
-}>) {
+}>): Promise<PushDispatchResult> {
   if (messages.length === 0) {
-    return;
+    return emptyPushDispatchResult();
   }
 
-  await Promise.all(
+  const results = await Promise.all(
     chunk(messages, 100).map(async (batch) => {
       const response = await fetch(EXPO_PUSH_URL, {
-        body: JSON.stringify(batch.map((message) => ({
+        body: JSON.stringify(batch.map(({ tokenId: _tokenId, ...message }) => ({
           ...message,
           ...(message.categoryId ? { categoryIdentifier: message.categoryId } : {}),
           ...(message.contentAvailable ? { _contentAvailable: true } : {}),
@@ -422,12 +457,39 @@ async function sendExpoPushNotifications(messages: Array<{
 
       if (!response.ok) {
         console.warn('Expo push send failed', response.status, await response.text());
+        return failedPushDispatchResult(batch);
+      }
+
+      try {
+        const payload = await response.json() as {
+          data?: Array<{ details?: { error?: string }; status?: string }>;
+        };
+        if (!Array.isArray(payload.data)) {
+          return acceptedPushDispatchResult(batch);
+        }
+
+        return payload.data.reduce<PushDispatchResult>((result, ticket, index) => {
+          const tokenId = batch[index]?.tokenId;
+          if (ticket.status === 'ok') {
+            result.acceptedCount += 1;
+          } else {
+            result.failedCount += 1;
+            if (ticket.details?.error === 'DeviceNotRegistered' && tokenId) {
+              result.invalidTokenIds.push(tokenId);
+            }
+          }
+          return result;
+        }, emptyPushDispatchResult());
+      } catch {
+        return acceptedPushDispatchResult(batch);
       }
     }),
   );
+
+  return mergePushDispatchResults(results);
 }
 
-async function sendFcmNotifications(tokens: string[], input: {
+async function sendFcmNotifications(tokens: StoredPushToken[], input: {
   body: string;
   categoryId?: string;
   channelId: string;
@@ -437,9 +499,9 @@ async function sendFcmNotifications(tokens: string[], input: {
   title: string;
   imageUrl?: string | null;
   sound?: string;
-}) {
+}): Promise<PushDispatchResult> {
   if (tokens.length === 0) {
-    return;
+    return emptyPushDispatchResult();
   }
 
   if (!config.FIREBASE_SERVICE_ACCOUNT_PATH) {
@@ -447,7 +509,10 @@ async function sendFcmNotifications(tokens: string[], input: {
       hasWarnedMissingFirebaseServiceAccount = true;
       console.warn('FCM push send skipped because FIREBASE_SERVICE_ACCOUNT_PATH is not configured');
     }
-    return;
+    return {
+      ...emptyPushDispatchResult(),
+      skippedCount: tokens.length,
+    };
   }
 
   if (getApps().length === 0) {
@@ -456,7 +521,7 @@ async function sendFcmNotifications(tokens: string[], input: {
     });
   }
 
-  await Promise.all(tokens.map(async (token) => {
+  const results = await Promise.all(tokens.map(async (item) => {
     try {
       const data = {
         ...input.data,
@@ -472,7 +537,7 @@ async function sendFcmNotifications(tokens: string[], input: {
           priority: input.priority,
         },
         data,
-        token,
+        token: item.token,
       };
 
       await getMessaging().send(input.dataOnly
@@ -494,32 +559,54 @@ async function sendFcmNotifications(tokens: string[], input: {
               title: input.title,
             },
           });
+      return {
+        ...emptyPushDispatchResult(),
+        acceptedCount: 1,
+      };
     } catch (error) {
       if (isInvalidFcmPushTokenError(error)) {
-        await deleteStoredPushToken(token);
-        return;
+        await deleteStoredPushToken(item.token);
+        return {
+          ...emptyPushDispatchResult(),
+          failedCount: 1,
+          invalidTokenIds: item.id ? [item.id] : [],
+        };
       }
 
       console.warn('FCM push send failed', error);
+      return {
+        ...emptyPushDispatchResult(),
+        failedCount: 1,
+      };
     }
   }));
+
+  return mergePushDispatchResults(results);
 }
 
-async function sendApnsNotifications(tokens: string[], input: {
+async function sendApnsNotifications(tokens: StoredPushToken[], input: {
   body: string;
   categoryId?: string;
   data: Record<string, string>;
   sound?: string;
   title: string;
-}) {
+}): Promise<PushDispatchResult> {
   if (
-    tokens.length === 0 ||
+    tokens.length === 0
+  ) {
+    return emptyPushDispatchResult();
+  }
+
+  if (
     !config.APNS_BUNDLE_ID ||
     !config.APNS_KEY_ID ||
     !config.APNS_KEY_PATH ||
     !config.APNS_TEAM_ID
   ) {
-    return;
+    return {
+      ...emptyPushDispatchResult(),
+      skippedCount: tokens.length,
+    };
   }
 
   if (!apnsProvider) {
@@ -548,24 +635,34 @@ async function sendApnsNotifications(tokens: string[], input: {
     (notification as apn.Notification & { category?: string }).category = input.categoryId;
   }
 
-  const result = await apnsProvider.send(notification, tokens);
+  const result = await apnsProvider.send(notification, tokens.map((item) => item.token));
 
   if (result.failed.length > 0) {
     console.warn('APNs push send failed', result.failed);
   }
+
+  return getApnsDispatchResult(tokens, result);
 }
 
-async function sendApnsBackgroundNotifications(tokens: string[], input: {
+async function sendApnsBackgroundNotifications(tokens: StoredPushToken[], input: {
   data: Record<string, string>;
-}) {
+}): Promise<PushDispatchResult> {
   if (
-    tokens.length === 0 ||
+    tokens.length === 0
+  ) {
+    return emptyPushDispatchResult();
+  }
+
+  if (
     !config.APNS_BUNDLE_ID ||
     !config.APNS_KEY_ID ||
     !config.APNS_KEY_PATH ||
     !config.APNS_TEAM_ID
   ) {
-    return;
+    return {
+      ...emptyPushDispatchResult(),
+      skippedCount: tokens.length,
+    };
   }
 
   if (!apnsProvider) {
@@ -587,26 +684,39 @@ async function sendApnsBackgroundNotifications(tokens: string[], input: {
     pushType: 'background',
     topic: config.APNS_BUNDLE_ID,
   });
-  const result = await apnsProvider.send(notification, tokens);
+  const result = await apnsProvider.send(notification, tokens.map((item) => item.token));
 
   if (result.failed.length > 0) {
     console.warn('APNs background push send failed', result.failed);
   }
+
+  return getApnsDispatchResult(tokens, result);
 }
 
-async function sendApnsVoipNotifications(tokens: string[], input: {
+async function sendApnsVoipNotifications(tokens: StoredPushToken[], input: {
   body: string;
   data: Record<string, string>;
   title: string;
-}) {
+}): Promise<{ failedTokens: string[]; result: PushDispatchResult }> {
   if (
-    tokens.length === 0 ||
+    tokens.length === 0
+  ) {
+    return { failedTokens: [], result: emptyPushDispatchResult() };
+  }
+
+  if (
     !config.APNS_BUNDLE_ID ||
     !config.APNS_KEY_ID ||
     !config.APNS_KEY_PATH ||
     !config.APNS_TEAM_ID
   ) {
-    return [];
+    return {
+      failedTokens: tokens.map((item) => item.token),
+      result: {
+        ...emptyPushDispatchResult(),
+        skippedCount: tokens.length,
+      },
+    };
   }
 
   if (!apnsProvider) {
@@ -632,15 +742,41 @@ async function sendApnsVoipNotifications(tokens: string[], input: {
     topic: `${config.APNS_BUNDLE_ID}.voip`,
   });
 
-  const result = await apnsProvider.send(notification, tokens);
+  const result = await apnsProvider.send(notification, tokens.map((item) => item.token));
 
   if (result.failed.length > 0) {
     console.warn('APNs VoIP push send failed', result.failed);
   }
 
-  return result.failed
+  const failedTokens = result.failed
     .map((failure) => failure.device)
     .filter((token): token is string => typeof token === 'string');
+
+  return {
+    failedTokens,
+    result: getApnsDispatchResult(tokens, result),
+  };
+}
+
+function getApnsDispatchResult(
+  tokens: StoredPushToken[],
+  result: { failed: Array<{ device?: string; response?: { reason?: string } }>; sent: Array<{ device?: string }> },
+): PushDispatchResult {
+  const tokensByValue = new Map(tokens.map((item) => [item.token, item]));
+  const invalidReasons = new Set(['BadDeviceToken', 'DeviceTokenNotForTopic', 'Unregistered']);
+  const invalidTokenIds = result.failed.flatMap((failure) => {
+    const item = failure.device ? tokensByValue.get(failure.device) : undefined;
+    return item?.id && failure.response?.reason && invalidReasons.has(failure.response.reason)
+      ? [item.id]
+      : [];
+  });
+
+  return {
+    acceptedCount: result.sent.length,
+    failedCount: result.failed.length,
+    invalidTokenIds,
+    skippedCount: 0,
+  };
 }
 
 function dedupePushTokens<T extends { token: string }>(tokens: T[]) {
@@ -657,6 +793,46 @@ function dedupePushTokens<T extends { token: string }>(tokens: T[]) {
   });
 
   return deduped;
+}
+
+function getDeliveryReceiptData(item: StoredPushToken): Record<string, string> {
+  const data: Record<string, string> = {};
+  if (item.deliveryReceiptUrl) {
+    data.deliveryReceiptUrl = item.deliveryReceiptUrl;
+  }
+  return data;
+}
+
+function emptyPushDispatchResult(): PushDispatchResult {
+  return {
+    acceptedCount: 0,
+    failedCount: 0,
+    invalidTokenIds: [],
+    skippedCount: 0,
+  };
+}
+
+function acceptedPushDispatchResult(items: Array<{ tokenId?: string }>): PushDispatchResult {
+  return {
+    ...emptyPushDispatchResult(),
+    acceptedCount: items.length,
+  };
+}
+
+function failedPushDispatchResult(items: Array<{ tokenId?: string }>): PushDispatchResult {
+  return {
+    ...emptyPushDispatchResult(),
+    failedCount: items.length,
+  };
+}
+
+function mergePushDispatchResults(results: PushDispatchResult[]): PushDispatchResult {
+  return results.reduce<PushDispatchResult>((merged, result) => ({
+    acceptedCount: merged.acceptedCount + result.acceptedCount,
+    failedCount: merged.failedCount + result.failedCount,
+    invalidTokenIds: [...new Set([...merged.invalidTokenIds, ...result.invalidTokenIds])],
+    skippedCount: merged.skippedCount + result.skippedCount,
+  }), emptyPushDispatchResult());
 }
 
 function chunk<T>(items: T[], size: number) {

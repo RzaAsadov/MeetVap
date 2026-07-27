@@ -39,7 +39,9 @@ export type ErasePinAlertConfig = {
 export async function getServerUrl() {
   const storedUrl = await SecureStore.getItemAsync(SERVER_URL_KEY);
 
-  return storedUrl && storedUrl === DEFAULT_SERVER_URL ? storedUrl : DEFAULT_SERVER_URL;
+  return storedUrl || DEFAULT_SERVER_URL;
+
+  //return DEFAULT_SERVER_URL;
 }
 
 export async function setServerUrl(serverUrl: string) {

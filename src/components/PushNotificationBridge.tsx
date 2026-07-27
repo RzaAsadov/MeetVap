@@ -20,6 +20,7 @@ type IncomingCallNotificationData = {
   autoJoin?: unknown;
   callId?: unknown;
   conversationId?: unknown;
+  deliveryReceiptUrl?: unknown;
   isGroupCall?: unknown;
   messageId?: unknown;
   mode?: unknown;
@@ -45,9 +46,25 @@ Notifications.setNotificationHandler({
       };
     }
 
+    const notificationData = getNotificationTaskData(notification.request.content.data);
+    await acknowledgePushDelivery(notificationData);
+
     if (AppState.currentState === 'active') {
-      const data = getNotificationTaskData(notification.request.content.data);
+      const data = notificationData;
       const conversationId = typeof data?.conversationId === 'string' ? data.conversationId : null;
+      const isMessagePush = data?.type === 'message' || data?.type === 'message-prefetch';
+
+      if (isMessagePush && conversationId) {
+        void useAppStore.getState().loadMessages(conversationId, { hydrate: false })
+          .catch((error) => {
+            logMessageDeliveryDiagnostic('foreground-push-message-sync-failed', {
+              conversationId,
+              message: error instanceof Error ? error.message : String(error),
+              messageId: typeof data.messageId === 'string' ? data.messageId : undefined,
+            });
+          });
+      }
+
       const isOtherChatMessage = data?.type === 'message' &&
         !!conversationId &&
         getVisibleChatRoomConversationId() !== conversationId;
@@ -81,12 +98,13 @@ Notifications.setNotificationHandler({
 if (!TaskManager.isTaskDefined(MESSAGE_PREFETCH_TASK)) {
   TaskManager.defineTask<Notifications.NotificationTaskPayload>(MESSAGE_PREFETCH_TASK, ({ data }) => {
     return getStoredDecoyOffline()
-      .then((isDecoyOffline) => {
+      .then(async (isDecoyOffline) => {
         if (isDecoyOffline) {
           return Notifications.BackgroundNotificationTaskResult.NoData;
         }
 
         const payload = getNotificationTaskData(data);
+        await acknowledgePushDelivery(payload);
 
         if (payload.type === 'incoming-call' && typeof payload.callId === 'string') {
           return getServerUrl()
@@ -235,6 +253,7 @@ export function PushNotificationBridge() {
 
   useEffect(() => {
     const subscription = Notifications.addNotificationResponseReceivedListener((response) => {
+      void acknowledgePushDelivery(getNotificationTaskData(response.notification.request.content.data));
       void handleNotificationData(
         response.notification.request.content.data as IncomingCallNotificationData,
         response.actionIdentifier,
@@ -245,6 +264,7 @@ export function PushNotificationBridge() {
 
     void Notifications.getLastNotificationResponseAsync().then((response) => {
       if (response) {
+        void acknowledgePushDelivery(getNotificationTaskData(response.notification.request.content.data));
         void handleNotificationData(
           response.notification.request.content.data as IncomingCallNotificationData,
           response.actionIdentifier,
@@ -421,6 +441,14 @@ function getNotificationTaskData(data: unknown) {
   }
 
   return data as IncomingCallNotificationData;
+}
+
+async function acknowledgePushDelivery(data: IncomingCallNotificationData) {
+  if (typeof data.deliveryReceiptUrl !== 'string' || !/^https?:\/\//i.test(data.deliveryReceiptUrl)) {
+    return;
+  }
+
+  await fetch(data.deliveryReceiptUrl, { method: 'POST' }).catch(() => undefined);
 }
 
 async function handleNotificationData(

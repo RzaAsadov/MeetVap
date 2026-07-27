@@ -4,6 +4,7 @@ import { AccessToken } from 'livekit-server-sdk';
 import { z } from 'zod';
 
 import { getAuthedUser, requireAuth } from '../auth';
+import { config } from '../config';
 import { HttpError } from '../httpError';
 import { selectLiveKitServer } from '../livekitPool';
 import { prisma } from '../prisma';
@@ -445,7 +446,7 @@ function serializeMeeting(meeting: MeetingRow) {
     durationLimitSeconds: meeting.durationLimitSeconds,
     endedAt: meeting.endedAt?.toISOString() ?? null,
     id: meeting.id,
-    link: `https://meet.meetvap.com/${encodeURIComponent(meeting.code)}`,
+    link: `${config.MEET_SERVER_URL}/${encodeURIComponent(meeting.code)}`,
     maxEndsAt: meeting.maxEndsAt.toISOString(),
     mode: meeting.mode === 'VIDEO' ? 'video' : 'voice',
     startedAt: meeting.startedAt.toISOString(),

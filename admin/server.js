@@ -4,6 +4,8 @@ const crypto = require('crypto');
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
+const net = require('net');
+const { domainToASCII } = require('url');
 const { AsyncLocalStorage } = require('async_hooks');
 const { Pool } = require('pg');
 
@@ -19,7 +21,7 @@ const adminContext = new AsyncLocalStorage();
 const requestContext = new AsyncLocalStorage();
 
 const ONLINE_WINDOW_MINUTES = 2;
-const ADMIN_SECTIONS = ['dashboard', 'users', 'calls', 'groups', 'subscriptions', 'partners', 'reports', 'support', 'operations'];
+const ADMIN_SECTIONS = ['dashboard', 'users', 'calls', 'groups', 'subscriptions', 'partners', 'reports', 'support', 'subdomains', 'operations'];
 const ADMIN_PERMISSION_LEVELS = ['none', 'read', 'edit'];
 const ADMIN_LANGUAGES = ['en', 'tr'];
 const MANUAL_SUBSCRIPTION_PERIODS = {
@@ -156,8 +158,15 @@ async function init() {
     create table if not exists "SupportTicketReplyAdmin" (
       "messageId" text primary key references "Message"(id) on delete cascade,
       "adminUsername" text,
+      "editedByAdminUsername" text,
+      "editedAt" timestamp(3),
       "createdAt" timestamp(3) not null default current_timestamp
     )
+  `);
+  await pool.query(`
+    alter table "SupportTicketReplyAdmin"
+      add column if not exists "editedByAdminUsername" text,
+      add column if not exists "editedAt" timestamp(3)
   `);
   await pool.query(`
     create table if not exists "PartnerUser" (
@@ -453,6 +462,7 @@ function sectionLabel(section) {
     reports: 'Reports',
     subscriptions: 'Subscriptions',
     support: 'Support tickets',
+    subdomains: 'Sub-domains',
     users: 'Users',
   };
   return labels[section] || section;
@@ -646,6 +656,7 @@ const ADMIN_TR = {
   'Ended': 'Bitti',
   'Ended at': 'Bitiş zamanı',
   'Edit': 'Düzenle',
+  'Edited': 'Düzenlendi',
   'Enable': 'Etkinleştir',
   'Environment': 'Ortam',
   'Expires': 'Bitiş',
@@ -858,6 +869,20 @@ const ADMIN_TR = {
   'Support ticket': 'Destek talebi',
   'Support ticket not found.': 'Destek talebi bulunamadı.',
   'Support tickets': 'Destek talepleri',
+  'Sub-domains': 'Alt alan adları',
+  'Add sub-domain': 'Alt alan adı ekle',
+  'Domain': 'Alan adı',
+  'Enter the value used after @. URLs and @ prefixes are normalized automatically.': '@ işaretinden sonra kullanılan değeri girin. URL ve @ önekleri otomatik olarak düzenlenir.',
+  'Hostname': 'Sunucu adresi',
+  'Allowed origin IP addresses': 'İzin verilen kaynak IP adresleri',
+  'Main server key': 'Ana sunucu anahtarı',
+  'New main server key': 'Yeni ana sunucu anahtarı',
+  'Maximum users': 'Azami kullanıcı',
+  'Requests': 'İstekler',
+  'First requested': 'İlk istek',
+  'Last requested': 'Son istek',
+  'Deactivate': 'Devre dışı bırak',
+  'Activate': 'Etkinleştir',
   'Subscriptions': 'Abonelikler',
   'Subscription details': 'Abonelik detayları',
   'Granted by': 'Tanımlayan',
@@ -1011,6 +1036,7 @@ const ADMIN_TR = {
   'No messages yet.': 'Henüz mesaj yok.',
   'No support tickets yet.': 'Henüz destek talebi yok.',
   'Send': 'Gönder',
+  'Save': 'Kaydet',
   'Waiting': 'Bekliyor',
   'Send JSON with': 'JSON gönderin:',
   'or': 'veya',
@@ -1103,6 +1129,92 @@ app.post('/login', async (req, res, next) => {
 app.post('/logout', requireAdmin, (_req, res) => {
   res.clearCookie('meetvap_admin');
   res.redirect('/login');
+});
+
+app.get('/sub-domains', requireAdmin, requireSection('subdomains'), async (_req, res, next) => {
+  try {
+    const domains = (await pool.query(`
+      select d.*,
+        count(u.id)::int as "usernameCount",
+        coalesce(sum(u."requestCount"), 0)::bigint as "requestCount"
+      from "LoginDomain" d
+      left join "LoginDomainUsername" u on u."domainId" = d.id
+      group by d.id
+      order by d."createdAt" desc
+    `)).rows;
+    const usernames = (await pool.query(`
+      select * from "LoginDomainUsername"
+      order by "lastRequestedAt" desc
+    `)).rows;
+    const usernamesByDomain = new Map();
+    usernames.forEach((item) => usernamesByDomain.set(item.domainId, [...(usernamesByDomain.get(item.domainId) || []), item]));
+
+    res.send(page({
+      active: 'subdomains',
+      body: `
+        ${hero('Sub-domains', 'Login routing, child-server authorization, capacity, and request statistics.', `<div class="actions">${canEdit('subdomains') ? `<button type="button" onclick="document.getElementById('subdomain-create-modal').showModal()">${escapeHtml(translateText('Add sub-domain'))}</button>` : ''}${logout()}</div>`)}
+        ${panel('Sub-domains', loginDomainsTable(domains, usernamesByDomain))}
+        ${canEdit('subdomains') ? loginDomainCreateModal() : ''}
+      `,
+      title: 'Sub-domains',
+    }));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/sub-domains', requireAdmin, requireSection('subdomains', 'edit'), async (req, res, next) => {
+  try {
+    const input = parseLoginDomainForm(req.body, true);
+    await pool.query(`
+      insert into "LoginDomain" (
+        id, domain, hostname, description, contacts, "originIpAddresses", "mainServerKeyHash",
+        "expiresAt", "maxUserCount", "isActive", "createdByAdminUsername", "updatedByAdminUsername"
+      ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,true,$10,$10)
+    `, [cuid(), input.domain, input.hostname, input.description, input.contacts, input.originIpAddresses,
+      hashMainServerKey(input.mainServerKey), input.expiresAt, input.maxUserCount, req.admin.username]);
+    res.redirect('/sub-domains');
+  } catch (error) {
+    if (error?.code === '23505') {
+      res.status(409).send(page({ active: 'subdomains', body: empty('Domain already exists.'), title: 'Conflict' }));
+      return;
+    }
+    next(error);
+  }
+});
+
+app.post('/sub-domains/:id', requireAdmin, requireSection('subdomains', 'edit'), async (req, res, next) => {
+  try {
+    const input = parseLoginDomainForm(req.body, false);
+    const params = [input.domain, input.hostname, input.description, input.contacts, input.originIpAddresses,
+      input.expiresAt, input.maxUserCount, req.admin.username, req.params.id];
+    await pool.query(`
+      update "LoginDomain" set domain=$1, hostname=$2, description=$3, contacts=$4,
+        "originIpAddresses"=$5, "expiresAt"=$6, "maxUserCount"=$7,
+        "updatedByAdminUsername"=$8, "updatedAt"=current_timestamp
+      where id=$9
+    `, params);
+    if (input.mainServerKey) {
+      await pool.query('update "LoginDomain" set "mainServerKeyHash"=$1, "updatedAt"=current_timestamp where id=$2', [hashMainServerKey(input.mainServerKey), req.params.id]);
+    }
+    res.redirect('/sub-domains');
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/sub-domains/:id/toggle', requireAdmin, requireSection('subdomains', 'edit'), async (req, res, next) => {
+  try {
+    await pool.query('update "LoginDomain" set "isActive"=not "isActive", "updatedByAdminUsername"=$1, "updatedAt"=current_timestamp where id=$2', [req.admin.username, req.params.id]);
+    res.redirect('/sub-domains');
+  } catch (error) { next(error); }
+});
+
+app.post('/sub-domains/:id/delete', requireAdmin, requireSection('subdomains', 'edit'), async (req, res, next) => {
+  try {
+    await pool.query('delete from "LoginDomain" where id=$1', [req.params.id]);
+    res.redirect('/sub-domains');
+  } catch (error) { next(error); }
 });
 
 app.get('/admins', requireAdmin, requireSuperAdmin, async (_req, res, next) => {
@@ -1390,11 +1502,36 @@ app.get('/users', requireAdmin, requireSection('users'), async (req, res, next) 
     const direction = String(req.query.dir).toLowerCase() === 'asc' ? 'asc' : 'desc';
     const q = String(req.query.q || '').trim();
     const adminBlocked = req.query.adminBlocked === '1';
-    const rows = await getUsers({ adminBlocked, direction, q, sort });
+    const pageNum = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const pageSize = Math.min(100, Math.max(1, parseInt(req.query.pageSize, 10) || 20));
+
+    const { rows, pagination } = await getUsers({
+      adminBlocked,
+      direction,
+      q,
+      sort,
+      page: pageNum,
+      pageSize,
+    });
+
+    // preserve current filters/sort when building page links
+    const baseParams = new URLSearchParams();
+    if (q) baseParams.set('q', q);
+    if (sort !== 'created_at') baseParams.set('sort', sort);
+    if (direction !== 'desc') baseParams.set('dir', direction);
+    if (adminBlocked) baseParams.set('adminBlocked', '1');
+    if (pageSize !== 20) baseParams.set('pageSize', String(pageSize));
+
+    const pageUrl = (p) => {
+      const sp = new URLSearchParams(baseParams);
+      sp.set('page', String(p));
+      return `/users?${sp.toString()}`;
+    };
+
     res.send(page({
       active: 'users',
       body: `
-        ${hero('Users', `${number(rows.length)} users with activity, calls, contacts, devices, and subscription data.`, `<div class="actions"><a class="btn secondary" href="/undelivered-messages">${escapeHtml(translateText('Undelivered messages'))}</a>${logout()}</div>`)}
+        ${hero('Users', `${number(pagination.total)} users with activity, calls, contacts, devices, and subscription data.`, `<div class="actions"><a class="btn secondary" href="/undelivered-messages">${escapeHtml(translateText('Undelivered messages'))}</a>${logout()}</div>`)}
         <form class="toolbar" method="get">
           ${adminBlocked ? '<input type="hidden" name="adminBlocked" value="1">' : ''}
           <label>Search <input name="q" value="${escapeAttr(q)}" placeholder="${escapeAttr(translateText('Username or display name'))}"></label>
@@ -1411,6 +1548,7 @@ app.get('/users', requireAdmin, requireSection('users'), async (req, res, next) 
           ].map((h) => `<th>${escapeHtml(translateText(h))}</th>`).join('')}</tr></thead>
           <tbody>${rows.map(userRow).join('')}</tbody>
         </table></div></div>
+        ${renderPagination(pagination, pageUrl)}
       `,
       title: 'Users',
     }));
@@ -1418,6 +1556,51 @@ app.get('/users', requireAdmin, requireSection('users'), async (req, res, next) 
     next(error);
   }
 });
+
+function renderPagination(pagination, pageUrl) {
+  const { page: current, totalPages, total, pageSize } = pagination;
+  if (totalPages <= 1) return '';
+
+  const start = (current - 1) * pageSize + 1;
+  const end = Math.min(current * pageSize, total);
+
+  const prevLink = current > 1
+    ? `<a class="btn secondary" href="${pageUrl(current - 1)}">&laquo; Prev</a>`
+    : `<span class="btn secondary disabled">&laquo; Prev</span>`;
+
+  const nextLink = current < totalPages
+    ? `<a class="btn secondary" href="${pageUrl(current + 1)}">Next &raquo;</a>`
+    : `<span class="btn secondary disabled">Next &raquo;</span>`;
+
+  // windowed page numbers: first, last, and a few around current
+  const windowSize = 2;
+  const pages = new Set([1, totalPages]);
+  for (let p = current - windowSize; p <= current + windowSize; p++) {
+    if (p >= 1 && p <= totalPages) pages.add(p);
+  }
+  const sortedPages = [...pages].sort((a, b) => a - b);
+
+  let numbers = '';
+  let lastRendered = 0;
+  for (const p of sortedPages) {
+    if (lastRendered && p - lastRendered > 1) numbers += `<span class="ellipsis">&hellip;</span>`;
+    numbers += p === current
+      ? `<span class="page-num active">${p}</span>`
+      : `<a class="page-num" href="${pageUrl(p)}">${p}</a>`;
+    lastRendered = p;
+  }
+
+  return `
+    <div class="pagination">
+      <div class="pagination-info">Showing ${start}&ndash;${end} of ${number(total)}</div>
+      <div class="pagination-controls">
+        ${prevLink}
+        ${numbers}
+        ${nextLink}
+      </div>
+    </div>
+  `;
+}
 
 app.get('/undelivered-messages', requireAdmin, requireSection('users'), async (req, res, next) => {
   try {
@@ -2386,7 +2569,7 @@ app.get('/support-tickets/:conversationId', requireAdmin, requireSection('suppor
       body: `
         ${hero('Support ticket', `${escapeHtml(ticket.displayName)} (@${escapeHtml(ticket.username)})`, `<div class="actions"><a class="btn secondary" href="/support-tickets">Back</a>${logout()}</div>`)}
         <section class="detail-grid support-detail-grid">
-          ${panel('Messages', supportConversation(messages, ticket.supportUserId), {
+          ${panel('Messages', supportConversation(messages, ticket.supportUserId, ticket.conversationId, canEdit('support')), {
             action: canEdit('support') ? '' : `<span class="subtle">${escapeHtml(translateText('Read-only'))}</span>`,
           })}
         </section>
@@ -2416,6 +2599,29 @@ app.post('/support-tickets/:conversationId/messages', requireAdmin, requireSecti
     }
 
     await sendSupportReply(req.params.conversationId, body, req.admin.username);
+    res.redirect(`/support-tickets/${encodeURIComponent(req.params.conversationId)}`);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/support-tickets/:conversationId/messages/:messageId/edit', requireAdmin, requireSection('support', 'edit'), async (req, res, next) => {
+  try {
+    const ticket = await getSupportTicket(req.params.conversationId);
+
+    if (!ticket) {
+      res.status(404).send(page({ active: 'support', body: empty('Support ticket not found.'), title: 'Not found' }));
+      return;
+    }
+
+    const body = String(req.body.body || '').trim().slice(0, 8000);
+
+    if (!body) {
+      res.redirect(`/support-tickets/${encodeURIComponent(req.params.conversationId)}`);
+      return;
+    }
+
+    await editSupportReply(req.params.conversationId, req.params.messageId, body, req.admin.username);
     res.redirect(`/support-tickets/${encodeURIComponent(req.params.conversationId)}`);
   } catch (error) {
     next(error);
@@ -2891,7 +3097,7 @@ async function getUndeliveredMessageStats(q = '') {
   };
 }
 
-async function getUsers({ adminBlocked = false, direction, q, sort }) {
+async function getUsers({ adminBlocked = false, direction, q, sort, page = 1, pageSize = 20 }) {
   const params = [];
   const filters = [];
 
@@ -2905,8 +3111,25 @@ async function getUsers({ adminBlocked = false, direction, q, sort }) {
   }
 
   const where = filters.length ? `where ${filters.join(' and ')}` : '';
+
+  const limit = Math.max(1, Math.min(100, pageSize)); // sane bounds
+  const offset = (Math.max(1, page) - 1) * limit;
+
+  params.push(limit);
+  const limitIdx = params.length;
+  params.push(offset);
+  const offsetIdx = params.length;
+
   const sql = `
-    with call_stats as (
+    with paged_users as (
+      select u.*
+      from "User" u
+      left join "AdminBlockedUser" abu on abu."userId" = u.id
+      ${where}
+      order by ${SORTS[sort]} ${direction} nulls last
+      limit $${limitIdx} offset $${offsetIdx}
+    ),
+    call_stats as (
       select cp."userId",
         count(distinct c.id) filter (where c.mode = 'VOICE' and c."startedAt" >= date_trunc('day', now()))::int voice_today,
         count(distinct c.id) filter (where c.mode = 'VOICE' and c."startedAt" >= now() - interval '7 days')::int voice_7d,
@@ -2918,16 +3141,19 @@ async function getUsers({ adminBlocked = false, direction, q, sort }) {
         count(distinct c.id) filter (where c.mode = 'VIDEO' and c."startedAt" >= now() - interval '15 days')::int video_15d,
         count(distinct c.id) filter (where c.mode = 'VIDEO' and c."startedAt" >= now() - interval '30 days')::int video_30d,
         coalesce(sum(extract(epoch from (coalesce(c."endedAt", now()) - c."startedAt"))) filter (where c.mode = 'VIDEO' and c."endedAt" is not null),0)::bigint video_duration_sec
-      from "CallParticipant" cp join "Call" c on c.id = cp."callId"
+      from "CallParticipant" cp
+      join "Call" c on c.id = cp."callId"
+      where cp."userId" in (select id from paged_users)
       group by cp."userId"
     ),
     sessions as (
       select distinct on ("userId") "userId", "createdAt" last_signin_at, "ipAddress" latest_ip, "userAgent" latest_user_agent
       from "Session"
+      where "userId" in (select id from paged_users)
       order by "userId", "createdAt" desc
     )
-    select u.*,
-      u."lastSeenAt" last_online_at,
+    select pu.*,
+      pu."lastSeenAt" last_online_at,
       s.last_signin_at, s.latest_ip, s.latest_user_agent,
       coalesce(cn.count,0)::int contacts_count,
       coalesce(ums."totalMessages",0)::bigint total_messages,
@@ -2943,16 +3169,37 @@ async function getUsers({ adminBlocked = false, direction, q, sort }) {
       coalesce(cs.video_30d,0)::int video_30d,
       coalesce(cs.video_duration_sec,0)::bigint video_duration_sec,
       abu."createdAt" blocked_at
+    from paged_users pu
+    left join (select "ownerId", count(*) from "Contact" where "ownerId" in (select id from paged_users) group by "ownerId") cn on cn."ownerId" = pu.id
+    left join "UserMessageStats" ums on ums."userId" = pu.id
+    left join call_stats cs on cs."userId" = pu.id
+    left join sessions s on s."userId" = pu.id
+    left join "AdminBlockedUser" abu on abu."userId" = pu.id
+  `;
+
+  const countSql = `
+    select count(*)::int as total
     from "User" u
-    left join (select "ownerId", count(*) from "Contact" group by "ownerId") cn on cn."ownerId" = u.id
-    left join "UserMessageStats" ums on ums."userId" = u.id
-    left join call_stats cs on cs."userId" = u.id
-    left join sessions s on s."userId" = u.id
     left join "AdminBlockedUser" abu on abu."userId" = u.id
     ${where}
-    order by ${SORTS[sort]} ${direction} nulls last
   `;
-  return (await pool.query(sql, params)).rows;
+
+  const [rowsResult, countResult] = await Promise.all([
+    pool.query(sql, params),
+    pool.query(countSql, params.slice(0, params.length - 2)), // exclude limit/offset params
+  ]);
+
+  const total = countResult.rows[0]?.total ?? 0;
+
+  return {
+    rows: rowsResult.rows,
+    pagination: {
+      page,
+      pageSize: limit,
+      total,
+      totalPages: Math.ceil(total / limit),
+    },
+  };
 }
 
 async function getUser(id) {
@@ -3548,7 +3795,10 @@ async function getSupportTicketMessages(conversationId) {
       m."createdAt",
       m."senderId",
       m.metadata,
+      stra."messageId" as "adminReplyMessageId",
       coalesce(stra."adminUsername", m.metadata->>'adminUsername') as "adminUsername",
+      stra."editedAt",
+      stra."editedByAdminUsername",
       u.username,
       u."displayName",
       mf.id as "mediaId",
@@ -3604,6 +3854,7 @@ function page({ active, body, live = false, title }) {
     ['partners', '/partners', 'Partners'],
     ['reports', '/reports', 'Reports'],
     ['support', '/support-tickets', 'Support tickets'],
+    ['subdomains', '/sub-domains', 'Sub-domains'],
     ['operations', '/operations', 'Operations'],
     ...(admin?.isSuperAdmin ? [['admins', '/admins', 'Admins']] : []),
   ].filter(([id]) => (
@@ -3854,17 +4105,24 @@ function supportReplyForm(conversationId) {
   </form>`;
 }
 
-function supportConversation(messages, supportUserId) {
+function supportConversation(messages, supportUserId, conversationId, editable) {
   return messages.length ? `<div class="support-chat">
-    ${messages.map((message) => supportMessageBubble(message, supportUserId)).join('')}
+    ${messages.map((message) => supportMessageBubble(message, supportUserId, conversationId, editable)).join('')}
   </div>` : empty('No messages yet.');
 }
 
-function supportMessageBubble(message, supportUserId) {
+function supportMessageBubble(message, supportUserId, conversationId, editable) {
   const isAdmin = message.senderId === supportUserId;
   const classes = ['support-message', isAdmin ? 'support-message-admin' : 'support-message-user'];
   const adminSuffix = message.adminUsername ? ` · ${translateText('Admin')}: ${message.adminUsername}` : '';
   const sender = isAdmin ? `MeetVap${adminSuffix}` : `${message.displayName || message.username} (@${message.username})`;
+  const metadata = message.metadata && typeof message.metadata === 'object' && !Array.isArray(message.metadata) ? message.metadata : {};
+  const isAdminReply = isAdmin && (message.adminReplyMessageId || metadata.source === 'support_admin');
+  const canEditMessage = editable && isAdminReply && message.kind === 'TEXT' && !message.mediaId;
+  const editedBy = message.editedByAdminUsername ? ` · ${translateText('Admin')}: ${message.editedByAdminUsername}` : '';
+  const edited = message.editedAt
+    ? `<span>${escapeHtml(translateText('Edited'))}${escapeHtml(editedBy)} · ${date(message.editedAt)}</span>`
+    : '';
 
   return `<article class="${classes.join(' ')}">
     <div class="support-message-meta">
@@ -3872,7 +4130,21 @@ function supportMessageBubble(message, supportUserId) {
       <span>${date(message.createdAt)}</span>
     </div>
     ${supportMessageBody(message)}
+    ${edited}
+    ${canEditMessage ? supportMessageEditForm(conversationId, message) : ''}
   </article>`;
+}
+
+function supportMessageEditForm(conversationId, message) {
+  return `<details class="support-message-edit">
+    <summary class="btn secondary small">${escapeHtml(translateText('Edit'))}</summary>
+    <form class="stack" method="post" action="/support-tickets/${escapeAttr(conversationId)}/messages/${escapeAttr(message.id)}/edit">
+      <label>${escapeHtml(translateText('Message'))}
+        <textarea name="body" rows="4" maxlength="8000" required>${escapeHtml(getSupportMessageText(message))}</textarea>
+      </label>
+      <button class="small">${escapeHtml(translateText('Save'))}</button>
+    </form>
+  </details>`;
 }
 
 function supportMessageBody(message) {
@@ -4254,6 +4526,155 @@ function adminPermissionPills(permissions) {
     .filter((section) => section !== 'dashboard' && normalized[section] !== 'none')
     .map((section) => `<span class="pill ${normalized[section] === 'edit' ? 'good' : 'soft'}">${escapeHtml(translateText(sectionLabel(section)))}: ${escapeHtml(translateText(normalized[section]))}</span>`)
     .join(' ') || `<span class="subtle">${escapeHtml(translateText('No section access'))}</span>`;
+}
+
+function parseLoginDomainForm(body, requireKey) {
+  const domain = normalizeLoginDomainSelector(body.domain);
+  if (!domain) throw new Error('Invalid domain selector. Use a value such as company or company.example.com.');
+
+  let hostname;
+  try {
+    const url = new URL(String(body.hostname || '').trim());
+    if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash || (url.pathname && url.pathname !== '/')) throw new Error();
+    hostname = url.origin;
+  } catch {
+    throw new Error('Hostname must be an HTTPS API origin, for example https://api.example.com.');
+  }
+
+  const mainServerKey = String(body.mainServerKey || '').trim();
+  if (requireKey && mainServerKey.length < 24) throw new Error('Main server key must contain at least 24 characters.');
+  if (mainServerKey && mainServerKey.length < 24) throw new Error('New main server key must contain at least 24 characters.');
+  if (mainServerKey && !/^[A-Za-z0-9_-]+$/.test(mainServerKey)) {
+    throw new Error('Main server key may contain only ASCII letters, numbers, underscores, and hyphens.');
+  }
+  const originIpAddresses = [...new Set(String(body.originIpAddresses || '').split(/[\s,]+/).map(normalizeAdminIp).filter(Boolean))];
+  if (originIpAddresses.length === 0) throw new Error('At least one child origin IP is required.');
+
+  const expiresAtRaw = String(body.expiresAt || '').trim();
+  const expiresAt = expiresAtRaw ? new Date(expiresAtRaw) : null;
+  if (expiresAt && Number.isNaN(expiresAt.getTime())) throw new Error('Invalid expiration date.');
+  const maxRaw = String(body.maxUserCount || '').trim();
+  const maxUserCount = maxRaw ? Number(maxRaw) : null;
+  if (maxUserCount !== null && (!Number.isInteger(maxUserCount) || maxUserCount < 1)) throw new Error('Maximum users must be a positive integer.');
+
+  return {
+    contacts: String(body.contacts || '').trim().slice(0, 2000) || null,
+    description: String(body.description || '').trim().slice(0, 2000) || null,
+    domain,
+    expiresAt,
+    hostname,
+    mainServerKey,
+    maxUserCount,
+    originIpAddresses,
+  };
+}
+
+function normalizeLoginDomainSelector(value) {
+  let candidate = String(value || '')
+    .normalize('NFKC')
+    .trim()
+    .toLowerCase()
+    .replace(/[\u3002\uFF0E\uFF61]/g, '.')
+    .replace(/[\u200B-\u200D\uFEFF]/g, '');
+
+  if (/^https?:\/\//i.test(candidate)) {
+    try {
+      candidate = new URL(candidate).hostname;
+    } catch {
+      return '';
+    }
+  }
+
+  if (candidate.includes('@')) {
+    candidate = candidate.slice(candidate.lastIndexOf('@') + 1);
+  }
+
+  candidate = candidate.replace(/^@+/, '').replace(/\.+$/, '');
+  const asciiDomain = domainToASCII(candidate).toLowerCase();
+
+  if (!asciiDomain || asciiDomain.length > 253) {
+    return '';
+  }
+
+  const validLabel = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+  return asciiDomain.split('.').every((label) => validLabel.test(label))
+    ? asciiDomain
+    : '';
+}
+
+function normalizeAdminIp(value) {
+  const ip = String(value || '').trim().toLowerCase().replace(/^::ffff:/, '');
+  return net.isIP(ip) ? ip : '';
+}
+
+function hashMainServerKey(value) {
+  return crypto.createHash('sha256').update(value).digest('hex');
+}
+
+function loginDomainCreateModal() {
+  const generatedKey = crypto.randomBytes(32).toString('base64url');
+  return `<dialog class="admin-modal" id="subdomain-create-modal">
+    <form class="admin-modal-card" method="post" action="/sub-domains">
+      <div class="admin-modal-head"><h3>${escapeHtml(translateText('Add sub-domain'))}</h3><button class="secondary small" type="button" onclick="this.closest('dialog').close()">×</button></div>
+      ${loginDomainForm(null, generatedKey)}
+    </form>
+  </dialog>`;
+}
+
+function loginDomainForm(domain, generatedKey = '') {
+  return `<div class="stack">
+    <label>${escapeHtml(translateText('Domain'))}<input name="domain" maxlength="253" required value="${escapeAttr(domain?.domain || '')}" placeholder="company or company.example.com"><span class="subtle">${escapeHtml(translateText('Enter the value used after @. URLs and @ prefixes are normalized automatically.'))}</span></label>
+    <label>${escapeHtml(translateText('Hostname'))}<input name="hostname" type="url" required value="${escapeAttr(domain?.hostname || '')}" placeholder="https://api.company.com"></label>
+    <label>${escapeHtml(translateText('Description'))}<textarea name="description" maxlength="2000" rows="3">${escapeHtml(domain?.description || '')}</textarea></label>
+    <label>${escapeHtml(translateText('Contacts'))}<textarea name="contacts" maxlength="2000" rows="3">${escapeHtml(domain?.contacts || '')}</textarea></label>
+    <label>${escapeHtml(translateText('Allowed origin IP addresses'))}<textarea name="originIpAddresses" rows="3" required placeholder="203.0.113.10">${escapeHtml((domain?.originIpAddresses || []).join('\n'))}</textarea></label>
+    <label>${escapeHtml(translateText(domain ? 'New main server key' : 'Main server key'))}<input name="mainServerKey" ${domain ? '' : 'required'} minlength="24" value="${escapeAttr(generatedKey)}" autocomplete="off"><span class="subtle">${escapeHtml(translateText(domain ? 'Leave empty to keep the existing key.' : 'Copy this key into the child server config.json.'))}</span></label>
+    <label>${escapeHtml(translateText('Expires'))}<input name="expiresAt" type="datetime-local" value="${escapeAttr(dateTimeLocal(domain?.expiresAt))}"></label>
+    <label>${escapeHtml(translateText('Maximum users'))}<input name="maxUserCount" type="number" min="1" value="${escapeAttr(domain?.maxUserCount ?? '')}" placeholder="Unlimited"></label>
+    <button>${escapeHtml(translateText(domain ? 'Save' : 'Create'))}</button>
+  </div>`;
+}
+
+function loginDomainsTable(domains, usernamesByDomain) {
+  if (!domains.length) return empty('No sub-domains yet.');
+  const rows = domains.map((domain) => {
+      const usernames = usernamesByDomain.get(domain.id) || [];
+      const expired = domain.expiresAt && new Date(domain.expiresAt) <= new Date();
+      const modalId = `login-domain-${domain.id}`;
+      return `<tr>
+        <td><button class="link-button" type="button" onclick="document.getElementById('${escapeAttr(modalId)}').showModal()"><strong>${escapeHtml(domain.domain)}</strong></button><br><span class="subtle">${escapeHtml(domain.description || '')}</span></td>
+        <td>${escapeHtml(domain.hostname)}<br><span class="subtle">${escapeHtml((domain.originIpAddresses || []).join(', '))}</span></td>
+        <td>${number(domain.usernameCount)} / ${domain.maxUserCount == null ? '∞' : number(domain.maxUserCount)}</td>
+        <td>${number(domain.requestCount)}</td><td>${date(domain.expiresAt)}</td>
+        <td>${expired ? `<span class="pill danger">${escapeHtml(translateText('Expired'))}</span>` : domain.isActive ? `<span class="pill good">${escapeHtml(translateText('Active'))}</span>` : `<span class="pill danger">${escapeHtml(translateText('Disabled'))}</span>`}</td>
+        <td>${canEdit('subdomains') ? `<details class="admin-details"><summary>${escapeHtml(translateText('Edit'))}</summary><form class="stack" method="post" action="/sub-domains/${escapeAttr(domain.id)}">${loginDomainForm(domain)}</form></details>` : ''}</td>
+      </tr>`;
+    }).join('');
+  const modals = domains.map((domain) => loginDomainStatsModal(
+    domain,
+    usernamesByDomain.get(domain.id) || [],
+    `login-domain-${domain.id}`,
+  )).join('');
+
+  return `<div class="table-wrap"><table><thead><tr>${['Domain', 'Hostname', 'Users', 'Requests', 'Expires', 'Status', 'Actions'].map((label) => `<th>${escapeHtml(translateText(label))}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div>${modals}`;
+}
+
+function loginDomainStatsModal(domain, usernames, modalId) {
+  return `<dialog class="admin-modal admin-modal-wide" id="${escapeAttr(modalId)}"><section class="admin-modal-card">
+    <div class="admin-modal-head"><div><h3>${escapeHtml(domain.domain)}</h3><span class="subtle">${escapeHtml(domain.hostname)}</span></div><button class="secondary small" type="button" onclick="this.closest('dialog').close()">×</button></div>
+    <div class="metric-grid"><div class="metric-card"><div class="metric-label">${escapeHtml(translateText('Users'))}</div><div class="metric-value">${number(usernames.length)}</div></div><div class="metric-card"><div class="metric-label">${escapeHtml(translateText('Requests'))}</div><div class="metric-value">${number(usernames.reduce((sum, item) => sum + Number(item.requestCount || 0), 0))}</div></div></div>
+    <input placeholder="${escapeAttr(translateText('Search username'))}" oninput="const q=this.value.toLowerCase();this.parentElement.querySelectorAll('tbody tr').forEach(r=>r.hidden=!r.dataset.username.includes(q))">
+    <div class="table-wrap"><table><thead><tr><th>${escapeHtml(translateText('Username'))}</th><th>${escapeHtml(translateText('Requests'))}</th><th>${escapeHtml(translateText('Platform'))}</th><th>${escapeHtml(translateText('First requested'))}</th><th>${escapeHtml(translateText('Last requested'))}</th></tr></thead><tbody>${usernames.map((item) => `<tr data-username="${escapeAttr(item.username.toLowerCase())}"><td>${escapeHtml(item.username)}</td><td>${number(item.requestCount)}</td><td>${escapeHtml(item.platform || '')}</td><td>${date(item.firstRequestedAt)}</td><td>${date(item.lastRequestedAt)}</td></tr>`).join('')}</tbody></table></div>
+    ${canEdit('subdomains') ? `<div class="actions"><form method="post" action="/sub-domains/${escapeAttr(domain.id)}/toggle"><button class="secondary">${escapeHtml(translateText(domain.isActive ? 'Deactivate' : 'Activate'))}</button></form><form method="post" action="/sub-domains/${escapeAttr(domain.id)}/delete" onsubmit="return confirm('${escapeAttr(translateText('Delete this sub-domain and all statistics?'))}')"><button class="danger">${escapeHtml(translateText('Delete'))}</button></form></div>` : ''}
+  </section></dialog>`;
+}
+
+function dateTimeLocal(value) {
+  if (!value) return '';
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return '';
+  const local = new Date(parsed.getTime() - parsed.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 16);
 }
 
 function partnerCreateModal() {
@@ -5082,6 +5503,170 @@ async function sendSupportReply(conversationId, body, adminUsername) {
   } catch (error) {
     console.warn('Backend support reply call failed, using admin DB fallback', error);
     await insertSupportReplyFallback(conversationId, body, adminUsername);
+  }
+}
+
+async function editSupportReply(conversationId, messageId, body, adminUsername) {
+  const secret = String(config.serverEventsInternalSecret || process.env.SERVER_EVENTS_INTERNAL_SECRET || '').trim();
+  const baseUrl = getBackendBaseUrl();
+
+  if (!secret || !baseUrl) {
+    await editSupportReplyFallback(conversationId, messageId, body, adminUsername);
+    return;
+  }
+
+  let response;
+
+  try {
+    response = await fetch(`${baseUrl}/support/internal/conversations/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(messageId)}`, {
+      body: JSON.stringify({ adminUsername, body }),
+      headers: {
+        'Content-Type': 'application/json',
+        'x-meetvap-internal-secret': secret,
+      },
+      method: 'PATCH',
+    });
+  } catch (error) {
+    console.warn('Backend support edit call failed, using admin DB fallback', error);
+    await editSupportReplyFallback(conversationId, messageId, body, adminUsername);
+    return;
+  }
+
+  if (!response.ok) {
+    throw new Error(`Support edit failed with ${response.status}: ${await response.text()}`);
+  }
+}
+
+async function editSupportReplyFallback(conversationId, messageId, body, adminUsername) {
+  const client = await pool.connect();
+
+  try {
+    await client.query('begin');
+    const message = (await client.query(`
+      select
+        m.id,
+        m.body,
+        m."conversationId",
+        m."createdAt",
+        m.kind,
+        m.metadata,
+        m."senderId",
+        m."mediaId",
+        c."lastMessageAt",
+        c."lastMessageKind",
+        c."lastMessageSenderId",
+        stra."messageId" as "adminReplyMessageId"
+      from "Message" m
+      join "Conversation" c on c.id = m."conversationId" and c.type = 'DIRECT'
+      join "User" sender on sender.id = m."senderId" and lower(sender.username) = 'meetvap'
+      left join "SupportTicketReplyAdmin" stra on stra."messageId" = m.id
+      where m.id = $1
+        and m."conversationId" = $2
+        and m."deletedAt" is null
+      for update of m
+    `, [messageId, conversationId])).rows[0];
+
+    if (!message) {
+      throw new Error('Support reply not found.');
+    }
+
+    const metadata = message.metadata && typeof message.metadata === 'object' && !Array.isArray(message.metadata)
+      ? message.metadata
+      : {};
+
+    if (!message.adminReplyMessageId && metadata.source !== 'support_admin') {
+      throw new Error('Only admin support replies can be edited.');
+    }
+
+    if (message.kind !== 'TEXT' || message.mediaId) {
+      throw new Error('Only text support replies can be edited.');
+    }
+
+    const messageKey = typeof metadata.deleteKey === 'string' && /^[A-Za-z0-9]{16}$/.test(metadata.deleteKey)
+      ? metadata.deleteKey
+      : crypto.randomBytes(12).toString('base64url').replace(/[^A-Za-z0-9]/g, '').slice(0, 16).padEnd(16, '0');
+    const editedAt = new Date();
+    const updatedMetadata = {
+      ...metadata,
+      adminBody: body,
+      deleteKey: messageKey,
+      editedAt: editedAt.toISOString(),
+      source: 'support_admin',
+    };
+    const clientMetadata = { ...updatedMetadata };
+    delete clientMetadata.adminBody;
+    delete clientMetadata.adminUsername;
+
+    await client.query(`
+      update "Message"
+      set body = $2, metadata = $3::jsonb, "updatedAt" = $4
+      where id = $1
+    `, [message.id, body, JSON.stringify(updatedMetadata), editedAt]);
+
+    const isConversationPreviewMessage = Boolean(message.lastMessageAt) &&
+      message.lastMessageKind === message.kind &&
+      message.lastMessageSenderId === message.senderId &&
+      new Date(message.lastMessageAt).getTime() === new Date(message.createdAt).getTime();
+
+    if (isConversationPreviewMessage) {
+      await client.query(`
+        update "Conversation"
+        set "lastMessageBody" = $2
+        where id = $1
+      `, [conversationId, body]);
+    }
+
+    await client.query(`
+      delete from "MessageContentAck"
+      where "messageId" = $1 and "userId" <> $2
+    `, [message.id, message.senderId]);
+    await client.query(`
+      insert into "SupportTicketReplyAdmin" (
+        "messageId", "adminUsername", "editedAt", "editedByAdminUsername", "createdAt"
+      )
+      values ($1, null, $2, $3, $4)
+      on conflict ("messageId") do update set
+        "editedAt" = excluded."editedAt",
+        "editedByAdminUsername" = excluded."editedByAdminUsername"
+    `, [message.id, editedAt, String(adminUsername || '').trim().slice(0, 80) || null, message.createdAt]);
+
+    const recipients = (await client.query(`
+      select "userId"
+      from "ConversationMember"
+      where "conversationId" = $1 and "userId" <> $2
+    `, [conversationId, message.senderId])).rows;
+
+    for (const recipient of recipients) {
+      await client.query(`
+        insert into "MessageEditRequest" (
+          id, body, "conversationId", "createdAt", "messageId", "messageKey", metadata, "requestedById", "userId"
+        )
+        values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9)
+        on conflict ("conversationId", "messageKey", "userId") do update set
+          body = excluded.body,
+          "createdAt" = excluded."createdAt",
+          "messageId" = excluded."messageId",
+          metadata = excluded.metadata,
+          "requestedById" = excluded."requestedById"
+      `, [
+        cuid(),
+        body,
+        conversationId,
+        editedAt,
+        message.id,
+        messageKey,
+        JSON.stringify(clientMetadata),
+        message.senderId,
+        recipient.userId,
+      ]);
+    }
+
+    await client.query('commit');
+  } catch (error) {
+    await client.query('rollback').catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
   }
 }
 

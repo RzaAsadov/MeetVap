@@ -8,7 +8,7 @@ import path from 'path';
 import type { Server } from 'socket.io';
 
 import { getAuthedUser, isAdminBlocked, requireAuth } from '../auth';
-import { getAvatarMediaId, isAvatarMediaReferenced } from '../avatarMedia';
+import { excludeReferencedAvatarMedia, getAvatarMediaId, isAvatarMediaReferenced } from '../avatarMedia';
 import { areUsersHardDeleteReady } from '../clientCompatibility';
 import { getMessageClientKind, normalizeMessageClient, type MessageClientIdentity } from '../clientActivity';
 import { config } from '../config';
@@ -937,12 +937,18 @@ async function deleteAvatarMediaIfUnused(previousAvatarMediaId: string | null, n
     return;
   }
 
-  await prisma.mediaFile.deleteMany({
+  const deleted = await prisma.mediaFile.deleteMany({
     where: {
       id: previousAvatarMediaId,
       messages: { none: {} },
+      scheduledMessages: { none: {} },
+      statusUpdates: { none: {} },
     },
   });
+
+  if (deleted.count === 0) {
+    return;
+  }
 
   const filePath = path.resolve(uploadDir, media.storageKey);
 
@@ -5923,10 +5929,16 @@ async function deleteMediaFiles(mediaFiles: Array<{ id: string; storageKey: stri
     return;
   }
 
+  const deletableMedia = await excludeReferencedAvatarMedia(uniqueMediaFiles(mediaFiles));
+
+  if (deletableMedia.length === 0) {
+    return;
+  }
+
   await prisma.mediaFile.deleteMany({
-    where: { id: { in: mediaFiles.map((media) => media.id) } },
+    where: { id: { in: deletableMedia.map((media) => media.id) } },
   });
-  await Promise.all(mediaFiles.map(async (media) => {
+  await Promise.all(deletableMedia.map(async (media) => {
     const filePath = path.resolve(uploadDir, media.storageKey);
 
     if (!filePath.startsWith(`${uploadDir}${path.sep}`)) {
@@ -5948,6 +5960,8 @@ async function deleteUnusedMediaFiles(mediaFiles: Array<{ id: string; storageKey
     where: {
       id: { in: [...candidateMediaById.keys()] },
       messages: { none: {} },
+      scheduledMessages: { none: {} },
+      statusUpdates: { none: {} },
     },
   });
 
@@ -5964,6 +5978,7 @@ async function sendMessageNotification(input: {
 }) {
   const tokens = await prisma.devicePushToken.findMany({
     select: {
+      id: true,
       locale: true,
       platform: true,
       provider: true,

@@ -347,12 +347,18 @@ async function deleteAvatarMediaIfUnused(previousAvatarMediaId: string | null, n
     return;
   }
 
-  await prisma.mediaFile.deleteMany({
+  const deleted = await prisma.mediaFile.deleteMany({
     where: {
       id: previousAvatarMediaId,
       messages: { none: {} },
+      scheduledMessages: { none: {} },
+      statusUpdates: { none: {} },
     },
   });
+
+  if (deleted.count === 0) {
+    return;
+  }
 
   const filePath = path.resolve(uploadDir, media.storageKey);
 

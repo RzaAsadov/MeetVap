@@ -224,20 +224,32 @@ export function MeetingRoomScreen({ navigation, route }: Props) {
   }, [liveKit, meeting?.status, navigation]);
 
   const shareLink = useCallback(() => {
-    const link = meeting?.link ?? `https://meet.meetvap.com/${route.params.code}`;
+    const link = meeting?.link ?? route.params.link;
+
+    if (!link) {
+      Alert.alert(t('createMeetLinkFailed'), t('pleaseTryAgain'));
+      return;
+    }
+
     const message = getMeetingInviteText(meeting?.creator.displayName ?? user?.displayName ?? user?.username ?? 'MeetVap', link);
 
     void Share.share({ message, title: t('createMeetLink'), url: link }).catch(() => undefined);
-  }, [meeting?.creator.displayName, meeting?.link, route.params.code, user?.displayName, user?.username]);
+  }, [meeting?.creator.displayName, meeting?.link, route.params.link, user?.displayName, user?.username]);
 
   const copyLink = useCallback(() => {
-    const link = meeting?.link ?? route.params.link ?? `https://meet.meetvap.com/${route.params.code}`;
+    const link = meeting?.link ?? route.params.link;
+
+    if (!link) {
+      Alert.alert(t('createMeetLinkFailed'), t('pleaseTryAgain'));
+      return;
+    }
+
     const message = getMeetingInviteText(meeting?.creator.displayName ?? user?.displayName ?? user?.username ?? 'MeetVap', link);
 
     void Clipboard.setStringAsync(message).then(() => {
       Alert.alert(t('copied'), message);
     }).catch(() => undefined);
-  }, [meeting?.creator.displayName, meeting?.link, route.params.code, route.params.link, user?.displayName, user?.username]);
+  }, [meeting?.creator.displayName, meeting?.link, route.params.link, user?.displayName, user?.username]);
 
   if (isLoading) {
     return (

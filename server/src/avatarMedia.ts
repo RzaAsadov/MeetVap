@@ -45,6 +45,16 @@ export async function listReferencedAvatarMediaIds() {
   return [...ids];
 }
 
+export async function excludeReferencedAvatarMedia<T extends { id: string }>(media: T[]) {
+  if (media.length === 0) {
+    return media;
+  }
+
+  const referencedIds = new Set(await listReferencedAvatarMediaIds());
+
+  return media.filter((item) => !referencedIds.has(item.id));
+}
+
 export async function isAvatarMediaReferenced(mediaId: string) {
   const [users, conversations] = await Promise.all([
     prisma.user.findFirst({

@@ -760,6 +760,15 @@ td, th {
   overflow-wrap: anywhere;
 }
 tr:hover td { background: rgba(23, 184, 151, 0.06); }
+.link-button {
+  background: transparent;
+  border: 0;
+  color: var(--ink);
+  cursor: pointer;
+  padding: 0;
+  text-align: left;
+}
+.link-button:hover { color: var(--good); }
 
 .entity-link {
   display: grid;
@@ -1150,6 +1159,25 @@ tr:hover td { background: rgba(23, 184, 151, 0.06); }
 .support-reply-form textarea {
   min-height: 130px;
 }
+.support-message-edit {
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+.support-message-edit summary {
+  cursor: pointer;
+  list-style: none;
+  width: fit-content;
+}
+.support-message-edit summary::-webkit-details-marker {
+  display: none;
+}
+.support-message-edit form {
+  margin-top: 10px;
+}
+.support-message-edit textarea {
+  min-height: 110px;
+  width: 100%;
+}
 
 @media (max-width: 760px) {
   html:has(.mobile-menu[open]),
@@ -1485,5 +1513,91 @@ tr:hover td { background: rgba(23, 184, 151, 0.06); }
 @media (max-width: 380px) {
   .user-modal-grid {
     grid-template-columns: 1fr;
+  }
+}
+
+/* Pagination */
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 16px;
+  padding: 12px 16px;
+}
+
+.pagination-info {
+  font-size: 13px;
+  color: var(--text-muted, #8a8f98);
+  white-space: nowrap;
+}
+
+.pagination-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.pagination-controls .btn.secondary {
+  padding: 6px 12px;
+  font-size: 13px;
+}
+
+.pagination-controls .btn.secondary.disabled {
+  opacity: 0.4;
+  pointer-events: none;
+  cursor: default;
+}
+
+.page-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
+  height: 32px;
+  padding: 0 8px;
+  border-radius: 6px;
+  font-size: 13px;
+  text-decoration: none;
+  color: var(--text, #e4e6eb);
+  background: transparent;
+  border: 1px solid transparent;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+a.page-num:hover {
+  background: var(--surface-hover, rgba(255, 255, 255, 0.06));
+  border-color: var(--border, rgba(255, 255, 255, 0.1));
+}
+
+.page-num.active {
+  background: var(--accent, #4f7cff);
+  color: #fff;
+  font-weight: 600;
+  cursor: default;
+}
+
+.pagination .ellipsis {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 32px;
+  color: var(--text-muted, #8a8f98);
+  font-size: 13px;
+  user-select: none;
+}
+
+@media (max-width: 640px) {
+  .pagination {
+    flex-direction: column;
+    align-items: stretch;
+    text-align: center;
+  }
+
+  .pagination-controls {
+    justify-content: center;
   }
 }

@@ -95,6 +95,7 @@ export const ru: Record<string, TranslationValue> = {
   serverNotConfigured: 'Сервер не настроен',
   serverUrlNotConfigured: 'Адрес сервера не настроен',
   serverNotReachable: 'Сервер недоступен',
+  loginHostNotReachable: 'Не удалось подключиться к выбранному серверу входа. Проверьте соединение или повторите попытку.',
   pleaseCheckUrl: 'Проверьте адрес.',
   serverSetupSubtitle: 'Подключите приложение к вашему частному серверу чатов.',
   serverUrl: 'Адрес сервера',
@@ -239,6 +240,7 @@ export const ru: Record<string, TranslationValue> = {
   logoutWebAccess: 'Отключить веб-доступ',
   webLogoutFailed: 'Не удалось отключить веб-доступ',
   webPairingFailed: 'Не удалось подключить веб',
+  webPairingServerMismatch: ({ activeHost, pairingHost }) => `Этот QR-код относится к серверу ${pairingHost}, а ваша учётная запись подключена к ${activeHost}. Откройте веб-страницу сервера вашей учётной записи и отсканируйте новый QR-код.`,
   invalidQrCode: 'Недействительный QR-код',
   invalidWebPairingQr: 'Это не код подключения MeetVap Web.',
   cameraPermissionNeeded: 'Нужно разрешение камеры',
@@ -927,4 +929,8 @@ export const ru: Record<string, TranslationValue> = {
   updateNow: 'Обновить',
   discardVoiceMessage: 'Удалить голосовое сообщение',
   you: 'Вы',
+  welcomeHeroTitle: "Личные сообщения, какими они должны быть",
+  welcomeHeroSubtitle: "Общайтесь и звоните с уверенностью — MeetVap не хранит ваши переписки.",
+  welcomeNewUserCta: "Я здесь впервые",
+  welcomeExistingUserCta: "У меня уже есть аккаунт"  
 };

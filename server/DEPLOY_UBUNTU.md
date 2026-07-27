@@ -43,6 +43,7 @@ Set:
 NODE_ENV=production
 PORT=4000
 PUBLIC_API_URL=https://mm.meetvap.com
+MEET_SERVER_URL=meet.meetvap.com
 SERVER_EVENTS_GROUP_ID=cmpnwvdyd04xem526wfymeh43
 SERVER_EVENTS_INTERNAL_SECRET=CHANGE_TO_A_LONG_RANDOM_SECRET
 DATABASE_URL=postgresql://messenger:CHANGE_THIS_PASSWORD@127.0.0.1:5432/messenger?schema=public

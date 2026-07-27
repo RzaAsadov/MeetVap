@@ -211,7 +211,10 @@ google-services.json
 
 
 # Other files to ignore
-/*.sh
+/deploy
+/deploy-test
+*afterdeploy.sh
+*afterdeploy-test.sh
 /website
 /rasadov
 /E2EE.md

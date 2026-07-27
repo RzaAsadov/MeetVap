@@ -1,3 +1,12 @@
 #!/bin/sh
-cd /home/zrid/meetvap/meet
-VITE_API_URL=https://mm.meetvap.com npm run build
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+cd "$SCRIPT_DIR"
+
+case "$SCRIPT_DIR" in
+  */meetvap-test/meet)
+    VITE_API_URL=https://mm-test.meetvap.com npm run build
+    ;;
+  *)
+    VITE_API_URL=https://mm.meetvap.com npm run build
+    ;;
+esac

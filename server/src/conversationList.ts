@@ -115,7 +115,7 @@ export async function listUnreadConversationIdsForUser(userId: string, query = '
 
   if (!normalizedQuery) {
     const rows = await prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
-      SELECT DISTINCT c.id
+      SELECT DISTINCT c.id, c."updatedAt"
       FROM "Conversation" c
       INNER JOIN "ConversationMember" cm
         ON cm."conversationId" = c.id
@@ -136,7 +136,7 @@ export async function listUnreadConversationIdsForUser(userId: string, query = '
   }
 
   const rows = await prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
-    SELECT DISTINCT c.id
+    SELECT DISTINCT c.id, c."updatedAt"
     FROM "Conversation" c
     INNER JOIN "ConversationMember" cm
       ON cm."conversationId" = c.id

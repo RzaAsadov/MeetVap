@@ -6,11 +6,12 @@ import morgan from 'morgan';
 import { ZodError } from 'zod';
 
 import { config } from './config';
+import { childPushReceiptRoutes, startChildPushRelayWorker } from './childPushRelay';
 import { HttpError } from './httpError';
 import { payloadMaskMiddleware } from './payloadMaskMiddleware';
 import { prisma } from './prisma';
 import { authRoutes } from './routes/authRoutes';
-import { internalPushRoutes } from './routes/internalPushRoutes';
+import { internalPushRoutes, startMainPushRelayWorker } from './routes/internalPushRoutes';
 import { attestationRoutes } from './routes/attestationRoutes';
 import { callRoutes, publicCallRoutes } from './routes/callRoutes';
 import { cleanupExpiredDisappearingMessages, cleanupExpiredViewDisappearingMessages, conversationRoutes, processDueScheduledMessages } from './routes/conversationRoutes';
@@ -74,6 +75,7 @@ app.get('/config/client', (_req, res) => {
 });
 
 app.use('/call-receipts', publicCallRoutes);
+app.use('/push-receipts', childPushReceiptRoutes);
 app.use('/group-webhooks', groupWebhookRoutes);
 app.use('/auth', authRoutes);
 app.use('/internal', internalPushRoutes);
@@ -126,6 +128,8 @@ server.listen(config.PORT, () => {
 });
 
 startLiveKitHealthMonitor(io);
+startMainPushRelayWorker();
+startChildPushRelayWorker();
 
 const disappearingMessagesCleanupTimer = setInterval(() => {
   void withRedisLock('lock:cleanup:disappearing-messages', 55, () => cleanupExpiredDisappearingMessages(io)).catch((error) => {

@@ -1064,3 +1064,47 @@ model LoginDomainUsername {
   @@unique([domainId, username])
   @@index([domainId, lastRequestedAt])
 }
+
+model PushRelayJob {
+  id              String   @id @default(cuid())
+  scope           String
+  requestId       String
+  remoteRelayId   String?
+  domainId        String?
+  type            String
+  payload         Json?
+  status          String   @default("QUEUED")
+  acceptedCount   Int      @default(0)
+  failedCount     Int      @default(0)
+  skippedCount    Int      @default(0)
+  invalidTokenIds String[] @default([])
+  receivedCount   Int      @default(0)
+  receivedTokenIds String[] @default([])
+  error           String?
+  completedAt     DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  statusEvents    PushRelayStatusEvent[]
+
+  @@unique([scope, requestId])
+  @@index([scope, status, updatedAt])
+  @@index([domainId, updatedAt, id])
+  @@index([remoteRelayId])
+}
+
+model PushRelayStatusEvent {
+  id        BigInt   @id @default(autoincrement())
+  jobId     String
+  domainId  String
+  createdAt DateTime @default(now())
+  job       PushRelayJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([domainId, id])
+  @@index([jobId])
+}
+
+model PushRelaySyncState {
+  id        String   @id
+  cursor    String?
+  updatedAt DateTime @updatedAt
+}

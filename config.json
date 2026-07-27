@@ -1,4 +1,5 @@
 {
+  "serverRole": "main",
   "attestation": {
     "androidRequiredBuild": 999999,
     "challengeTtlMinutes": 2,

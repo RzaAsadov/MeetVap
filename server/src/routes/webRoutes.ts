@@ -3,6 +3,7 @@ import { Router } from 'express';
 
 import { getAuthedUser, requireAuth, signWebAccessToken, toAuthUser } from '../auth';
 import { getClientMetadataWriteData, hashAccessToken } from '../clientCompatibility';
+import { config } from '../config';
 import { HttpError } from '../httpError';
 import { prisma } from '../prisma';
 import { serializeMessage, serializeUser } from '../serializers';
@@ -15,6 +16,15 @@ const WEB_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 webRoutes.post('/pairing', async (req, res, next) => {
   try {
     const secret = crypto.randomBytes(32).toString('base64url');
+    const requestHost = req.get('host');
+    const serverUrl = normalizeServerUrl(
+      config.PUBLIC_API_URL ?? (requestHost ? `${req.protocol}://${requestHost}` : ''),
+    );
+
+    if (!serverUrl) {
+      throw new HttpError(500, 'Public API URL is not configured');
+    }
+
     const pairing = await prisma.webPairingSession.create({
       data: {
         expiresAt: new Date(Date.now() + WEB_PAIRING_TTL_MS),
@@ -28,7 +38,8 @@ webRoutes.post('/pairing', async (req, res, next) => {
       expiresAt: pairing.expiresAt.toISOString(),
       pairingId: pairing.id,
       secret,
-      url: `meetvap://web-pair?pairingId=${encodeURIComponent(pairing.id)}&secret=${encodeURIComponent(secret)}`,
+      serverUrl,
+      url: `meetvap://web-pair?pairingId=${encodeURIComponent(pairing.id)}&secret=${encodeURIComponent(secret)}&serverUrl=${encodeURIComponent(serverUrl)}`,
     });
   } catch (error) {
     next(error);
@@ -260,6 +271,27 @@ async function createSingleWebSession(req: { get: (name: string) => string | und
 
 function hashSecret(secret: string) {
   return crypto.createHash('sha256').update(secret).digest('hex');
+}
+
+function normalizeServerUrl(value: string) {
+  try {
+    const parsed = new URL(value);
+
+    if (
+      (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') ||
+      parsed.username ||
+      parsed.password ||
+      parsed.search ||
+      parsed.hash
+    ) {
+      return null;
+    }
+
+    const path = parsed.pathname.replace(/\/+$/, '');
+    return `${parsed.origin}${path}`;
+  } catch {
+    return null;
+  }
 }
 
 function getSingleQueryValue(value: unknown) {

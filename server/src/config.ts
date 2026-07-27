@@ -21,6 +21,24 @@ const optionalUrl = z.preprocess(
   (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
   z.string().url().optional(),
 );
+const publicServerBaseUrl = z.preprocess(
+  (value) => {
+    if (typeof value !== 'string') {
+      return value;
+    }
+
+    const trimmed = value.trim();
+    return /^[a-z][a-z\d+.-]*:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  },
+  z.string().url().refine((value) => {
+    const parsed = new URL(value);
+    return (parsed.protocol === 'https:' || parsed.protocol === 'http:') &&
+      !parsed.username &&
+      !parsed.password &&
+      !parsed.search &&
+      !parsed.hash;
+  }, 'MEET_SERVER_URL must be an HTTP(S) hostname or base URL'),
+).transform((value) => value.replace(/\/+$/, ''));
 
 function firstNonEmpty(...values: Array<string | undefined>) {
   return values.find((value) => value !== undefined && value.trim() !== '');
@@ -34,6 +52,7 @@ const rawEnv = {
   LIVEKIT_API_SECRET: firstNonEmpty(process.env.LIVEKIT_API_SECRET, process.env.LIVEKIT_SECRET),
   LIVEKIT_SERVERS_CONFIG_PATH: firstNonEmpty(process.env.LIVEKIT_SERVERS_CONFIG_PATH),
   LIVEKIT_URL: firstNonEmpty(process.env.LIVEKIT_URL, process.env.LIVEKIT_WS_URL, process.env.LIVEKIT_HOST),
+  MEET_SERVER_URL: firstNonEmpty(process.env.MEET_SERVER_URL) ?? 'https://meet.meetvap.com',
 };
 
 const envSchema = z.object({
@@ -56,6 +75,7 @@ const envSchema = z.object({
   LIVEKIT_API_SECRET: optionalString,
   LIVEKIT_SERVERS_CONFIG_PATH: optionalString,
   LIVEKIT_URL: optionalUrl,
+  MEET_SERVER_URL: publicServerBaseUrl,
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().positive().default(4000),
   PUBLIC_API_URL: optionalUrl,

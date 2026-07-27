@@ -235,6 +235,7 @@ async function sendWebhookMessageNotification(input: {
 }) {
   const tokens = await prisma.devicePushToken.findMany({
     select: {
+      id: true,
       locale: true,
       platform: true,
       provider: true,

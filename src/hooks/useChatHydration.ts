@@ -1,5 +1,4 @@
-import { useEffect, useRef, type Dispatch, type MutableRefObject, type SetStateAction } from 'react';
-import { InteractionManager } from 'react-native';
+import { useEffect,useRef,type Dispatch,type MutableRefObject,type SetStateAction } from 'react';
 
 import { INITIAL_LOCAL_MESSAGE_HYDRATE_LIMIT } from './useChatTimelineWindow';
 
@@ -69,7 +68,7 @@ export function useChatHydration({
   pendingInitialAlignmentRef,
   prepareConversationMessages,
   resetVisibleWindow,
-  serverSyncDelayMs = 250,
+  serverSyncDelayMs = 100,
   scheduleOpenChatAlignment,
   setBottomAnchoringActive,
   setInitialScrollReady,
@@ -126,7 +125,37 @@ export function useChatHydration({
     }
 
     const syncTimeouts: ReturnType<typeof setTimeout>[] = [];
-    let syncInteraction: { cancel: () => void } | null = null;
+
+    // Remote reconciliation must not wait for local SQLite hydration or for the
+    // interaction queue. On older devices, list layout can keep that queue busy
+    // for seconds and leave the user looking at a stale timeline.
+    logLifecycleRef.current?.('server-sync-scheduled', { delayMs: serverSyncDelayMs, afterInteractions: false });
+    logScrollRef.current?.('server-sync-scheduled', { delayMs: serverSyncDelayMs, afterInteractions: false });
+    syncTimeouts.push(setTimeout(() => {
+      if (isCancelled) {
+        return;
+      }
+
+      logLifecycleRef.current?.('server-sync-start');
+      logScrollRef.current?.('server-sync-start');
+      loadMessagesRef.current(conversationId, { hydrate: false })
+        .then(() => {
+          if (isCancelled) {
+            return;
+          }
+
+          logLifecycleRef.current?.('server-sync-finished');
+          logScrollRef.current?.('server-sync-finished');
+          openHistoryGuardUntilRef.current = Math.max(openHistoryGuardUntilRef.current, Date.now() + 900);
+        })
+        .catch((error) => {
+          const message = error instanceof Error ? error.message : String(error);
+
+          logLifecycleRef.current?.('server-sync-failed', { message });
+          logScrollRef.current?.('server-sync-failed', { message });
+          onServerSyncErrorRef.current?.(error);
+        });
+    }, serverSyncDelayMs));
 
     logScrollRef.current?.('local-hydrate-start', {
       limit: INITIAL_LOCAL_MESSAGE_HYDRATE_LIMIT,
@@ -161,42 +190,12 @@ export function useChatHydration({
         }
       });
 
-      logLifecycleRef.current?.('server-sync-scheduled', { delayMs: serverSyncDelayMs, afterInteractions: true });
-      logScrollRef.current?.('server-sync-scheduled', { delayMs: serverSyncDelayMs, afterInteractions: true });
-      syncInteraction = InteractionManager.runAfterInteractions(() => {
-        if (isCancelled) {
-          return;
-        }
-
-        syncTimeouts.push(setTimeout(() => {
-          if (isCancelled) {
-            return;
-          }
-
-          logLifecycleRef.current?.('server-sync-start');
-          logScrollRef.current?.('server-sync-start');
-          loadMessagesRef.current(conversationId, { hydrate: false })
-            .then(() => {
-              logLifecycleRef.current?.('server-sync-finished');
-              logScrollRef.current?.('server-sync-finished');
-              openHistoryGuardUntilRef.current = Math.max(openHistoryGuardUntilRef.current, Date.now() + 900);
-            })
-            .catch((error) => {
-              const message = error instanceof Error ? error.message : String(error);
-
-              logLifecycleRef.current?.('server-sync-failed', { message });
-              logScrollRef.current?.('server-sync-failed', { message });
-              onServerSyncErrorRef.current?.(error);
-            });
-        }, serverSyncDelayMs));
-      });
     }).catch(() => undefined);
 
     return () => {
       isCancelled = true;
       logLifecycleRef.current?.('chat-open-cleanup');
       logScrollRef.current?.('chat-open-cleanup');
-      syncInteraction?.cancel();
       syncTimeouts.forEach((timeout) => clearTimeout(timeout));
       clearPendingMessageJump();
       clearInitialScrollTimeouts();

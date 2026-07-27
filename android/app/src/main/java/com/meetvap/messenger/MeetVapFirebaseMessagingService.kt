@@ -10,6 +10,7 @@ import kotlin.concurrent.thread
 class MeetVapFirebaseMessagingService : ExpoFirebaseMessagingService() {
   override fun onMessageReceived(remoteMessage: RemoteMessage) {
     val data = remoteMessage.data
+    acknowledgeReceipt(data["deliveryReceiptUrl"], "meetvap-push-delivery-receipt")
 
     if (isCallEndedPush(data)) {
       IncomingCallNotificationHelper.finishIncomingCall(applicationContext, data)
@@ -35,7 +36,7 @@ class MeetVapFirebaseMessagingService : ExpoFirebaseMessagingService() {
       return
     }
 
-    acknowledgeRingingReceipt(data["ringingReceiptUrl"])
+    acknowledgeReceipt(data["ringingReceiptUrl"], "meetvap-call-ringing-receipt")
 
     if (MainActivity.isAppInForeground) {
       return
@@ -56,12 +57,12 @@ class MeetVapFirebaseMessagingService : ExpoFirebaseMessagingService() {
       callStatus == "MISSED"
   }
 
-  private fun acknowledgeRingingReceipt(rawUrl: String?) {
+  private fun acknowledgeReceipt(rawUrl: String?, threadName: String) {
     if (rawUrl.isNullOrBlank()) {
       return
     }
 
-    thread(isDaemon = true, name = "meetvap-call-ringing-receipt") {
+    thread(isDaemon = true, name = threadName) {
       runCatching {
         val url = URL(rawUrl)
 

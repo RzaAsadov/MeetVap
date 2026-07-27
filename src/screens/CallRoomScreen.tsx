@@ -113,13 +113,15 @@ const CALL_ROOM_OPTIONS = {
     stopMicTrackOnMute: false,
   },
 };
+// LiveKit emits three simulcast RIDs only when the source's long edge is at
+// least 960px. Keep the top layer capped at the existing h360 bitrate.
 const DIRECT_VIDEO_CAPTURE_OPTIONS: VideoCaptureOptions = {
   facingMode: 'user',
   frameRate: 15,
   resolution: {
     frameRate: 15,
-    height: 360,
-    width: 640,
+    height: 540,
+    width: 960,
   },
 };
 const GROUP_VIDEO_CAPTURE_OPTIONS: VideoCaptureOptions = {
@@ -127,8 +129,8 @@ const GROUP_VIDEO_CAPTURE_OPTIONS: VideoCaptureOptions = {
   frameRate: 15,
   resolution: {
     frameRate: 15,
-    height: 360,
-    width: 640,
+    height: 540,
+    width: 960,
   },
 };
 const DIRECT_VIDEO_PUBLISH_OPTIONS: TrackPublishOptions = {
@@ -136,14 +138,14 @@ const DIRECT_VIDEO_PUBLISH_OPTIONS: TrackPublishOptions = {
   simulcast: true,
   source: Track.Source.Camera,
   videoEncoding: VideoPresets.h360.encoding,
-  videoSimulcastLayers: [VideoPresets.h180],
+  videoSimulcastLayers: [VideoPresets.h90, VideoPresets.h180],
 };
 const GROUP_VIDEO_PUBLISH_OPTIONS: TrackPublishOptions = {
   degradationPreference: 'maintain-framerate',
   simulcast: true,
   source: Track.Source.Camera,
   videoEncoding: VideoPresets.h360.encoding,
-  videoSimulcastLayers: [VideoPresets.h180],
+  videoSimulcastLayers: [VideoPresets.h90, VideoPresets.h180],
 };
 const CALL_SCREEN_SHARE_CAPTURE_OPTIONS: ScreenShareCaptureOptions = {
   audio: false,
@@ -160,14 +162,15 @@ const CALL_SCREEN_SHARE_PUBLISH_OPTIONS: TrackPublishOptions = {
   videoEncoding: VideoPresets.h720.encoding,
 };
 const CALL_VIDEO_PROFILE_SWITCH_MIN_INTERVAL_MS = 8_000;
+const CALL_VIDEO_PROFILE_DOWNGRADE_MIN_INTERVAL_MS = 1_000;
 const CALL_VIDEO_DEGRADE_BAD_SAMPLE_COUNT = 2;
-const CALL_VIDEO_CRITICAL_BAD_SAMPLE_COUNT = 4;
-const CALL_VIDEO_RECOVERY_STABLE_MS = 8_000;
-const CALL_VIDEO_ADAPTATION_BOOTSTRAP_GRACE_MS = 5_000;
+const CALL_VIDEO_CRITICAL_BAD_SAMPLE_COUNT = 2;
+const CALL_VIDEO_RECOVERY_STABLE_MS = 12_000;
+const CALL_VIDEO_ADAPTATION_BOOTSTRAP_GRACE_MS = 2_000;
 const CALL_REMOTE_VIDEO_STARTUP_WATCHDOG_MS = 20_000;
-const CALL_WEBRTC_STATS_SAMPLE_INTERVAL_MS = 3_000;
-const CALL_WEBRTC_STATS_DEGRADE_BAD_SAMPLE_COUNT = 1;
-const CALL_WEBRTC_STATS_CRITICAL_BAD_SAMPLE_COUNT = 2;
+const CALL_WEBRTC_STATS_SAMPLE_INTERVAL_MS = 1_000;
+const CALL_WEBRTC_STATS_DEGRADE_BAD_SAMPLE_COUNT = 2;
+const CALL_WEBRTC_STATS_CRITICAL_BAD_SAMPLE_COUNT = 1;
 const CALL_WEBRTC_DEGRADED_LOSS_RATIO = 0.04;
 const CALL_WEBRTC_CRITICAL_LOSS_RATIO = 0.10;
 const CALL_WEBRTC_DEGRADED_RTT_MS = 450;
@@ -195,14 +198,27 @@ type RestartableAudioTrack = {
 };
 type CallRtcStatsSnapshot = {
   availableOutgoingBitrateBps?: number;
+  inboundBitrateBps?: number;
+  inboundFramesPerSecond?: number;
   inboundJitterSeconds?: number;
   inboundPacketLossRatio?: number;
+  outboundBitrateBps?: number;
+  outboundFramesPerSecond?: number;
   outboundQualityLimitedByBandwidth?: boolean;
   remoteInboundPacketLossRatio?: number;
   remoteInboundRttMs?: number;
+  selectedTransports?: {
+    localCandidateType?: string;
+    protocol?: string;
+    relayProtocol?: string;
+    remoteCandidateType?: string;
+    transport: 'publisher' | 'subscriber';
+  }[];
 };
 type CallRtcStatsPrevious = {
+  bytesReceived?: number;
   bytesSent?: number;
+  framesDecoded?: number;
   framesEncoded?: number;
   packetsLost?: number;
   packetsReceived?: number;
@@ -346,16 +362,22 @@ async function collectCallRtcStatsSnapshot(
   previousStatsById: MutableRefObject<Map<string, CallRtcStatsPrevious>>,
 ) {
   const pcManager = (room as StatsCapableRoom).engine?.pcManager;
-  const transports = [pcManager?.publisher, pcManager?.subscriber].filter(
-    (transport): transport is StatsCapableTransport => typeof transport?.getStats === 'function',
-  );
+  const transports: ['publisher' | 'subscriber', StatsCapableTransport][] = [];
+
+  if (typeof pcManager?.publisher?.getStats === 'function') {
+    transports.push(['publisher', pcManager.publisher]);
+  }
+
+  if (typeof pcManager?.subscriber?.getStats === 'function') {
+    transports.push(['subscriber', pcManager.subscriber]);
+  }
   const snapshot: CallRtcStatsSnapshot = {};
 
   if (transports.length === 0) {
     return snapshot;
   }
 
-  for (const [transportIndex, transport] of transports.entries()) {
+  for (const [transportIndex, [transportName, transport]] of transports.entries()) {
     let report: RTCStatsReport | undefined;
 
     try {
@@ -364,7 +386,12 @@ async function collectCallRtcStatsSnapshot(
       continue;
     }
 
-    getRtcStatsEntries(report).forEach((stats) => {
+    const entries = getRtcStatsEntries(report);
+    const entriesById = new Map(entries.flatMap((entry) => (
+      typeof entry.id === 'string' ? [[entry.id, entry] as const] : []
+    )));
+
+    entries.forEach((stats) => {
       const id = typeof stats.id === 'string' ? stats.id : undefined;
       const type = typeof stats.type === 'string' ? stats.type : undefined;
       const kind = stats.kind ?? stats.mediaType;
@@ -383,6 +410,24 @@ async function collectCallRtcStatsSnapshot(
         const previous = previousStatsById.current.get(statsKey);
         snapshot.outboundQualityLimitedByBandwidth = snapshot.outboundQualityLimitedByBandwidth === true ||
           stats.qualityLimitationReason === 'bandwidth';
+
+        if (previous?.timestamp !== undefined && timestamp > previous.timestamp) {
+          const elapsedSeconds = (timestamp - previous.timestamp) / 1000;
+
+          if (bytesSent !== undefined && previous.bytesSent !== undefined && bytesSent >= previous.bytesSent) {
+            snapshot.outboundBitrateBps = (snapshot.outboundBitrateBps ?? 0) +
+              ((bytesSent - previous.bytesSent) * 8) / elapsedSeconds;
+          }
+
+          if (
+            framesEncoded !== undefined &&
+            previous.framesEncoded !== undefined &&
+            framesEncoded >= previous.framesEncoded
+          ) {
+            snapshot.outboundFramesPerSecond = (snapshot.outboundFramesPerSecond ?? 0) +
+              (framesEncoded - previous.framesEncoded) / elapsedSeconds;
+          }
+        }
 
         previousStatsById.current.set(statsKey, { ...previous, bytesSent, framesEncoded, timestamp });
         return;
@@ -423,6 +468,8 @@ async function collectCallRtcStatsSnapshot(
       }
 
       if (type === 'inbound-rtp' && isVideo) {
+        const bytesReceived = getStatsNumber(stats.bytesReceived);
+        const framesDecoded = getStatsNumber(stats.framesDecoded);
         const jitter = getStatsNumber(stats.jitter);
         const packetsLost = getStatsNumber(stats.packetsLost);
         const packetsReceived = getStatsNumber(stats.packetsReceived);
@@ -432,6 +479,28 @@ async function collectCallRtcStatsSnapshot(
         }
 
         const previous = previousStatsById.current.get(statsKey);
+
+        if (previous?.timestamp !== undefined && timestamp > previous.timestamp) {
+          const elapsedSeconds = (timestamp - previous.timestamp) / 1000;
+
+          if (
+            bytesReceived !== undefined &&
+            previous.bytesReceived !== undefined &&
+            bytesReceived >= previous.bytesReceived
+          ) {
+            snapshot.inboundBitrateBps = (snapshot.inboundBitrateBps ?? 0) +
+              ((bytesReceived - previous.bytesReceived) * 8) / elapsedSeconds;
+          }
+
+          if (
+            framesDecoded !== undefined &&
+            previous.framesDecoded !== undefined &&
+            framesDecoded >= previous.framesDecoded
+          ) {
+            snapshot.inboundFramesPerSecond = (snapshot.inboundFramesPerSecond ?? 0) +
+              (framesDecoded - previous.framesDecoded) / elapsedSeconds;
+          }
+        }
 
         if (
           packetsLost !== undefined &&
@@ -449,7 +518,14 @@ async function collectCallRtcStatsSnapshot(
             );
           }
         }
-        previousStatsById.current.set(statsKey, { ...previous, packetsLost, packetsReceived, timestamp });
+        previousStatsById.current.set(statsKey, {
+          ...previous,
+          bytesReceived,
+          framesDecoded,
+          packetsLost,
+          packetsReceived,
+          timestamp,
+        });
         return;
       }
 
@@ -466,6 +542,34 @@ async function collectCallRtcStatsSnapshot(
         if (currentRoundTripTime !== undefined) {
           snapshot.remoteInboundRttMs = Math.max(snapshot.remoteInboundRttMs ?? 0, currentRoundTripTime * 1000);
         }
+
+        const localCandidate = typeof stats.localCandidateId === 'string'
+          ? entriesById.get(stats.localCandidateId)
+          : undefined;
+        const remoteCandidate = typeof stats.remoteCandidateId === 'string'
+          ? entriesById.get(stats.remoteCandidateId)
+          : undefined;
+        const protocol = typeof localCandidate?.protocol === 'string'
+          ? localCandidate.protocol
+          : typeof stats.protocol === 'string'
+            ? stats.protocol
+            : undefined;
+        const relayProtocol = typeof localCandidate?.relayProtocol === 'string'
+          ? localCandidate.relayProtocol
+          : undefined;
+
+        snapshot.selectedTransports ??= [];
+        snapshot.selectedTransports.push({
+          localCandidateType: typeof localCandidate?.candidateType === 'string'
+            ? localCandidate.candidateType
+            : undefined,
+          protocol,
+          relayProtocol,
+          remoteCandidateType: typeof remoteCandidate?.candidateType === 'string'
+            ? remoteCandidate.candidateType
+            : undefined,
+          transport: transportName,
+        });
       }
     });
   }
@@ -4011,6 +4115,7 @@ function CallRemoteTrackSubscriptionMonitor({
   const remoteNetworkLastSwitchAtRef = useRef(0);
   const remoteRtcStatsBadSamplesRef = useRef(0);
   const remoteRtcStatsPreviousByIdRef = useRef(new Map<string, CallRtcStatsPrevious>());
+  const remoteRtcTransportSignatureRef = useRef('');
   const remoteSubscriptionBootstrapStartedAtRef = useRef(0);
   const hasSeenFirstRemoteVideoTrackRef = useRef(false);
   const firstRemoteBytesLoggedRef = useRef(new Set<string>());
@@ -4019,28 +4124,23 @@ function CallRemoteTrackSubscriptionMonitor({
   const remoteNetworkProfileRef = useRef<CallVideoNetworkProfile>('normal');
   const [remoteNetworkProfile, setRemoteNetworkProfile] = useState<CallVideoNetworkProfile>('normal');
 
-  const switchRemoteNetworkProfile = useCallback((nextProfile: CallVideoNetworkProfile, reason: string) => {
+  const switchRemoteNetworkProfile = useCallback((
+    nextProfile: CallVideoNetworkProfile,
+    reason: string,
+    details?: Record<string, unknown>,
+  ) => {
     const currentProfile = remoteNetworkProfileRef.current;
 
     if (nextProfile === currentProfile) {
       return;
     }
 
-    // Startup already requests the lowest simulcast layer. Do not let incomplete
-    // inbound stats trigger another layer update before the first frame exists.
-    if (!hasSeenFirstRemoteVideoTrackRef.current && nextProfile !== 'normal') {
-      logCallDebug('remote-video-network-profile-deferred', {
-        localParticipantId: localParticipant.identity,
-        reason,
-        requestedProfile: nextProfile,
-      });
-      return;
-    }
-
     const now = Date.now();
     const isDowngrade = getCallVideoProfileRank(nextProfile) > getCallVideoProfileRank(currentProfile);
 
-    const minInterval = isDowngrade ? 2_000 : CALL_VIDEO_PROFILE_SWITCH_MIN_INTERVAL_MS;
+    const minInterval = isDowngrade
+      ? CALL_VIDEO_PROFILE_DOWNGRADE_MIN_INTERVAL_MS
+      : CALL_VIDEO_PROFILE_SWITCH_MIN_INTERVAL_MS;
 
     if (now - remoteNetworkLastSwitchAtRef.current < minInterval) {
       return;
@@ -4050,6 +4150,7 @@ function CallRemoteTrackSubscriptionMonitor({
     remoteNetworkProfileRef.current = nextProfile;
     setRemoteNetworkProfile(nextProfile);
     logCallDebug('remote-video-network-profile-switch', {
+      ...details,
       from: currentProfile,
       localParticipantId: localParticipant.identity,
       reason,
@@ -4125,9 +4226,19 @@ function CallRemoteTrackSubscriptionMonitor({
     let isCancelled = false;
 
     async function sampleRtcStats() {
-      const statsProfile = getDownlinkNetworkProfileFromRtcStats(
-        await collectCallRtcStatsSnapshot(room, remoteRtcStatsPreviousByIdRef).catch(() => ({})),
-      );
+      const statsSnapshot = await collectCallRtcStatsSnapshot(room, remoteRtcStatsPreviousByIdRef)
+        .catch((): CallRtcStatsSnapshot => ({}));
+      const transportSignature = JSON.stringify(statsSnapshot.selectedTransports ?? []);
+
+      if (transportSignature !== remoteRtcTransportSignatureRef.current) {
+        remoteRtcTransportSignatureRef.current = transportSignature;
+        logCallDebug('call-rtc-transport-change', {
+          localParticipantId: localParticipant.identity,
+          selectedTransports: statsSnapshot.selectedTransports ?? [],
+        });
+      }
+
+      const statsProfile = getDownlinkNetworkProfileFromRtcStats(statsSnapshot);
 
       if (isCancelled || !statsProfile) {
         return;
@@ -4149,12 +4260,12 @@ function CallRemoteTrackSubscriptionMonitor({
         statsProfile === 'critical' &&
         remoteRtcStatsBadSamplesRef.current >= CALL_WEBRTC_STATS_CRITICAL_BAD_SAMPLE_COUNT
       ) {
-        switchRemoteNetworkProfile('critical', 'rtc-stats-critical');
+        switchRemoteNetworkProfile('critical', 'rtc-stats-critical', { ...statsSnapshot });
         return;
       }
 
       if (remoteRtcStatsBadSamplesRef.current >= CALL_WEBRTC_STATS_DEGRADE_BAD_SAMPLE_COUNT) {
-        switchRemoteNetworkProfile('degraded', `rtc-stats-${statsProfile}`);
+        switchRemoteNetworkProfile('degraded', `rtc-stats-${statsProfile}`, { ...statsSnapshot });
       }
     }
 
@@ -4167,7 +4278,7 @@ function CallRemoteTrackSubscriptionMonitor({
       isCancelled = true;
       clearInterval(interval);
     };
-  }, [enabled, mode, room, switchRemoteNetworkProfile]);
+  }, [enabled, localParticipant.identity, mode, room, switchRemoteNetworkProfile]);
 
   useEffect(() => {
     if (!enabled) {
@@ -4237,6 +4348,7 @@ function CallRemoteTrackSubscriptionMonitor({
               });
             },
             networkProfile: remoteNetworkProfile,
+            preferLowQualityAtStartup: false,
             useGroupVideoLimits: false,
           });
           ensureRemoteVideoPublicationSubscribed(cameraPublication, {
@@ -4250,6 +4362,7 @@ function CallRemoteTrackSubscriptionMonitor({
               });
             },
             networkProfile: remoteNetworkProfile,
+            preferLowQualityAtStartup: true,
             useGroupVideoLimits: shouldLimitGroupVideo,
           });
         }
@@ -4617,6 +4730,7 @@ function CallVideoPublisher({
   const videoNetworkLastSwitchAtRef = useRef(0);
   const rtcStatsBadSamplesRef = useRef(0);
   const rtcStatsPreviousByIdRef = useRef(new Map<string, CallRtcStatsPrevious>());
+  const rtcTransportSignatureRef = useRef('');
   const firstCameraPublishedAtRef = useRef(0);
   const videoNetworkProfileRef = useRef<CallVideoNetworkProfile>('normal');
   const lastAppliedVideoNetworkProfileRef = useRef<CallVideoNetworkProfile>('normal');
@@ -4647,7 +4761,9 @@ function CallVideoPublisher({
     const now = Date.now();
     const isDowngrade = getCallVideoProfileRank(nextProfile) > getCallVideoProfileRank(currentProfile);
 
-    const minInterval = isDowngrade ? 2_000 : CALL_VIDEO_PROFILE_SWITCH_MIN_INTERVAL_MS;
+    const minInterval = isDowngrade
+      ? CALL_VIDEO_PROFILE_DOWNGRADE_MIN_INTERVAL_MS
+      : CALL_VIDEO_PROFILE_SWITCH_MIN_INTERVAL_MS;
 
     if (now - videoNetworkLastSwitchAtRef.current < minInterval) {
       return;
@@ -4755,9 +4871,18 @@ function CallVideoPublisher({
         return;
       }
 
-      const statsProfile = getUplinkNetworkProfileFromRtcStats(
-        await collectCallRtcStatsSnapshot(room, rtcStatsPreviousByIdRef).catch(() => ({})),
-      );
+      const statsSnapshot = await collectCallRtcStatsSnapshot(room, rtcStatsPreviousByIdRef)
+        .catch((): CallRtcStatsSnapshot => ({}));
+      const transportSignature = JSON.stringify(statsSnapshot.selectedTransports ?? []);
+
+      if (transportSignature !== rtcTransportSignatureRef.current) {
+        rtcTransportSignatureRef.current = transportSignature;
+        onTimingEvent('call-rtc-transport-change', {
+          selectedTransports: statsSnapshot.selectedTransports ?? [],
+        });
+      }
+
+      const statsProfile = getUplinkNetworkProfileFromRtcStats(statsSnapshot);
 
       if (isCancelled || !statsProfile) {
         return;
@@ -4779,12 +4904,12 @@ function CallVideoPublisher({
         statsProfile === 'critical' &&
         rtcStatsBadSamplesRef.current >= CALL_WEBRTC_STATS_CRITICAL_BAD_SAMPLE_COUNT
       ) {
-        switchVideoProfile('critical', 'rtc-stats-critical');
+        switchVideoProfile('critical', 'rtc-stats-critical', { ...statsSnapshot });
         return;
       }
 
       if (rtcStatsBadSamplesRef.current >= CALL_WEBRTC_STATS_DEGRADE_BAD_SAMPLE_COUNT) {
-        switchVideoProfile('degraded', `rtc-stats-${statsProfile}`);
+        switchVideoProfile('degraded', `rtc-stats-${statsProfile}`, { ...statsSnapshot });
       }
     }
 
@@ -4797,7 +4922,7 @@ function CallVideoPublisher({
       isCancelled = true;
       clearInterval(interval);
     };
-  }, [canPublish, connectionState, isCameraOff, room, switchVideoProfile]);
+  }, [canPublish, connectionState, isCameraOff, onTimingEvent, room, switchVideoProfile]);
 
   useEffect(() => {
     if (Platform.OS !== 'ios') {

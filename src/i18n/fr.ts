@@ -95,6 +95,7 @@ export const fr: Record<string, TranslationValue> = {
   serverNotConfigured: "Le serveur n'est pas configuré",
   serverUrlNotConfigured: "L'URL du serveur n'est pas configurée",
   serverNotReachable: 'Serveur injoignable',
+  loginHostNotReachable: 'Le serveur de connexion sélectionné est inaccessible. Vérifiez votre connexion ou réessayez.',
   pleaseCheckUrl: "Veuillez vérifier l'URL.",
   serverSetupSubtitle: 'Connectez cette application à votre serveur de discussion privé.',
   serverUrl: 'URL du serveur',
@@ -239,6 +240,7 @@ export const fr: Record<string, TranslationValue> = {
   logoutWebAccess: "Déconnecter l'accès web",
   webLogoutFailed: "Impossible de déconnecter l'accès web",
   webPairingFailed: 'Échec du couplage web',
+  webPairingServerMismatch: ({ activeHost, pairingHost }) => `Ce code QR appartient à ${pairingHost}, mais votre compte est connecté à ${activeHost}. Ouvrez la page Web du serveur de votre compte et scannez le nouveau code QR.`,
   invalidQrCode: 'Code QR invalide',
   invalidWebPairingQr: "Ceci n'est pas un code de couplage MeetVap Web.",
   cameraPermissionNeeded: 'Autorisation de caméra requise',
@@ -915,4 +917,8 @@ export const fr: Record<string, TranslationValue> = {
   updateNow: 'Mettre à jour',
   discardVoiceMessage: 'Supprimer le message vocal',
   you: 'Vous',
+  welcomeHeroTitle: "La messagerie privée, bien pensée",
+  welcomeHeroSubtitle: "Parlez et appelez en toute confiance — MeetVap garde vos conversations privées.",
+  welcomeNewUserCta: "Je suis nouveau ici",
+  welcomeExistingUserCta: "J'ai déjà un compte"  
 };

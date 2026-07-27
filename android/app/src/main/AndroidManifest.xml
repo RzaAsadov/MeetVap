@@ -12,6 +12,7 @@
   <uses-permission android:name="android.permission.INTERNET"/>
   <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS"/>
   <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+  <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" tools:node="remove"/>
   <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" tools:replace="android:maxSdkVersion"/>
   <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
   <uses-permission android:name="android.permission.READ_MEDIA_VIDEO"/>
@@ -46,6 +47,34 @@
 	    </service>
 	    <receiver android:name=".QuickReplyReceiver" android:exported="false"/>
 	    <service android:name="expo.modules.notifications.service.ExpoFirebaseMessagingService" tools:node="remove"/>
+	    <!--
+	      Android 15 forbids BOOT_COMPLETED receivers from starting restricted
+	      foreground services. Keep Expo's runtime/package-update dispatch paths,
+	      but do not let a reboot initialize the app beside LiveKit's
+	      mediaProjection foreground service.
+	    -->
+	    <receiver
+	      android:name="expo.modules.notifications.service.NotificationsService"
+	      android:enabled="true"
+	      android:exported="false"
+	      tools:node="replace">
+	      <intent-filter android:priority="-1">
+	        <action android:name="expo.modules.notifications.NOTIFICATION_EVENT"/>
+	        <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
+	      </intent-filter>
+	    </receiver>
+	    <receiver
+	      android:name="expo.modules.taskManager.TaskBroadcastReceiver"
+	      android:exported="false"
+	      tools:node="replace">
+	      <intent-filter>
+	        <action android:name="expo.modules.taskManager.TaskBroadcastReceiver.INTENT_ACTION"/>
+	        <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
+	      </intent-filter>
+	    </receiver>
+	    <receiver
+	      android:name="androidx.work.impl.background.systemalarm.RescheduleReceiver"
+	      tools:node="remove"/>
 	    <activity android:name=".ShareForwardActivity" android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|uiMode|smallestScreenSize" android:excludeFromRecents="true" android:exported="true" android:finishOnTaskLaunch="true" android:launchMode="singleTop" android:noHistory="true" android:resizeableActivity="false" android:screenOrientation="portrait" android:theme="@style/Theme.App.SplashScreen">
       <intent-filter>
         <action android:name="android.intent.action.SEND"/>

@@ -319,7 +319,7 @@ function serializeLiveLocation(input: {
 
 async function sendInitialLiveLocationPush(conversationId: string, senderId: string, messageId: string, title: string) {
   const tokens = await prisma.devicePushToken.findMany({
-    select: { locale: true, platform: true, provider: true, token: true },
+    select: { id: true, locale: true, platform: true, provider: true, token: true },
     where: {
       user: {
         memberships: {

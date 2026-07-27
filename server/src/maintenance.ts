@@ -3,7 +3,7 @@ import path from 'path';
 
 import { Prisma } from '@prisma/client';
 
-import { listReferencedAvatarMediaIds } from './avatarMedia';
+import { excludeReferencedAvatarMedia, listReferencedAvatarMediaIds } from './avatarMedia';
 import { config } from './config';
 import { operationalConfig } from './operationalConfig';
 import { prisma } from './prisma';
@@ -40,6 +40,7 @@ async function performOperationalCleanup() {
   const clientAckEligibleMessages = await cleanupClientAckEligibleMessages();
   const orphanMedia = await cleanupOrphanMedia();
   const partialUploads = await cleanupPartialUploads();
+  const pushRelayJobs = await cleanupPushRelayJobs();
   const sessions = await cleanupExpiredSessions();
   const staleCalls = await cleanupStaleCalls();
   pruneRateLimitBuckets();
@@ -52,6 +53,7 @@ async function performOperationalCleanup() {
     orphanMedia,
     partialUploads,
     purgedMessageBodies,
+    pushRelayJobs,
     sessions,
     staleCalls,
   };
@@ -60,6 +62,17 @@ async function performOperationalCleanup() {
 }
 
 type OperationalCleanupResult = Awaited<ReturnType<typeof performOperationalCleanup>>;
+
+async function cleanupPushRelayJobs() {
+  const cutoff = new Date(Date.now() - 7 * DAY_MS);
+  const result = await prisma.pushRelayJob.deleteMany({
+    where: {
+      completedAt: { lte: cutoff },
+      status: { in: ['PROVIDER_ACCEPTED', 'PARTIAL', 'FAILED', 'DEVICE_RECEIVED', 'EXPIRED'] },
+    },
+  });
+  return result.count;
+}
 
 async function cleanupPurgedMessageBodies() {
   const conversationIds = new Set<string>();
@@ -210,6 +223,8 @@ async function cleanupOrphanMedia() {
         createdAt: { lte: cutoff },
         ...(referencedAvatarMediaIds.length > 0 ? { id: { notIn: referencedAvatarMediaIds } } : {}),
         messages: { none: {} },
+        scheduledMessages: { none: {} },
+        statusUpdates: { none: {} },
       },
     });
 
@@ -236,6 +251,8 @@ async function deleteUnusedMedia(mediaIds: string[]) {
     where: {
       id: { in: mediaIds },
       messages: { none: {} },
+      scheduledMessages: { none: {} },
+      statusUpdates: { none: {} },
     },
   });
 
@@ -243,8 +260,14 @@ async function deleteUnusedMedia(mediaIds: string[]) {
     return;
   }
 
-  await prisma.mediaFile.deleteMany({ where: { id: { in: media.map((item) => item.id) } } });
-  await Promise.all(media.map((item) => removeStoredFile(item.storageKey)));
+  const deletableMedia = await excludeReferencedAvatarMedia(media);
+
+  if (deletableMedia.length === 0) {
+    return;
+  }
+
+  await prisma.mediaFile.deleteMany({ where: { id: { in: deletableMedia.map((item) => item.id) } } });
+  await Promise.all(deletableMedia.map((item) => removeStoredFile(item.storageKey)));
 }
 
 async function cleanupPartialUploads() {

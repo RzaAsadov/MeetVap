@@ -2836,6 +2836,9 @@ private final class CallNativeCallManager: NSObject, PKPushRegistryDelegate, CXP
     }
 
     let payloadType = Self.stringValue(payload.dictionaryPayload["type"])
+    acknowledgeRingingReceipt(
+      Self.stringValue(payload.dictionaryPayload["deliveryReceiptUrl"]).flatMap(URL.init(string:))
+    )
 
     if payloadType == "call-ended" {
       if let callId = Self.stringValue(payload.dictionaryPayload["callId"]) {

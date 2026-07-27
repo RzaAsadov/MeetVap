@@ -14,6 +14,7 @@ import { downloadRemoteMediaFile, getMessageMediaCacheUri, isLocalMediaFileCompl
 import { logMessageDeliveryDiagnostic, refreshRemoteMessageDeliveryDiagnostics } from '../lib/messageDeliveryDiagnostics';
 import { dismissAllMessageNotifications, dismissMessageNotificationsForConversation } from '../lib/messageNotifications';
 import { clearAuthToken, clearDeletedConversationAfter, clearStoredConversations, clearStoredSubscriptionStatus, clearStoredUser, eraseLocalAppData, eraseLocalChatData, getAuthToken, getDeletedConversationAfter, getServerUrl, getStoredCallLogs, getStoredConversations, getStoredDarkMode, getStoredDecoyOffline, getStoredErasePinDeletePeers, getStoredLanguage, getStoredLatestMessagesByConversationIds, getStoredMessages, getStoredMessagesByIds, getStoredOlderMessages, getStoredRecentMessages, getStoredSubscriptionStatus, getStoredUser, removeStoredMessageRecords, removeStoredMessages, setAuthToken, setDeletedConversationAfter, setServerUrl, setStoredCallLogs, setStoredConversations, setStoredDarkMode, setStoredDecoyOffline, setStoredLanguage, setStoredSubscriptionStatus, setStoredUser, upsertStoredMessages } from '../lib/storage';
+import { resolveLoginServer } from '../lib/loginServerResolution';
 import { createBypassSubscriptionStatus, createEmptySubscriptionStatus, hasPremiumAccess, isSubscriptionBypassed } from '../lib/subscriptionAccess';
 import { clearNativeQuickReplyCredentials, setNativeQuickReplyCredentials } from '../native/CallNative';
 import { setActiveCallSession } from '../lib/activeCallSession';
@@ -25,6 +26,8 @@ const RECEIPT_BATCH_DELAY_MS = 80;
 const LOW_PRIORITY_CONVERSATION_MAINTENANCE_DELAY_MS = 10_000;
 const LOW_PRIORITY_MESSAGE_MAINTENANCE_DELAY_MS = 6_000;
 const LOW_PRIORITY_MEDIA_CACHE_DELAY_MS = 8_000;
+const BACKGROUND_CONVERSATION_SYNC_CONCURRENCY = 2;
+const BACKGROUND_CONVERSATION_SYNC_YIELD_MS = 16;
 let conversationsRequest: { filter: ConversationListFilter; offset: number; promise: Promise<void>; query: string } | null = null;
 const messageRequests = new Map<string, Promise<void>>();
 const messageCacheRequests = new Map<string, Promise<void>>();
@@ -59,6 +62,23 @@ function scheduleLowPriorityStoreTask(callback: () => void, delayMs = 0) {
       clearTimeout(timeout);
     }
   };
+}
+
+async function processBackgroundConversations<T>(
+  items: T[],
+  processItem: (item: T) => Promise<void>,
+) {
+  let nextIndex = 0;
+  const workerCount = Math.min(BACKGROUND_CONVERSATION_SYNC_CONCURRENCY, items.length);
+
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (nextIndex < items.length && NativeAppState.currentState === 'active') {
+      const item = items[nextIndex];
+      nextIndex += 1;
+      await processItem(item).catch(() => undefined);
+      await new Promise((resolve) => setTimeout(resolve, BACKGROUND_CONVERSATION_SYNC_YIELD_MS));
+    }
+  }));
 }
 
 function scheduleConversationMaintenance(serverUrl: string, conversations: Conversation[]) {
@@ -133,9 +153,9 @@ async function syncMissingOwnPreviewMessages(serverUrl: string, conversations: C
     })),
   });
 
-  await Promise.allSettled(missingConversations.map((conversation) => (
-    requestConversationMessages(conversation.id, serverUrl, { hydrate: false })
-  )));
+  await processBackgroundConversations(missingConversations, async (conversation) => {
+    await requestConversationMessages(conversation.id, serverUrl, { hydrate: false }).catch(() => undefined);
+  });
 }
 
 function scheduleMessagePostLoadMaintenance(
@@ -613,17 +633,14 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
   },
 
   async signInWithPassword(username, password) {
-    const { serverUrl } = useAppStore.getState();
-
-    if (!serverUrl) {
-      throw new Error(t('serverUrlNotConfigured'));
-    }
-
-    const response = await login(serverUrl, { password, username });
+    const resolved = await resolveLoginServer(username);
+    const serverUrl = resolved.serverUrl;
+    const response = await login(serverUrl, { password, username: resolved.username });
 
     await Promise.all([
       clearStoredConversations(),
       setStoredCallLogs([]),
+      setServerUrl(serverUrl),
       setAuthToken(response.token),
       setStoredUser(response.user),
     ]);
@@ -649,6 +666,7 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
       isLoadingMoreConversations: false,
       messagesByConversation: {},
       subscriptionStatus: null,
+      serverUrl,
       user: response.user,
     });
     try {
@@ -2699,13 +2717,13 @@ async function syncIncomingConversationDeliveries(serverUrl: string, conversatio
 
   conversationsToSync.forEach((conversation) => deliverySyncConversationIds.add(conversation.id));
 
-  await Promise.allSettled(conversationsToSync.map(async (conversation) => {
-    try {
+  try {
+    await processBackgroundConversations(conversationsToSync, async (conversation) => {
       await requestConversationMessages(conversation.id, serverUrl, { hydrate: false });
-    } finally {
-      deliverySyncConversationIds.delete(conversation.id);
-    }
-  }));
+    });
+  } finally {
+    conversationsToSync.forEach((conversation) => deliverySyncConversationIds.delete(conversation.id));
+  }
 }
 
 async function syncPendingMessageDeletionsForConversations(serverUrl: string, conversations: Conversation[]) {
@@ -2730,6 +2748,8 @@ async function syncPendingMessageDeletionsForConversations(serverUrl: string, co
       if (result.messageIds.length > 0 || result.messageKeys.length > 0) {
         ackItems.push({ conversationId, messageIds: result.messageIds, messageKeys: result.messageKeys });
       }
+
+      await new Promise((resolve) => setTimeout(resolve, BACKGROUND_CONVERSATION_SYNC_YIELD_MS));
     }
 
     await acknowledgeBulkMessageDeletions(serverUrl, ackItems);
@@ -2841,6 +2861,8 @@ async function syncPendingMessageStatusUpdatesForConversations(serverUrl: string
       if (result.messageIds.length > 0 || result.messageKeys.length > 0) {
         ackItems.push({ conversationId, messageIds: result.messageIds, messageKeys: result.messageKeys });
       }
+
+      await new Promise((resolve) => setTimeout(resolve, BACKGROUND_CONVERSATION_SYNC_YIELD_MS));
     }
 
     await acknowledgeBulkMessageStatusUpdates(serverUrl, ackItems);

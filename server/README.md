@@ -81,6 +81,7 @@ Set `UPLOAD_DIR` to a persistent folder outside the replaceable `server` directo
 ```env
 UPLOAD_DIR=/home/zrid/messenger/uploads
 PUBLIC_API_URL=https://mm.meetvap.com
+MEET_SERVER_URL=meet.meetvap.com
 ```
 
 LiveKit can run with the existing single-server variables:

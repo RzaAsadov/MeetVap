@@ -87,6 +87,19 @@ export function DevicesScreen() {
       return;
     }
 
+    const activeServerUrl = normalizePairingServerUrl(serverUrl);
+
+    if (parsed.serverUrl && parsed.serverUrl !== activeServerUrl) {
+      Alert.alert(
+        t('webPairingFailed'),
+        t('webPairingServerMismatch', {
+          activeHost: getServerHost(activeServerUrl),
+          pairingHost: getServerHost(parsed.serverUrl),
+        }),
+      );
+      return;
+    }
+
     setApproving(true);
     try {
       await approveWebPairing(serverUrl, parsed);
@@ -149,16 +162,55 @@ export function DevicesScreen() {
 function parseWebPairingCode(value: string) {
   try {
     const parsed = new URL(value);
-    const pairingId = parsed.searchParams.get('pairingId') ?? '';
-    const secret = parsed.searchParams.get('secret') ?? '';
 
-    if (!pairingId || !secret) {
+    if (parsed.protocol !== 'meetvap:' || parsed.hostname !== 'web-pair') {
       return null;
     }
 
-    return { pairingId, secret };
+    const pairingId = parsed.searchParams.get('pairingId') ?? '';
+    const secret = parsed.searchParams.get('secret') ?? '';
+    const rawServerUrl = parsed.searchParams.get('serverUrl');
+    const serverUrl = rawServerUrl ? normalizePairingServerUrl(rawServerUrl) : null;
+
+    if (!pairingId || !secret || (rawServerUrl && !serverUrl)) {
+      return null;
+    }
+
+    return { pairingId, secret, serverUrl };
   } catch {
     return null;
+  }
+}
+
+function normalizePairingServerUrl(value: string) {
+  try {
+    const parsed = new URL(value);
+
+    if (
+      (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') ||
+      parsed.username ||
+      parsed.password ||
+      parsed.search ||
+      parsed.hash
+    ) {
+      return null;
+    }
+
+    return `${parsed.origin}${parsed.pathname.replace(/\/+$/, '')}`;
+  } catch {
+    return null;
+  }
+}
+
+function getServerHost(value: string | null) {
+  if (!value) {
+    return t('unknown');
+  }
+
+  try {
+    return new URL(value).host;
+  } catch {
+    return value;
   }
 }
 

@@ -4,6 +4,7 @@ import { cacheDeletePattern, cacheGetJson, cacheSetJson } from './redisCache';
 const PUSH_TOKEN_CACHE_TTL_SECONDS = 300;
 
 export type CachedPushToken = {
+  id: string;
   locale: string | null;
   platform: string;
   provider: string;
@@ -27,6 +28,7 @@ export async function getCachedPushTokensForUsers(userIds: string[], includeUser
 
   const tokens = await prisma.devicePushToken.findMany({
     select: {
+      id: true,
       locale: true,
       platform: true,
       provider: true,

@@ -95,6 +95,7 @@ export const az: Record<string, TranslationValue> = {
   serverNotConfigured: 'Server konfiqurasiya edilməyib',
   serverUrlNotConfigured: 'Server URL-i konfiqurasiya edilməyib',
   serverNotReachable: 'Serverə çatmaq mümkün olmadı',
+  loginHostNotReachable: 'Seçilmiş giriş serverinə qoşulmaq mümkün olmadı. Bağlantını yoxlayın və ya yenidən cəhd edin.',
   pleaseCheckUrl: 'Zəhmət olmasa URL-i yoxlayın.',
   serverSetupSubtitle: 'Bu tətbiqi şəxsi söhbət serverinizə qoşun.',
   serverUrl: 'Server URL',
@@ -239,6 +240,7 @@ export const az: Record<string, TranslationValue> = {
   logoutWebAccess: 'Veb girişindən çıx',
   webLogoutFailed: 'Veb girişindən çıxış mümkün olmadı',
   webPairingFailed: 'Veb cütləşdirmə uğursuz oldu',
+  webPairingServerMismatch: ({ activeHost, pairingHost }) => `Bu QR kod ${pairingHost} serverinə aiddir, hesabınız isə ${activeHost} serverinə qoşulub. Hesab serverinizin Veb səhifəsini açın və yeni QR kodu skan edin.`,
   invalidQrCode: 'Yanlış QR kod',
   invalidWebPairingQr: 'Bu, MeetVap Web cütləşdirmə kodu deyil.',
   cameraPermissionNeeded: 'Kamera icazəsi lazımdır',
@@ -915,4 +917,8 @@ export const az: Record<string, TranslationValue> = {
   updateNow: 'Yenilə',
   discardVoiceMessage: 'Səs mesajını ləğv et',
   you: 'Siz',
+  welcomeHeroTitle: "Məxfi yazışma, düzgün edilmiş",
+  welcomeHeroSubtitle: "Əminliklə danışın və zəng edin — MeetVap söhbətlərinizi sizə məxsus saxlayır.",
+  welcomeNewUserCta: "Yeni hesab aç",
+  welcomeExistingUserCta: "Artıq hesabım var"  
 };

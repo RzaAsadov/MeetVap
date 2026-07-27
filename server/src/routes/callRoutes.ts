@@ -27,6 +27,7 @@ const MAX_VIDEO_PARTICIPANTS = 6;
 const CALL_RINGING_RECEIPT_TTL_MS = 5 * 60 * 1000;
 
 type CallPushToken = {
+  id: string;
   locale: string | null;
   platform: string | null;
   provider: string;

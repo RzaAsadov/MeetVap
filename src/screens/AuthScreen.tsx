@@ -8,6 +8,7 @@ import { PrimaryButton } from '../components/PrimaryButton';
 import { TextField } from '../components/TextField';
 import { getLanguagePreferenceFlag, getLanguagePreferenceLabel, LANGUAGE_PREFERENCES, t } from '../i18n';
 import { checkUsernameAvailability } from '../lib/backend';
+import { LoginHostUnavailableError } from '../lib/loginServerResolution';
 import { containsMeetVapKeyword, isProhibitedMeetVapUsername } from '../lib/prohibitedNames';
 import { useAppStore } from '../store/useAppStore';
 import { colors } from '../theme/colors';
@@ -16,6 +17,9 @@ import { spacing } from '../theme/spacing';
 import { RootStackParamList } from '../types/navigation';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Auth'>;
+
+// NEW: 'welcome' is the entry step shown before login/register.
+type AuthMode = 'welcome' | 'login' | 'register';
 
 export function AuthScreen(_props: Props) {
   const insets = useSafeAreaInsets();
@@ -28,7 +32,9 @@ export function AuthScreen(_props: Props) {
   const signInWithPassword = useAppStore((state) => state.signInWithPassword);
   const registerWithPassword = useAppStore((state) => state.registerWithPassword);
   const setLanguagePreference = useAppStore((state) => state.setLanguagePreference);
-  const [mode, setMode] = useState<'login' | 'register'>('login');
+
+  // CHANGED: mode now starts on 'welcome' instead of 'login'.
+  const [mode, setMode] = useState<AuthMode>('welcome');
   const [registerStep, setRegisterStep] = useState<'credentials' | 'displayName'>('credentials');
   const [displayName, setDisplayName] = useState('');
   const [username, setUsername] = useState('');
@@ -38,6 +44,7 @@ export function AuthScreen(_props: Props) {
   const [isCheckingUsername, setCheckingUsername] = useState(false);
   const [hasAcceptedTerms, setAcceptedTerms] = useState(false);
   const [isLanguageModalVisible, setLanguageModalVisible] = useState(false);
+  const [unreachableHostname, setUnreachableHostname] = useState<string | null>(null);
 
   async function handleSubmit() {
     if (mode === 'register' && registerStep === 'credentials') {
@@ -79,6 +86,10 @@ export function AuthScreen(_props: Props) {
         await registerWithPassword(displayName.trim(), normalizeUsername(username), password);
       }
     } catch (error) {
+      if (error instanceof LoginHostUnavailableError) {
+        setUnreachableHostname(error.hostname);
+        return;
+      }
       Alert.alert(t('authenticationFailed'), error instanceof Error ? error.message : t('pleaseTryAgain'));
     } finally {
       setIsSubmitting(false);
@@ -143,6 +154,17 @@ export function AuthScreen(_props: Props) {
     setDisplayName('');
   }
 
+  // NEW: navigate from the welcome step into register or login.
+  function enterRegisterFromWelcome() {
+    setRegisterStep('credentials');
+    setDisplayName('');
+    setMode('register');
+  }
+
+  function enterLoginFromWelcome() {
+    setMode('login');
+  }
+
   const isRegisterMode = mode === 'register';
   const isRegisterCredentialsStep = isRegisterMode && registerStep === 'credentials';
   const isRegisterDisplayNameStep = isRegisterMode && registerStep === 'displayName';
@@ -167,6 +189,69 @@ export function AuthScreen(_props: Props) {
     }, 120);
   }
 
+  // Shared language-picker modal, used by both the welcome step and the login/register form.
+  function renderLanguageModal() {
+    return (
+      <Modal animationType="fade" transparent visible={isLanguageModalVisible} onRequestClose={() => setLanguageModalVisible(false)}>
+        <Pressable onPress={() => setLanguageModalVisible(false)} style={styles.modalBackdrop}>
+          <Pressable style={styles.languageModal}>
+            <Text style={styles.modalTitle}>{t('language')}</Text>
+            {LANGUAGE_PREFERENCES.map((preference) => (
+              <Pressable
+                key={preference}
+                onPress={() => {
+                  void setLanguagePreference(preference);
+                  setLanguageModalVisible(false);
+                }}
+                style={styles.languageOption}
+              >
+                <View style={styles.languageOptionLabel}>
+                  <Text style={styles.languageOptionFlag}>{getLanguagePreferenceFlag(preference)}</Text>
+                  <Text style={styles.languageOptionText}>{getLanguagePreferenceLabel(preference)}</Text>
+                </View>
+                {languagePreference === preference ? <Ionicons color={colors.primary} name="checkmark" size={22} /> : null}
+              </Pressable>
+            ))}
+          </Pressable>
+        </Pressable>
+      </Modal>
+    );
+  }
+
+  // NEW: the welcome step shown before login/register.
+  if (mode === 'welcome') {
+    return (
+      <View style={styles.welcomeScreen}>
+        <View style={[styles.welcomeHeader, { paddingTop: insets.top + spacing.md }]}>
+          <Pressable accessibilityLabel={t('language')} onPress={() => setLanguageModalVisible(true)} style={styles.headerLanguageButton}>
+            <Ionicons color={colors.white} name="language-outline" size={22} />
+          </Pressable>
+        </View>
+
+        <View style={styles.welcomeBody}>
+          <View style={styles.welcomeBrand}>
+            <Image source={require('../../assets/splash-icon.png')} style={styles.welcomeLogo} />
+            <Text style={styles.welcomeBrandText}>MeetVap</Text>
+          </View>
+
+          <View style={styles.welcomeCopy}>
+            <Text style={styles.welcomeTitle}>{t('welcomeHeroTitle')}</Text>
+            <Text style={styles.welcomeSubtitle}>{t('welcomeHeroSubtitle')}</Text>
+          </View>
+        </View>
+
+        <View style={[styles.welcomeActions, { paddingBottom: Math.max(insets.bottom, spacing.lg) }]}>
+          <PrimaryButton onPress={enterRegisterFromWelcome} title={t('welcomeNewUserCta')} />
+          <Pressable onPress={enterLoginFromWelcome} style={styles.welcomeSecondaryButton}>
+            <Text style={styles.welcomeSecondaryText}>{t('welcomeExistingUserCta')}</Text>
+          </Pressable>
+        </View>
+
+        {renderLanguageModal()}
+      </View>
+    );
+  }
+
   return (
     <KeyboardAvoidingView
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -183,6 +268,9 @@ export function AuthScreen(_props: Props) {
       >
         <View style={styles.header}>
           <View style={styles.headerTitleRow}>
+            <Pressable accessibilityLabel={t('back')} onPress={() => setMode('welcome')} style={styles.headerBackButton}>
+              <Ionicons color={colors.white} name="chevron-back" size={22} />
+            </Pressable>
             <Text numberOfLines={2} style={styles.title}>{mode === 'login' ? t('welcomeBack') : t('createAccount')}</Text>
             <Pressable accessibilityLabel={t('language')} onPress={() => setLanguageModalVisible(true)} style={styles.headerLanguageButton}>
               <Ionicons color={colors.white} name="language-outline" size={22} />
@@ -300,28 +388,27 @@ export function AuthScreen(_props: Props) {
         </View>
       </ScrollView>
 
-      <Modal animationType="fade" transparent visible={isLanguageModalVisible} onRequestClose={() => setLanguageModalVisible(false)}>
-        <Pressable onPress={() => setLanguageModalVisible(false)} style={styles.modalBackdrop}>
-          <Pressable style={styles.languageModal}>
-            <Text style={styles.modalTitle}>{t('language')}</Text>
-            {LANGUAGE_PREFERENCES.map((preference) => (
-              <Pressable
-                key={preference}
-                onPress={() => {
-                  void setLanguagePreference(preference);
-                  setLanguageModalVisible(false);
-                }}
-                style={styles.languageOption}
-              >
-                <View style={styles.languageOptionLabel}>
-                  <Text style={styles.languageOptionFlag}>{getLanguagePreferenceFlag(preference)}</Text>
-                  <Text style={styles.languageOptionText}>{getLanguagePreferenceLabel(preference)}</Text>
-                </View>
-                {languagePreference === preference ? <Ionicons color={colors.primary} name="checkmark" size={22} /> : null}
+      {renderLanguageModal()}
+      <Modal animationType="fade" transparent visible={!!unreachableHostname} onRequestClose={() => setUnreachableHostname(null)}>
+        <View style={styles.hostModalBackdrop}>
+          <View style={styles.hostModal}>
+            <View style={styles.hostModalIcon}>
+              <Ionicons color={colors.danger} name="cloud-offline-outline" size={30} />
+            </View>
+            <Text style={styles.modalTitle}>{t('serverNotReachable')}</Text>
+            <Text style={styles.hostModalBody}>{t('loginHostNotReachable')}</Text>
+            <Text selectable style={styles.hostModalHostname}>{unreachableHostname}</Text>
+            <View style={styles.hostModalActions}>
+              <Pressable onPress={() => setUnreachableHostname(null)} style={styles.hostModalSecondary}>
+                <Text style={styles.hostModalSecondaryText}>{t('close')}</Text>
               </Pressable>
-            ))}
-          </Pressable>
-        </Pressable>
+              <Pressable onPress={() => { setUnreachableHostname(null); void handleSubmit(); }} style={styles.hostModalPrimary}>
+                <Ionicons color={colors.white} name="refresh" size={18} />
+                <Text style={styles.hostModalPrimaryText}>{t('retry')}</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
       </Modal>
     </KeyboardAvoidingView>
   );
@@ -337,6 +424,16 @@ function isValidSignupPassword(value: string) {
 
 function createStyles() {
   return StyleSheet.create({
+    hostModal: { backgroundColor: colors.surface, borderColor: colors.border, borderRadius: 8, borderWidth: 1, gap: spacing.md, maxWidth: 420, padding: spacing.xl, width: '100%' },
+    hostModalActions: { flexDirection: 'row', gap: spacing.md, justifyContent: 'flex-end', marginTop: spacing.sm },
+    hostModalBackdrop: { alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.62)', flex: 1, justifyContent: 'center', padding: spacing.xl },
+    hostModalBody: { color: colors.textSecondary, fontSize: 15, lineHeight: 22, textAlign: 'center' },
+    hostModalHostname: { backgroundColor: colors.appBackground, borderColor: colors.border, borderRadius: 8, borderWidth: 1, color: colors.textPrimary, fontSize: 14, padding: spacing.md, textAlign: 'center' },
+    hostModalIcon: { alignItems: 'center', alignSelf: 'center', backgroundColor: 'rgba(239,68,68,0.12)', borderRadius: 24, height: 48, justifyContent: 'center', width: 48 },
+    hostModalPrimary: { alignItems: 'center', backgroundColor: colors.primary, borderRadius: 8, flexDirection: 'row', gap: spacing.sm, justifyContent: 'center', minHeight: 44, paddingHorizontal: spacing.lg },
+    hostModalPrimaryText: { color: colors.white, fontSize: 15, fontWeight: '800' },
+    hostModalSecondary: { alignItems: 'center', borderColor: colors.border, borderRadius: 8, borderWidth: 1, justifyContent: 'center', minHeight: 44, paddingHorizontal: spacing.lg },
+    hostModalSecondaryText: { color: colors.textPrimary, fontSize: 15, fontWeight: '700' },
     authBrand: {
       alignItems: 'center',
       flex: 1,
@@ -376,6 +473,13 @@ function createStyles() {
       paddingBottom: spacing.xl,
       paddingHorizontal: spacing.xl,
       paddingTop: 76,
+    },
+    headerBackButton: {
+      alignItems: 'center',
+      borderRadius: 16,
+      height: 40,
+      justifyContent: 'center',
+      width: 40,
     },
     headerLanguageButton: {
       alignItems: 'center',
@@ -568,6 +672,74 @@ function createStyles() {
       color: colors.white,
       flex: 1,
       fontSize: 32,
+      fontWeight: '800',
+      textAlign: 'center',
+    },
+
+    // ---- NEW: welcome step styles ----
+    welcomeScreen: {
+      backgroundColor: colors.appBackground,
+      flex: 1,
+    },
+    welcomeHeader: {
+      alignItems: 'flex-end',
+      paddingHorizontal: spacing.xl,
+    },
+    welcomeBody: {
+      alignItems: 'center',
+      flex: 1,
+      gap: 40,
+      justifyContent: 'center',
+      paddingHorizontal: spacing.xl,
+    },
+    welcomeBrand: {
+      alignItems: 'center',
+      gap: spacing.md,
+    },
+    welcomeLogo: {
+      height: 108,
+      resizeMode: 'contain',
+      width: 108,
+    },
+    welcomeBrandText: {
+      color: colors.textPrimary,
+      fontSize: 26,
+      fontWeight: '900',
+    },
+    welcomeCopy: {
+      alignItems: 'center',
+      gap: spacing.sm,
+    },
+    welcomeTitle: {
+      color: colors.textPrimary,
+      fontSize: 28,
+      fontWeight: '900',
+      textAlign: 'center',
+    },
+    welcomeSubtitle: {
+      color: colors.textSecondary,
+      fontSize: 15,
+      lineHeight: 22,
+      maxWidth: 320,
+      textAlign: 'center',
+    },
+    welcomeActions: {
+      gap: spacing.md,
+      paddingHorizontal: spacing.xl,
+      paddingTop: spacing.lg,
+    },
+    welcomeSecondaryButton: {
+      alignItems: 'center',
+      borderColor: colors.border,
+      borderRadius: 18,
+      borderWidth: 1,
+      justifyContent: 'center',
+      minHeight: 54,
+      paddingHorizontal: spacing.lg,
+    },
+    welcomeSecondaryText: {
+      color: colors.textPrimary,
+      fontSize: 16,
       fontWeight: '800',
     },
   });

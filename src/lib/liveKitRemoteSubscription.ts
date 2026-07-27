@@ -19,12 +19,14 @@ type RemoteVideoSubscriptionOptions = {
   isStartup?: boolean;
   log?: (event: string, details: Record<string, unknown>) => void;
   networkProfile?: 'normal' | 'degraded' | 'critical';
+  preferLowQualityAtStartup?: boolean;
   useGroupVideoLimits?: boolean;
 };
 
 const remoteVideoDecodeStates = new WeakMap<RemoteTrackPublication, RemoteVideoDecodeState>();
 const groupLimitedVideoPublications = new WeakSet<RemoteTrackPublication>();
 const startupPreparedVideoPublications = new WeakSet<RemoteTrackPublication>();
+const startupLimitedVideoPublications = new WeakSet<RemoteTrackPublication>();
 
 // Shared across both recovery paths (decoder-stall and track-attach-stall) so
 // the two mechanisms never fire resubscribes back-to-back for the same
@@ -60,6 +62,7 @@ export function ensureRemoteVideoPublicationSubscribed(
     isStartup = false,
     log,
     networkProfile = 'normal',
+    preferLowQualityAtStartup = false,
     useGroupVideoLimits = false,
   }: RemoteVideoSubscriptionOptions = {},
 ) {
@@ -79,10 +82,9 @@ export function ensureRemoteVideoPublicationSubscribed(
       return;
     }
 
-    // The 90p startup request introduced by the slow-network profile leaves some
-    // React Native receivers decoding an orphan transceiver which LiveKit never
-    // attaches to the publication. Request the stable primary layer once while
-    // subscription is being established. Normal adaptation starts after decode.
+    // Requesting 90p before attachment leaves some React Native receivers with
+    // an orphan transceiver. Attach on the primary layer first; once a usable
+    // camera track exists, the startup controller below safely requests 90p.
     //
     // IMPORTANT: only mark this publication as "prepared" once the calls below
     // actually succeed. Marking it first meant that if setEnabled/setVideoQuality
@@ -122,7 +124,19 @@ export function ensureRemoteVideoPublicationSubscribed(
       publication.setEnabled(true);
     }
 
-    applyRemoteVideoSettings(publication, useGroupVideoLimits, networkProfile, isStartup);
+    if (isStartup && preferLowQualityAtStartup) {
+      if (!startupLimitedVideoPublications.has(publication)) {
+        publication.setVideoQuality(VideoQuality.LOW);
+        publication.setVideoFPS(8);
+        startupLimitedVideoPublications.add(publication);
+        groupLimitedVideoPublications.add(publication);
+        log?.('remote-video-startup-low-quality-requested', getRemoteVideoPublicationDetails(publication));
+      }
+      return;
+    }
+
+    startupLimitedVideoPublications.delete(publication);
+    applyRemoteVideoSettings(publication, useGroupVideoLimits, networkProfile);
     log?.('remote-video-track-ready', getRemoteVideoPublicationDetails(publication));
   } catch {
     log?.('remote-video-subscribe-error', getRemoteVideoPublicationDetails(publication));
@@ -173,14 +187,7 @@ function applyRemoteVideoSettings(
   publication: RemoteTrackPublication,
   useGroupVideoLimits: boolean,
   networkProfile: RemoteVideoSubscriptionOptions['networkProfile'] = 'normal',
-  isStartup = false,
 ) {
-  // The stable startup quality was requested before the track arrived. Avoid a
-  // second layer change while its first keyframe is being decoded.
-  if (isStartup) {
-    return;
-  }
-
   if (networkProfile === 'critical') {
     groupLimitedVideoPublications.add(publication);
     publication.setVideoQuality(VideoQuality.LOW);
@@ -207,6 +214,10 @@ function applyRemoteVideoSettings(
     if (groupLimitedVideoPublications.has(publication)) {
       groupLimitedVideoPublications.delete(publication);
       publication.setVideoQuality(VideoQuality.HIGH);
+
+      if (publication.track) {
+        publication.setVideoFPS(15);
+      }
     }
 
     return;
