@@ -1855,8 +1855,8 @@ conversationRoutes.patch('/:conversationId/owner', async (req, res, next) => {
 
     const targetMember = conversation.members.find((member) => member.userId === input.userId);
 
-    if (!targetMember || (!targetMember.isAdmin && input.userId !== conversation.ownerId)) {
-      throw new HttpError(400, 'Choose an existing group admin');
+    if (!targetMember) {
+      throw new HttpError(400, 'Choose an existing group member');
     }
 
     if (input.userId === currentUser.id) {

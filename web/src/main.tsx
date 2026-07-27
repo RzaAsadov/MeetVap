@@ -212,6 +212,16 @@ const translations = {
     removeAdmin: 'Remove admin',
     removeMember: 'Remove member',
     transferOwnership: 'Transfer ownership',
+    selectNewOwner: 'Select new owner',
+    transferOwnershipConfirm: 'Transfer ownership to {name}? This cannot be undone from this dialog.',
+    transferCountdown: 'Transfer available in {seconds}s',
+    noEligibleOwners: 'No eligible group members.',
+    media: 'Media',
+    files: 'Files',
+    links: 'Links',
+    noMedia: 'No media in this chat.',
+    noFiles: 'No files in this chat.',
+    noLinks: 'No links in this chat.',
     deleteGroup: 'Delete group',
     addMembers: 'Add members',
     leaveGroup: 'Leave group',
@@ -382,6 +392,16 @@ const translations = {
     removeAdmin: 'Adminliği kaldır',
     removeMember: 'Üyeyi çıkar',
     transferOwnership: 'Sahipliği aktar',
+    selectNewOwner: 'Yeni sahibi seç',
+    transferOwnershipConfirm: 'Sahiplik {name} kişisine aktarılsın mı? Bu işlem bu ekrandan geri alınamaz.',
+    transferCountdown: 'Aktarım {seconds} sn içinde kullanılabilir',
+    noEligibleOwners: 'Uygun grup üyesi yok.',
+    media: 'Medya',
+    files: 'Dosyalar',
+    links: 'Bağlantılar',
+    noMedia: 'Bu sohbette medya yok.',
+    noFiles: 'Bu sohbette dosya yok.',
+    noLinks: 'Bu sohbette bağlantı yok.',
     deleteGroup: 'Grubu sil',
     addMembers: 'Üye ekle',
     leaveGroup: 'Gruptan ayrıl',
@@ -552,6 +572,16 @@ const translations = {
     removeAdmin: 'Снять администратора',
     removeMember: 'Удалить участника',
     transferOwnership: 'Передать права владельца',
+    selectNewOwner: 'Выберите нового владельца',
+    transferOwnershipConfirm: 'Передать права владельца пользователю {name}? Это действие нельзя отменить в этом окне.',
+    transferCountdown: 'Передача будет доступна через {seconds} с',
+    noEligibleOwners: 'Нет подходящих участников группы.',
+    media: 'Медиа',
+    files: 'Файлы',
+    links: 'Ссылки',
+    noMedia: 'В этом чате нет медиа.',
+    noFiles: 'В этом чате нет файлов.',
+    noLinks: 'В этом чате нет ссылок.',
     deleteGroup: 'Удалить группу',
     addMembers: 'Добавить участников',
     leaveGroup: 'Покинуть группу',
@@ -1063,6 +1093,13 @@ type MediaViewerState = {
   url: string;
 };
 
+type DirectChatLink = {
+  createdAt: string;
+  href: string;
+  id: string;
+  text: string;
+};
+
 type PinnedMessage = {
   message: Message;
   pinnedAt: string;
@@ -1282,6 +1319,12 @@ function App() {
   const [isVoiceRoomPeopleOpen, setVoiceRoomPeopleOpen] = useState(false);
   const [isChatHeaderMenuOpen, setChatHeaderMenuOpen] = useState(false);
   const [isGroupDetailsOpen, setGroupDetailsOpen] = useState(false);
+  const [isDirectDetailsOpen, setDirectDetailsOpen] = useState(false);
+  const [directDetailsTab, setDirectDetailsTab] = useState<'files' | 'links' | 'media'>('media');
+  const [isOwnershipTransferOpen, setOwnershipTransferOpen] = useState(false);
+  const [ownershipTransferCandidateId, setOwnershipTransferCandidateId] = useState<string | null>(null);
+  const [ownershipTransferCountdown, setOwnershipTransferCountdown] = useState(10);
+  const [isOwnershipTransferPending, setOwnershipTransferPending] = useState(false);
   const [callElapsedSeconds, setCallElapsedSeconds] = useState(0);
   const [callWindowPosition, setCallWindowPosition] = useState<ScreenPoint | null>(null);
   const [isCallMaximized, setCallMaximized] = useState(false);
@@ -1620,10 +1663,67 @@ function App() {
     const memberIds = new Set(selectedConversation?.members?.map((member) => member.id) ?? []);
     return sortUsersAlphabetically(contacts.filter((contact) => !memberIds.has(contact.id)));
   }, [contacts, selectedConversation?.members]);
+  const ownershipTransferCandidates = useMemo(() => {
+    if (selectedConversation?.type !== 'GROUP') {
+      return [];
+    }
+
+    const usersById = new Map<string, AuthUser>();
+    conversations.forEach((conversation) => {
+      conversation.members?.forEach((member) => {
+        if (member.id !== user?.id) {
+          usersById.set(member.id, member);
+        }
+      });
+    });
+    contacts.forEach((contact) => {
+      if (contact.id !== user?.id) {
+        usersById.set(contact.id, contact);
+      }
+    });
+    selectedConversation.members?.forEach((member) => {
+      if (member.id !== user?.id) {
+        usersById.set(member.id, { ...usersById.get(member.id), ...member });
+      }
+    });
+
+    const memberIds = new Set(selectedConversation.members?.map((member) => member.id) ?? []);
+    return sortUsersAlphabetically([...usersById.values()].filter((member) => (
+      memberIds.has(member.id) && member.id !== selectedConversation.ownerId
+    )));
+  }, [contacts, conversations, selectedConversation, user?.id]);
+  const ownershipTransferCandidate = ownershipTransferCandidates.find((candidate) => candidate.id === ownershipTransferCandidateId) ?? null;
+  const directChatMediaMessages = useMemo(() => (
+    selectedConversation?.type === 'DIRECT'
+      ? messages.filter((message) => (message.kind === 'IMAGE' || message.kind === 'VIDEO') && !!message.media)
+      : []
+  ), [messages, selectedConversation?.type]);
+  const directChatFileMessages = useMemo(() => (
+    selectedConversation?.type === 'DIRECT'
+      ? messages.filter((message) => message.kind === 'FILE' && !!message.media)
+      : []
+  ), [messages, selectedConversation?.type]);
+  const directChatLinks = useMemo<DirectChatLink[]>(() => {
+    if (selectedConversation?.type !== 'DIRECT') {
+      return [];
+    }
+
+    return messages.flatMap((message) => extractLinksFromText(message.body).map((link, index) => ({
+      ...link,
+      createdAt: message.createdAt,
+      id: `${message.id}:${index}`,
+    })));
+  }, [messages, selectedConversation?.type]);
 
   useEffect(() => {
     setChatHeaderMenuOpen(false);
     setGroupDetailsOpen(false);
+    setDirectDetailsOpen(false);
+    setDirectDetailsTab('media');
+    setOwnershipTransferOpen(false);
+    setOwnershipTransferCandidateId(null);
+    setOwnershipTransferCountdown(10);
+    setOwnershipTransferPending(false);
     setSelectedMessageIds(new Set());
     setBulkDeleteOpen(false);
     setBulkForwardOpen(false);
@@ -1631,6 +1731,20 @@ function App() {
     setGroupMemberPickerOpen(false);
     setSelectedGroupMemberIds(new Set());
   }, [selectedConversationId]);
+
+  useEffect(() => {
+    if (!isOwnershipTransferOpen || !ownershipTransferCandidateId) {
+      setOwnershipTransferCountdown(10);
+      return undefined;
+    }
+
+    setOwnershipTransferCountdown(10);
+    const intervalId = setInterval(() => {
+      setOwnershipTransferCountdown((current) => Math.max(0, current - 1));
+    }, 1000);
+
+    return () => clearInterval(intervalId);
+  }, [isOwnershipTransferOpen, ownershipTransferCandidateId]);
 
   const stopIncomingRingtone = useCallback(() => {
     const player = incomingRingtoneRef.current;
@@ -4066,13 +4180,29 @@ function App() {
     applyUpdatedConversation(response.conversation);
   }
 
-  async function transferGroupOwnership(conversation: Conversation, member: AuthUser) {
-    if (!window.confirm(`${t('transferOwnership')}: ${member.displayName || member.username}?`)) return;
-    const response = await authedRequest<{ conversation: Conversation }>(`/conversations/${conversation.id}/owner`, {
-      body: JSON.stringify({ userId: member.id }),
-      method: 'PATCH',
-    });
-    applyUpdatedConversation(response.conversation);
+  function closeOwnershipTransferDialog() {
+    setOwnershipTransferOpen(false);
+    setOwnershipTransferCandidateId(null);
+    setOwnershipTransferCountdown(10);
+    setOwnershipTransferPending(false);
+  }
+
+  async function completeGroupOwnershipTransfer() {
+    if (!selectedConversation || selectedConversation.type !== 'GROUP' || !ownershipTransferCandidate) {
+      return;
+    }
+
+    setOwnershipTransferPending(true);
+    try {
+      const response = await authedRequest<{ conversation: Conversation }>(`/conversations/${selectedConversation.id}/owner`, {
+        body: JSON.stringify({ userId: ownershipTransferCandidate.id }),
+        method: 'PATCH',
+      });
+      applyUpdatedConversation(response.conversation);
+      closeOwnershipTransferDialog();
+    } finally {
+      setOwnershipTransferPending(false);
+    }
   }
 
   async function deleteGroupFromWeb(conversation: Conversation) {
@@ -5377,9 +5507,16 @@ function App() {
       <main className="chat-panel">
         <header className="topbar">
           <button
-            className={`chat-header-identity ${selectedConversation?.type === 'GROUP' ? 'clickable' : ''}`}
-            disabled={selectedConversation?.type !== 'GROUP'}
-            onClick={() => selectedConversation?.type === 'GROUP' && setGroupDetailsOpen(true)}
+            className={`chat-header-identity ${selectedConversation?.type === 'GROUP' || selectedConversation?.type === 'DIRECT' ? 'clickable' : ''}`}
+            disabled={selectedConversation?.type !== 'GROUP' && selectedConversation?.type !== 'DIRECT'}
+            onClick={() => {
+              if (selectedConversation?.type === 'GROUP') {
+                setGroupDetailsOpen(true);
+              } else if (selectedConversation?.type === 'DIRECT') {
+                setDirectDetailsTab('media');
+                setDirectDetailsOpen(true);
+              }
+            }}
           >
             <strong>{getMainPanelTitle(activePanelTab, selectedConversation, selectedPeer, t)}</strong>
             <span>{activePanelTab === 'chats' ? getConversationHeaderSubtitle(selectedConversation, selectedPeer, t, language) : ''}</span>
@@ -6238,122 +6375,168 @@ function App() {
                 <X aria-hidden size={20} />
               </button>
             </header>
-            <section className="group-details-hero">
-              <button
-                className="group-avatar-button"
-                disabled={!selectedConversationRole}
-                onClick={() => groupAvatarInputRef.current?.click()}
-                title={t('changePicture')}
-              >
-                <Avatar title={selectedConversation.title} url={selectedConversation.avatarUrl} />
-              </button>
-              <input
-                accept="image/*"
-                hidden
-                onChange={(event) => {
-                  const file = event.target.files?.[0];
-                  if (file) void updateGroupAvatar(selectedConversation, file).catch((error) => setAttachmentError(error instanceof Error ? error.message : t('attachmentFailed')));
-                  event.currentTarget.value = '';
-                }}
-                ref={groupAvatarInputRef}
-                type="file"
-              />
-              <div>
-                <strong>{selectedConversation.title}</strong>
-                {selectedConversation.showMemberCount !== false ? <span>{selectedConversation.memberCount ?? 0} {t('members')}</span> : null}
-              </div>
-              {selectedConversationRole ? (
-                <button className="group-inline-action" onClick={() => void updateGroupTitle(selectedConversation)} title={t('changeGroupName')}>
-                  <Pencil size={18} />
+            <div className="group-details-body">
+              <section className="group-details-hero">
+                <button
+                  className="group-avatar-button"
+                  disabled={!selectedConversationRole}
+                  onClick={() => groupAvatarInputRef.current?.click()}
+                  title={t('changePicture')}
+                >
+                  <Avatar title={selectedConversation.title} url={selectedConversation.avatarUrl} />
+                  {selectedConversationRole ? <span className="avatar-edit-badge"><Pencil aria-hidden size={15} /></span> : null}
                 </button>
-              ) : null}
-            </section>
-            <section className="group-details-section">
-              <div className="group-details-section-title">
-                <Users aria-hidden size={18} />
-                <strong>{t('groupMembers')}</strong>
-              </div>
-              <div className="group-members-list">
-                {sortedGroupMembers.length > 0 ? sortedGroupMembers.map((member) => (
-                  <div className="group-member-row" key={member.id}>
-                    <Avatar title={member.displayName || member.username} url={member.avatarUrl} />
-                    <span>
-                      <strong>{member.displayName || member.username}</strong>
-                      <small>@{member.username}</small>
-                    </span>
-                    <div className="group-member-actions">
-                      {member.id === selectedConversation.ownerId ? <em>{t('owner')}</em> : selectedConversation.adminIds?.includes(member.id) ? <em>{t('admin')}</em> : null}
-                      {selectedConversation.ownerId === user?.id && member.id !== user?.id ? (
-                        <>
-                          {selectedConversation.adminIds?.includes(member.id) ? (
-                            <>
-                              <button onClick={() => void transferGroupOwnership(selectedConversation, member)} title={t('transferOwnership')}><Shield size={16} /></button>
-                              <button onClick={() => void updateGroupMemberRole(selectedConversation, member, false)} title={t('removeAdmin')}><X size={16} /></button>
-                            </>
-                          ) : (
-                            <button onClick={() => void updateGroupMemberRole(selectedConversation, member, true)} title={t('makeAdmin')}><Shield size={16} /></button>
-                          )}
-                        </>
-                      ) : null}
-                      {selectedConversationRole && member.id !== user?.id && member.id !== selectedConversation.ownerId ? (
-                        <button className="danger" onClick={() => void removeGroupMember(selectedConversation, member)} title={t('removeMember')}><Trash2 size={16} /></button>
-                      ) : null}
-                    </div>
-                  </div>
-                )) : <div className="center">{selectedConversation.hideMembers ? t('hideMembers') : t('contactsEmpty')}</div>}
-              </div>
-            </section>
-            {selectedConversationRole ? (
-              <section className="group-details-section">
-                <button className="group-management-action" onClick={() => setGroupMemberPickerOpen(true)}>
-                  <UserPlus size={18} />
-                  <span>{t('addMembers')}</span>
-                </button>
+                <input
+                  accept="image/*"
+                  hidden
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    if (file) void updateGroupAvatar(selectedConversation, file).catch((error) => setAttachmentError(error instanceof Error ? error.message : t('attachmentFailed')));
+                    event.currentTarget.value = '';
+                  }}
+                  ref={groupAvatarInputRef}
+                  type="file"
+                />
+                <div>
+                  <strong>{selectedConversation.title}</strong>
+                  {selectedConversation.showMemberCount !== false ? <span>{selectedConversation.memberCount ?? 0} {t('members')}</span> : null}
+                </div>
+                {selectedConversationRole ? (
+                  <button className="group-inline-action" onClick={() => void updateGroupTitle(selectedConversation)} title={t('changeGroupName')}>
+                    <Pencil size={18} />
+                  </button>
+                ) : null}
               </section>
-            ) : null}
-            {selectedConversation.ownerId === user?.id ? (
+              {selectedConversationRole ? (
+                <section className="group-details-section">
+                  <button className="group-management-action" onClick={() => setGroupMemberPickerOpen(true)}>
+                    <UserPlus size={18} />
+                    <span>{t('addMembers')}</span>
+                  </button>
+                </section>
+              ) : null}
               <section className="group-details-section">
                 <div className="group-details-section-title">
-                  <Shield aria-hidden size={18} />
-                  <strong>{t('settings')}</strong>
+                  <Users aria-hidden size={18} />
+                  <strong>{t('groupMembers')}</strong>
                 </div>
-                <label className="settings-toggle">
-                  <span>{t('memberCount')}</span>
-                  <input
-                    checked={selectedConversation.showMemberCount !== false}
-                    onChange={(event) => void updateGroupSettings(selectedConversation, { showMemberCount: event.target.checked })}
-                    type="checkbox"
-                  />
-                </label>
-                <label className="settings-toggle">
-                  <span>{t('hideMembers')}</span>
-                  <input
-                    checked={selectedConversation.hideMembers === true}
-                    onChange={(event) => void updateGroupSettings(selectedConversation, { hideMembers: event.target.checked })}
-                    type="checkbox"
-                  />
-                </label>
-                <label className="settings-toggle">
-                  <span>{t('ownerOnlyMessages')}</span>
-                  <input
-                    checked={selectedConversation.ownerOnlyMessages === true}
-                    onChange={(event) => void updateGroupSettings(selectedConversation, { ownerOnlyMessages: event.target.checked })}
-                    type="checkbox"
-                  />
-                </label>
-                <button className="group-delete-action" onClick={() => void deleteGroupFromWeb(selectedConversation)}>
-                  <Trash2 size={18} />
-                  <span>{t('deleteGroup')}</span>
-                </button>
+                <div className="group-members-list">
+                  {sortedGroupMembers.length > 0 ? sortedGroupMembers.map((member) => (
+                    <div className="group-member-row" key={member.id}>
+                      <Avatar title={member.displayName || member.username} url={member.avatarUrl} />
+                      <span>
+                        <strong>{member.displayName || member.username}</strong>
+                        <small>@{member.username}</small>
+                      </span>
+                      <div className="group-member-actions">
+                        {member.id === selectedConversation.ownerId ? <em>{t('owner')}</em> : selectedConversation.adminIds?.includes(member.id) ? <em>{t('admin')}</em> : null}
+                        {selectedConversation.ownerId === user?.id && member.id !== user?.id ? (
+                          selectedConversation.adminIds?.includes(member.id) ? (
+                            <button onClick={() => void updateGroupMemberRole(selectedConversation, member, false)} title={t('removeAdmin')}><X size={16} /></button>
+                          ) : (
+                            <button onClick={() => void updateGroupMemberRole(selectedConversation, member, true)} title={t('makeAdmin')}><Shield size={16} /></button>
+                          )
+                        ) : null}
+                        {selectedConversationRole && member.id !== user?.id && member.id !== selectedConversation.ownerId ? (
+                          <button className="danger" onClick={() => void removeGroupMember(selectedConversation, member)} title={t('removeMember')}><Trash2 size={16} /></button>
+                        ) : null}
+                      </div>
+                    </div>
+                  )) : <div className="center">{selectedConversation.hideMembers ? t('hideMembers') : t('contactsEmpty')}</div>}
+                </div>
               </section>
+              {selectedConversation.ownerId === user?.id ? (
+                <section className="group-details-section">
+                  <div className="group-details-section-title">
+                    <Shield aria-hidden size={18} />
+                    <strong>{t('settings')}</strong>
+                  </div>
+                  <label className="settings-toggle">
+                    <span>{t('memberCount')}</span>
+                    <input
+                      checked={selectedConversation.showMemberCount !== false}
+                      onChange={(event) => void updateGroupSettings(selectedConversation, { showMemberCount: event.target.checked })}
+                      type="checkbox"
+                    />
+                  </label>
+                  <label className="settings-toggle">
+                    <span>{t('hideMembers')}</span>
+                    <input
+                      checked={selectedConversation.hideMembers === true}
+                      onChange={(event) => void updateGroupSettings(selectedConversation, { hideMembers: event.target.checked })}
+                      type="checkbox"
+                    />
+                  </label>
+                  <label className="settings-toggle">
+                    <span>{t('ownerOnlyMessages')}</span>
+                    <input
+                      checked={selectedConversation.ownerOnlyMessages === true}
+                      onChange={(event) => void updateGroupSettings(selectedConversation, { ownerOnlyMessages: event.target.checked })}
+                      type="checkbox"
+                    />
+                  </label>
+                  <button className="group-management-action" onClick={() => {
+                    setOwnershipTransferCandidateId(null);
+                    setOwnershipTransferCountdown(10);
+                    setOwnershipTransferOpen(true);
+                  }}>
+                    <Shield size={18} />
+                    <span>{t('transferOwnership')}</span>
+                  </button>
+                  <button className="group-delete-action" onClick={() => void deleteGroupFromWeb(selectedConversation)}>
+                    <Trash2 size={18} />
+                    <span>{t('deleteGroup')}</span>
+                  </button>
+                </section>
+              ) : (
+                <section className="group-details-section">
+                  <button className="group-delete-action" onClick={() => void leaveGroupFromWeb(selectedConversation)}>
+                    <X size={18} />
+                    <span>{t('leaveGroup')}</span>
+                  </button>
+                </section>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {isOwnershipTransferOpen && selectedConversation?.type === 'GROUP' ? (
+        <div className="modal-backdrop" onClick={closeOwnershipTransferDialog}>
+          <div className="forward-picker-modal ownership-transfer-modal" onClick={(event) => event.stopPropagation()}>
+            <header>
+              <div>
+                <strong>{t('transferOwnership')}</strong>
+                <span>{ownershipTransferCandidate ? ownershipTransferCandidate.displayName || ownershipTransferCandidate.username : t('selectNewOwner')}</span>
+              </div>
+              <button aria-label={t('cancel')} className="modal-close" onClick={closeOwnershipTransferDialog}><X size={20} /></button>
+            </header>
+            {ownershipTransferCandidate ? (
+              <div className="transfer-confirm-panel">
+                <Avatar title={ownershipTransferCandidate.displayName || ownershipTransferCandidate.username} url={ownershipTransferCandidate.avatarUrl} />
+                <strong>{ownershipTransferCandidate.displayName || ownershipTransferCandidate.username}</strong>
+                <small>@{ownershipTransferCandidate.username}</small>
+                <p>{formatLabel('transferOwnershipConfirm', { name: ownershipTransferCandidate.displayName || ownershipTransferCandidate.username })}</p>
+                {ownershipTransferCountdown > 0 ? <span className="transfer-countdown">{formatLabel('transferCountdown', { seconds: ownershipTransferCountdown })}</span> : null}
+              </div>
             ) : (
-              <section className="group-details-section">
-                <button className="group-delete-action" onClick={() => void leaveGroupFromWeb(selectedConversation)}>
-                  <X size={18} />
-                  <span>{t('leaveGroup')}</span>
-                </button>
-              </section>
+              <div className="forward-target-list">
+                {ownershipTransferCandidates.length === 0 ? <div className="center">{t('noEligibleOwners')}</div> : null}
+                {ownershipTransferCandidates.map((candidate) => (
+                  <button className="ownership-candidate-row" key={candidate.id} onClick={() => setOwnershipTransferCandidateId(candidate.id)}>
+                    <Avatar title={candidate.displayName || candidate.username} url={candidate.avatarUrl} />
+                    <span><strong>{candidate.displayName || candidate.username}</strong><small>@{candidate.username}</small></span>
+                  </button>
+                ))}
+              </div>
             )}
+            <footer>
+              <button className="secondary" disabled={isOwnershipTransferPending} onClick={closeOwnershipTransferDialog}>{t('cancel')}</button>
+              {ownershipTransferCandidate ? (
+                <button className="ownership-transfer-submit" disabled={isOwnershipTransferPending || ownershipTransferCountdown > 0} onClick={() => void completeGroupOwnershipTransfer()}>
+                  {isOwnershipTransferPending ? t('sending') : t('transferOwnership')}
+                </button>
+              ) : null}
+            </footer>
           </div>
         </div>
       ) : null}
@@ -6385,6 +6568,65 @@ function App() {
               <button className="secondary" onClick={() => setGroupMemberPickerOpen(false)}>{t('cancel')}</button>
               <button disabled={selectedGroupMemberIds.size === 0} onClick={() => void addSelectedGroupMembers(selectedConversation)}>{t('addMembers')}</button>
             </footer>
+          </div>
+        </div>
+      ) : null}
+      {isDirectDetailsOpen && selectedConversation?.type === 'DIRECT' && selectedPeer ? (
+        <div className="modal-backdrop" onClick={() => setDirectDetailsOpen(false)}>
+          <div className="direct-details-modal" onClick={(event) => event.stopPropagation()}>
+            <header>
+              <div className="direct-details-profile">
+                <Avatar title={selectedPeer.displayName || selectedPeer.username} url={selectedPeer.avatarUrl} />
+                <span>
+                  <strong>{selectedPeer.displayName || selectedPeer.username}</strong>
+                  <small>@{selectedPeer.username}</small>
+                </span>
+              </div>
+              <button aria-label={t('cancel')} className="modal-close" onClick={() => setDirectDetailsOpen(false)}><X size={20} /></button>
+            </header>
+            <div className="direct-details-tabs">
+              <button className={directDetailsTab === 'media' ? 'active' : ''} onClick={() => setDirectDetailsTab('media')}><Image aria-hidden size={17} />{t('media')}</button>
+              <button className={directDetailsTab === 'files' ? 'active' : ''} onClick={() => setDirectDetailsTab('files')}><File aria-hidden size={17} />{t('files')}</button>
+              <button className={directDetailsTab === 'links' ? 'active' : ''} onClick={() => setDirectDetailsTab('links')}><Link aria-hidden size={17} />{t('links')}</button>
+            </div>
+            <div className="direct-details-body">
+              {directDetailsTab === 'media' ? (
+                directChatMediaMessages.length > 0 ? (
+                  <div className="direct-media-grid">
+                    {directChatMediaMessages.map((message) => (
+                      <DirectMediaTile
+                        cacheConfig={webMediaCacheConfig}
+                        key={message.id}
+                        message={message}
+                        onOpenMedia={(viewer) => setMediaViewer(viewer)}
+                        token={token}
+                      />
+                    ))}
+                  </div>
+                ) : <div className="center">{t('noMedia')}</div>
+              ) : null}
+              {directDetailsTab === 'files' ? (
+                directChatFileMessages.length > 0 ? (
+                  <div className="direct-file-list">
+                    {directChatFileMessages.map((message) => (
+                      <DirectFileRow key={message.id} message={message} token={token} />
+                    ))}
+                  </div>
+                ) : <div className="center">{t('noFiles')}</div>
+              ) : null}
+              {directDetailsTab === 'links' ? (
+                directChatLinks.length > 0 ? (
+                  <div className="direct-link-list">
+                    {directChatLinks.map((link) => (
+                      <a href={link.href} key={link.id} rel="noopener noreferrer" target="_blank">
+                        <strong>{link.text}</strong>
+                        <small>{formatConversationTime(link.createdAt)}</small>
+                      </a>
+                    ))}
+                  </div>
+                ) : <div className="center">{t('noLinks')}</div>
+              ) : null}
+            </div>
           </div>
         </div>
       ) : null}
@@ -7302,6 +7544,22 @@ function renderLinkedMessageText(body: string) {
   return parts.length > 0 ? parts : body;
 }
 
+function extractLinksFromText(body: string): Array<{ href: string; text: string }> {
+  const linkPattern = /((?:https?:\/\/|www\.)[^\s<]+|(?:[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?\.)+(?:com|net|org|io|co|me|az|tr|ru|de|fr|it|es|pt|uk|app|dev|info|biz)(?:\/[^\s<]*)?)/gi;
+  const links: Array<{ href: string; text: string }> = [];
+
+  for (const match of body.matchAll(linkPattern)) {
+    const rawValue = match[0];
+    const trailing = rawValue.match(/[),.!?:;]+$/)?.[0] ?? '';
+    const value = trailing ? rawValue.slice(0, -trailing.length) : rawValue;
+    const href = /^https?:\/\//i.test(value) ? value : `https://${value}`;
+
+    links.push({ href, text: value });
+  }
+
+  return links;
+}
+
 function MessageReplyPreview({ reply }: { reply: { body?: string; kind?: string; senderName?: string } }) {
   return (
     <div className="message-reply-preview">
@@ -7663,6 +7921,63 @@ function AuthenticatedFileMedia({ media, onContentReady, token }: { media: NonNu
   }
 
   return <a download={media.originalName} href={fileUrl}>{media.originalName}</a>;
+}
+
+function DirectMediaTile({
+  cacheConfig,
+  message,
+  onOpenMedia,
+  token,
+}: {
+  cacheConfig: WebMediaCacheConfig;
+  message: Message;
+  onOpenMedia?: (viewer: MediaViewerState) => void;
+  token: string | null;
+}) {
+  const media = message.media;
+  const mediaUrl = useAuthenticatedMediaUrl(media?.id, token, getLocalPreviewUrl(message), undefined, cacheConfig, media ?? undefined);
+
+  if (!media) {
+    return null;
+  }
+
+  return (
+    <button
+      className="direct-media-tile"
+      disabled={!mediaUrl}
+      onClick={() => {
+        if (mediaUrl && (message.kind === 'IMAGE' || message.kind === 'VIDEO')) {
+          onOpenMedia?.({ caption: message.body, kind: message.kind, media, url: mediaUrl });
+        }
+      }}
+      type="button"
+    >
+      {mediaUrl && message.kind === 'VIDEO' ? <video muted preload="metadata" src={mediaUrl} /> : null}
+      {mediaUrl && message.kind === 'IMAGE' ? <img alt={media.originalName} loading="lazy" src={mediaUrl} /> : null}
+      {!mediaUrl ? <div className="direct-media-loading"><LoaderCircle aria-hidden className="spin" size={18} /></div> : null}
+      {message.kind === 'VIDEO' ? <span><Video aria-hidden size={16} /></span> : null}
+    </button>
+  );
+}
+
+function DirectFileRow({ message, token }: { message: Message; token: string | null }) {
+  const media = message.media;
+  const fileUrl = useAuthenticatedMediaUrl(media?.id, token);
+
+  if (!media) {
+    return null;
+  }
+
+  return (
+    <a download={media.originalName} href={fileUrl || undefined}>
+      <File aria-hidden size={20} />
+      <span>
+        <strong>{media.originalName}</strong>
+        <small>{formatConversationTime(message.createdAt)}</small>
+      </span>
+      <Download aria-hidden size={18} />
+    </a>
+  );
 }
 
 function MessageStatus({ status, t }: { status: Message['status']; t: (key: TranslationKey) => string }) {

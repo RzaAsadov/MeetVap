@@ -1818,11 +1818,10 @@ button {
   border: 1px solid #30445a;
   border-radius: 18px;
   display: grid;
-  gap: 14px;
+  grid-template-rows: auto minmax(0, 1fr);
   max-height: min(760px, calc(100dvh - 40px));
   max-width: 620px;
   overflow: hidden;
-  padding-bottom: 14px;
   width: min(100%, 620px);
 }
 
@@ -1843,6 +1842,14 @@ button {
   color: #8ba1b8;
   font-size: 13px;
   margin-top: 3px;
+}
+
+.group-details-body {
+  display: grid;
+  gap: 14px;
+  min-height: 0;
+  overflow: auto;
+  padding: 14px 0;
 }
 
 .group-details-hero {
@@ -1867,10 +1874,26 @@ button {
 
 .group-avatar-button {
   border-radius: 50%;
+  position: relative;
 }
 
 .group-avatar-button:disabled {
   cursor: default;
+}
+
+.avatar-edit-badge {
+  align-items: center;
+  background: rgba(8, 17, 28, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  border-radius: 999px;
+  bottom: -2px;
+  color: #edf5ff;
+  display: inline-flex;
+  height: 24px;
+  justify-content: center;
+  position: absolute;
+  right: -2px;
+  width: 24px;
 }
 
 .group-inline-action {
@@ -1986,6 +2009,255 @@ button {
   gap: 9px;
   min-height: 46px;
   padding: 0 14px;
+}
+
+.ownership-transfer-modal .forward-target-list {
+  min-height: 260px;
+}
+
+.ownership-candidate-row {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid #243447;
+  color: #edf5ff;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 42px minmax(0, 1fr);
+  min-height: 62px;
+  padding: 10px 16px;
+  text-align: left;
+  width: 100%;
+}
+
+.ownership-candidate-row:hover {
+  background: #23384b;
+}
+
+.ownership-candidate-row strong,
+.ownership-candidate-row small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ownership-candidate-row small {
+  color: #8ba1b8;
+  margin-top: 2px;
+}
+
+.transfer-confirm-panel {
+  align-items: center;
+  display: grid;
+  gap: 8px;
+  justify-items: center;
+  min-height: 260px;
+  padding: 28px 24px;
+  text-align: center;
+}
+
+.transfer-confirm-panel p {
+  color: #d8e4ef;
+  line-height: 1.45;
+  margin: 8px 0 0;
+  max-width: 360px;
+}
+
+.transfer-confirm-panel small,
+.transfer-confirm-panel span {
+  color: #8ba1b8;
+}
+
+.transfer-confirm-panel .transfer-countdown {
+  background: rgba(139, 161, 184, 0.14);
+  border: 1px solid rgba(139, 161, 184, 0.26);
+  border-radius: 999px;
+  color: #d8e4ef;
+  font-size: 18px;
+  font-weight: 900;
+  margin-top: 10px;
+  padding: 9px 16px;
+}
+
+.ownership-transfer-submit {
+  background: #2563eb;
+  color: #fff;
+}
+
+.ownership-transfer-submit:disabled {
+  background: #3a4756;
+  color: #9aa8b6;
+  cursor: not-allowed;
+  opacity: 1;
+}
+
+.direct-details-modal {
+  background: #162232;
+  border: 1px solid #30445a;
+  border-radius: 18px;
+  color: #edf5ff;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  max-height: min(760px, calc(100dvh - 40px));
+  overflow: hidden;
+  width: min(680px, calc(100vw - 32px));
+}
+
+.direct-details-modal > header {
+  align-items: center;
+  border-bottom: 1px solid #243447;
+  display: flex;
+  justify-content: space-between;
+  padding: 16px;
+}
+
+.direct-details-profile {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  min-width: 0;
+}
+
+.direct-details-profile span,
+.direct-details-profile strong,
+.direct-details-profile small {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.direct-details-profile small {
+  color: #8ba1b8;
+  margin-top: 3px;
+}
+
+.direct-details-tabs {
+  border-bottom: 1px solid #243447;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.direct-details-tabs button {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  color: #8ba1b8;
+  display: inline-flex;
+  font-weight: 800;
+  gap: 8px;
+  justify-content: center;
+  min-height: 48px;
+}
+
+.direct-details-tabs button.active {
+  background: rgba(69, 163, 255, 0.12);
+  color: #8dccff;
+}
+
+.direct-details-body {
+  min-height: 280px;
+  overflow: auto;
+  padding: 16px;
+}
+
+.direct-media-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+}
+
+.direct-media-tile {
+  background: #101d2a;
+  border: 1px solid #243447;
+  border-radius: 12px;
+  display: block;
+  overflow: hidden;
+  padding: 0;
+  position: relative;
+}
+
+.direct-media-tile::before {
+  content: "";
+  display: block;
+  padding-top: 100%;
+}
+
+.direct-media-tile img,
+.direct-media-tile video,
+.direct-media-loading {
+  height: 100%;
+  inset: 0;
+  object-fit: cover;
+  position: absolute;
+  width: 100%;
+}
+
+.direct-media-loading {
+  align-items: center;
+  color: #8ba1b8;
+  display: flex;
+  justify-content: center;
+}
+
+.direct-media-tile > span {
+  align-items: center;
+  background: rgba(8, 17, 28, 0.72);
+  border-radius: 999px;
+  color: #edf5ff;
+  display: inline-flex;
+  height: 28px;
+  justify-content: center;
+  position: absolute;
+  right: 8px;
+  top: 8px;
+  width: 28px;
+}
+
+.direct-file-list,
+.direct-link-list {
+  display: grid;
+  gap: 8px;
+}
+
+.direct-file-list a,
+.direct-link-list a {
+  align-items: center;
+  background: #101d2a;
+  border: 1px solid #243447;
+  border-radius: 12px;
+  color: #edf5ff;
+  display: grid;
+  gap: 12px;
+  min-height: 56px;
+  padding: 10px 12px;
+  text-decoration: none;
+}
+
+.direct-file-list a {
+  grid-template-columns: 24px minmax(0, 1fr) 22px;
+}
+
+.direct-link-list a {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.direct-file-list strong,
+.direct-file-list small,
+.direct-link-list strong,
+.direct-link-list small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.direct-file-list small,
+.direct-link-list small {
+  color: #8ba1b8;
+  margin-top: 3px;
 }
 
 .context-menu-backdrop {
