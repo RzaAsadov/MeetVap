@@ -2,7 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import * as Clipboard from 'expo-clipboard';
 import { useCallback, useEffect } from 'react';
-import { ActivityIndicator, Alert, FlatList, LayoutChangeEvent, Linking, Modal, Platform, Pressable, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, FlatList, LayoutChangeEvent, Linking, Modal, Platform, Pressable, Share, Text, TextInput, View } from 'react-native';
 import { AttachmentSheet } from '../components/AttachmentSheet';
 import { VoiceRoomControls } from '../components/chat/VoiceRoomControls';
 import { VISIBLE_MESSAGE_PAGE_SIZE } from '../hooks/useChatTimelineWindow';
@@ -156,11 +156,11 @@ export function ChatRoomScreen({ navigation, route }: Props) {
 
       if (Platform.OS === 'ios') {
         await waitForIosModalDismissal();
-        const shared = await shareNativeAndroidFile(uri, getMessageMimeType(message), getMessageFileName(message));
-
-        if (!shared) {
-          throw new Error(t('noAppShareAttachment', {}, language));
-        }
+        await Share.share({
+          message: message.body || getMessageFileName(message),
+          title: getMessageFileName(message),
+          url: uri,
+        });
         return;
       }
 
@@ -1414,7 +1414,7 @@ export function ChatRoomScreen({ navigation, route }: Props) {
             </View>
             ) : (
             <TextInput
-              contextMenuHidden
+              contextMenuHidden={Platform.OS !== 'ios'}
               multiline
               onChangeText={updateDraft}
               onFocus={() => {
@@ -1424,12 +1424,12 @@ export function ChatRoomScreen({ navigation, route }: Props) {
                 }
               }}
               onSelectionChange={(event) => setDraftSelection(event.nativeEvent.selection)}
-              onTouchCancel={clearComposerLongPressTimer}
-              onTouchEnd={clearComposerLongPressTimer}
-              onTouchStart={scheduleComposerEditMenu}
+              onTouchCancel={Platform.OS === 'ios' ? undefined : clearComposerLongPressTimer}
+              onTouchEnd={Platform.OS === 'ios' ? undefined : clearComposerLongPressTimer}
+              onTouchStart={Platform.OS === 'ios' ? undefined : scheduleComposerEditMenu}
               placeholder={t('message')}
               placeholderTextColor={colors.mutedText}
-              selection={draftSelection}
+              selection={Platform.OS === 'ios' ? undefined : draftSelection}
               style={[styles.input, styles.inputInWrap]}
               value={draft}
             />

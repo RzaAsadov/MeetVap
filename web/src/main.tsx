@@ -170,6 +170,12 @@ const translations = {
     pin: 'Pin',
     reply: 'Reply',
     report: 'Report',
+    select: 'Select',
+    selectedMessages: 'Selected messages',
+    chooseRecipients: 'Choose recipients',
+    recipientsLimit: 'You can choose up to 5 recipients.',
+    editImage: 'Edit image',
+    clear: 'Clear',
     removePicture: 'Remove picture',
     restore: 'Restore',
     searchContacts: 'Search contacts',
@@ -201,6 +207,14 @@ const translations = {
     useGroupAliases: 'Use different name in groups',
     groupDetails: 'Group details',
     groupMembers: 'Group members',
+    changeGroupName: 'Change group name',
+    makeAdmin: 'Make admin',
+    removeAdmin: 'Remove admin',
+    removeMember: 'Remove member',
+    transferOwnership: 'Transfer ownership',
+    deleteGroup: 'Delete group',
+    addMembers: 'Add members',
+    leaveGroup: 'Leave group',
     memberCount: 'Member count',
     members: 'members',
     muteChat: 'Mute chat',
@@ -326,6 +340,12 @@ const translations = {
     pin: 'Sabitle',
     reply: 'Yanıtla',
     report: 'Bildir',
+    select: 'Seç',
+    selectedMessages: 'Seçilen mesajlar',
+    chooseRecipients: 'Alıcıları seç',
+    recipientsLimit: 'En fazla 5 alıcı seçebilirsin.',
+    editImage: 'Resmi düzenle',
+    clear: 'Temizle',
     removePicture: 'Resmi kaldır',
     restore: 'Eski boyut',
     searchContacts: 'Kişilerde ara',
@@ -357,6 +377,14 @@ const translations = {
     useGroupAliases: 'Gruplarda farklı ad kullan',
     groupDetails: 'Grup detayları',
     groupMembers: 'Grup üyeleri',
+    changeGroupName: 'Grup adını değiştir',
+    makeAdmin: 'Admin yap',
+    removeAdmin: 'Adminliği kaldır',
+    removeMember: 'Üyeyi çıkar',
+    transferOwnership: 'Sahipliği aktar',
+    deleteGroup: 'Grubu sil',
+    addMembers: 'Üye ekle',
+    leaveGroup: 'Gruptan ayrıl',
     memberCount: 'Üye sayısı',
     members: 'üye',
     muteChat: 'Sohbeti sessize al',
@@ -482,6 +510,12 @@ const translations = {
     pin: 'Закрепить',
     reply: 'Ответить',
     report: 'Пожаловаться',
+    select: 'Выбрать',
+    selectedMessages: 'Выбранные сообщения',
+    chooseRecipients: 'Выберите получателей',
+    recipientsLimit: 'Можно выбрать не более 5 получателей.',
+    editImage: 'Редактировать изображение',
+    clear: 'Очистить',
     removePicture: 'Удалить фото',
     restore: 'Восстановить',
     searchContacts: 'Поиск контактов',
@@ -513,6 +547,14 @@ const translations = {
     useGroupAliases: 'Использовать другое имя в группах',
     groupDetails: 'Информация о группе',
     groupMembers: 'Участники группы',
+    changeGroupName: 'Изменить название группы',
+    makeAdmin: 'Назначить администратором',
+    removeAdmin: 'Снять администратора',
+    removeMember: 'Удалить участника',
+    transferOwnership: 'Передать права владельца',
+    deleteGroup: 'Удалить группу',
+    addMembers: 'Добавить участников',
+    leaveGroup: 'Покинуть группу',
     memberCount: 'Количество участников',
     members: 'участников',
     muteChat: 'Отключить уведомления чата',
@@ -995,6 +1037,14 @@ type PendingCaptionAttachment = {
   previewUrl: string | null;
 };
 
+type ForwardTarget = {
+  conversationId?: string;
+  id: string;
+  title: string;
+  userId?: string;
+  username?: string;
+};
+
 type PendingStatusMedia = {
   file: globalThis.File;
   kind: 'IMAGE' | 'VIDEO';
@@ -1207,6 +1257,14 @@ function App() {
   const [startingUserId, setStartingUserId] = useState<string | null>(null);
   const [blockedUserIds, setBlockedUserIds] = useState<Set<string>>(new Set());
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(() => new Set());
+  const [isBulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  const [isBulkForwardOpen, setBulkForwardOpen] = useState(false);
+  const [selectedForwardTargetIds, setSelectedForwardTargetIds] = useState<Set<string>>(() => new Set());
+  const [isBulkActionPending, setBulkActionPending] = useState(false);
+  const [isImageEditorOpen, setImageEditorOpen] = useState(false);
+  const [isGroupMemberPickerOpen, setGroupMemberPickerOpen] = useState(false);
+  const [selectedGroupMemberIds, setSelectedGroupMemberIds] = useState<Set<string>>(() => new Set());
   const [replyingTo, setReplyingTo] = useState<Message | null>(null);
   const [forwardingMessage, setForwardingMessage] = useState<Message | null>(null);
   const [pinnedMessages, setPinnedMessages] = useState<PinnedMessage[]>([]);
@@ -1244,6 +1302,7 @@ function App() {
   const activeCallConnectCallIdRef = useRef<string | null>(null);
   const incomingRingtoneRef = useRef<HTMLAudioElement | null>(null);
   const outgoingRingbackRef = useRef<HTMLAudioElement | null>(null);
+  const outgoingRingbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const remoteMediaRef = useRef<HTMLDivElement>(null);
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const screenSharePreviewRef = useRef<HTMLVideoElement>(null);
@@ -1251,6 +1310,7 @@ function App() {
   const galleryInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const avatarInputRef = useRef<HTMLInputElement>(null);
+  const groupAvatarInputRef = useRef<HTMLInputElement>(null);
   const composerTextareaRef = useRef<HTMLTextAreaElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -1502,10 +1562,74 @@ function App() {
   const selectedPeer = selectedConversation?.type === 'DIRECT'
     ? getConversationPeer(selectedConversation, user?.id)
     : null;
+  const selectedConversationRole = selectedConversation
+    ? getConversationRoleBadge(selectedConversation, user?.id)
+    : null;
+  const canManageSelectedGroup = selectedConversation?.type !== 'GROUP' || selectedConversationRole !== null;
+  const isMessageSelectionActive = selectedMessageIds.size > 0;
+  const selectedMessages = useMemo(() => {
+    const selectedIds = selectedMessageIds;
+    return messages
+      .filter((message) => selectedIds.has(message.id))
+      .sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime());
+  }, [messages, selectedMessageIds]);
+  const forwardableSelectedMessages = useMemo(
+    () => selectedMessages.filter((message) => message.kind !== 'CALL'),
+    [selectedMessages],
+  );
+  const canDeleteAllSelectedMessages = selectedMessages.length > 0 && (
+    selectedConversationRole !== null ||
+    selectedMessages.every((message) => message.senderId === user?.id)
+  );
+  const forwardTargets = useMemo(() => {
+    const targets = new Map<string, ForwardTarget>();
+    const representedUserIds = new Set<string>();
+
+    conversations.forEach((conversation) => {
+      if (conversation.id === selectedConversationId || conversation.isSystem) {
+        return;
+      }
+
+      const peer = conversation.type === 'DIRECT' ? getConversationPeer(conversation, user?.id) : null;
+      if (peer?.id) {
+        representedUserIds.add(peer.id);
+      }
+      targets.set(`conversation:${conversation.id}`, {
+        conversationId: conversation.id,
+        id: `conversation:${conversation.id}`,
+        title: conversation.title,
+        userId: peer?.id,
+        username: peer?.username,
+      });
+    });
+    contacts.forEach((contact) => {
+      if (contact.id === user?.id || representedUserIds.has(contact.id)) {
+        return;
+      }
+      targets.set(`user:${contact.id}`, {
+        id: `user:${contact.id}`,
+        title: contact.displayName || contact.username,
+        userId: contact.id,
+        username: contact.username,
+      });
+    });
+
+    return [...targets.values()].sort((left, right) => left.title.localeCompare(right.title, language));
+  }, [contacts, conversations, language, selectedConversationId, user?.id]);
+  const addableGroupContacts = useMemo(() => {
+    const memberIds = new Set(selectedConversation?.members?.map((member) => member.id) ?? []);
+    return sortUsersAlphabetically(contacts.filter((contact) => !memberIds.has(contact.id)));
+  }, [contacts, selectedConversation?.members]);
 
   useEffect(() => {
     setChatHeaderMenuOpen(false);
     setGroupDetailsOpen(false);
+    setSelectedMessageIds(new Set());
+    setBulkDeleteOpen(false);
+    setBulkForwardOpen(false);
+    setSelectedForwardTargetIds(new Set());
+    setGroupMemberPickerOpen(false);
+    setSelectedGroupMemberIds(new Set());
   }, [selectedConversationId]);
 
   const stopIncomingRingtone = useCallback(() => {
@@ -1521,6 +1645,10 @@ function App() {
   }, []);
 
   const stopOutgoingRingback = useCallback(() => {
+    if (outgoingRingbackTimerRef.current) {
+      clearTimeout(outgoingRingbackTimerRef.current);
+      outgoingRingbackTimerRef.current = null;
+    }
     const player = outgoingRingbackRef.current;
 
     if (!player) {
@@ -1530,6 +1658,36 @@ function App() {
     player.pause();
     player.currentTime = 0;
     outgoingRingbackRef.current = null;
+  }, []);
+
+  const playOutgoingRingback = useCallback(() => {
+    if (outgoingRingbackRef.current) {
+      return;
+    }
+
+    const player = new Audio(outgoingRingbackUrl);
+    player.loop = false;
+    player.volume = 0.62;
+    outgoingRingbackRef.current = player;
+    const scheduleReplay = () => {
+      if (outgoingRingbackRef.current !== player) {
+        return;
+      }
+      outgoingRingbackTimerRef.current = setTimeout(() => {
+        outgoingRingbackTimerRef.current = null;
+        if (outgoingRingbackRef.current !== player) {
+          return;
+        }
+        player.currentTime = 0;
+        void player.play().catch(() => undefined);
+      }, 1_000);
+    };
+    player.addEventListener('ended', scheduleReplay);
+    void player.play().catch(() => {
+      if (outgoingRingbackRef.current === player) {
+        outgoingRingbackRef.current = null;
+      }
+    });
   }, []);
 
   const playLoopingCallAudio = useCallback((audioRef: React.MutableRefObject<HTMLAudioElement | null>, sourceUrl: string, volume: number) => {
@@ -1587,12 +1745,12 @@ function App() {
       (callState.phase === 'dialing' || callState.phase === 'ringing');
 
     if (shouldPlayRingback) {
-      playLoopingCallAudio(outgoingRingbackRef, outgoingRingbackUrl, 0.62);
+      playOutgoingRingback();
       return;
     }
 
     stopOutgoingRingback();
-  }, [callState?.direction, callState?.phase, playLoopingCallAudio, stopOutgoingRingback]);
+  }, [callState?.direction, callState?.phase, playOutgoingRingback, stopOutgoingRingback]);
 
   const logout = useCallback(() => {
     stopIncomingRingtone();
@@ -2594,11 +2752,15 @@ function App() {
       }
 
       const attachKey = publication.trackSid || `${publication.kind}:${track.sid}`;
+      const existingElements = remoteMediaRef.current?.querySelectorAll<HTMLMediaElement>(
+        `[data-track-sid="${CSS.escape(attachKey)}"]`,
+      );
 
-      if (attachedTrackSids.has(attachKey)) {
+      if (attachedTrackSids.has(attachKey) && existingElements && existingElements.length === 1) {
         return;
       }
 
+      existingElements?.forEach((existing) => existing.remove());
       const element = track.attach();
       element.className = publication.kind === Track.Kind.Video ? 'remote-video' : 'remote-audio';
       element.dataset.trackSid = attachKey;
@@ -2751,6 +2913,12 @@ function App() {
         .off(RoomEvent.TrackSubscriptionStatusChanged, handleRemoteTrackUpdate)
         .off(RoomEvent.TrackSubscribed, handleTrackSubscribed)
         .off(RoomEvent.TrackUnsubscribed, detachTrack);
+      room.remoteParticipants.forEach((participant) => {
+        participant.trackPublications.forEach((publication) => {
+          publication.track?.detach().forEach((element) => element.remove());
+        });
+      });
+      remoteMediaRef.current?.replaceChildren();
     };
   }, [callState?.room]);
 
@@ -3022,6 +3190,19 @@ function App() {
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
+  }
+
+  function applyEditedImage(file: globalThis.File) {
+    setPendingCaptionAttachment((current) => {
+      if (!current || current.kind !== 'IMAGE') {
+        return current;
+      }
+      if (current.previewUrl) {
+        URL.revokeObjectURL(current.previewUrl);
+      }
+      return { file, kind: 'IMAGE', previewUrl: URL.createObjectURL(file) };
+    });
+    setImageEditorOpen(false);
   }
 
   async function uploadAndSendFile(file: globalThis.File, kind: 'FILE' | 'IMAGE' | 'VIDEO', caption: string) {
@@ -3832,6 +4013,95 @@ function App() {
     setConversations((current) => current.map((item) => item.id === conversation.id ? response.conversation : item));
   }
 
+  function applyUpdatedConversation(updated: Conversation) {
+    setConversations((current) => current.map((item) => item.id === updated.id ? updated : item));
+  }
+
+  async function updateGroupTitle(conversation: Conversation) {
+    const title = window.prompt(t('changeGroupName'), conversation.title)?.trim();
+    if (!title || title === conversation.title) return;
+    const response = await authedRequest<{ conversation: Conversation }>(`/conversations/${conversation.id}/title`, {
+      body: JSON.stringify({ title }),
+      method: 'PATCH',
+    });
+    applyUpdatedConversation(response.conversation);
+  }
+
+  async function updateGroupAvatar(conversation: Conversation, file: globalThis.File) {
+    const uploadResponse = await fetch(`${API_URL}/media/upload-binary`, {
+      body: file,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': file.type || 'image/jpeg',
+        'x-mime-type': file.type || 'image/jpeg',
+        'x-original-name': encodeURIComponent(file.name || 'group-avatar.jpg'),
+      },
+      method: 'POST',
+    });
+    const uploadPayload = await uploadResponse.json();
+    if (!uploadResponse.ok) throw new Error(uploadPayload?.error || t('attachmentFailed'));
+    const response = await authedRequest<{ conversation: Conversation }>(`/conversations/${conversation.id}/avatar`, {
+      body: JSON.stringify({ avatarUrl: `${API_URL}/media/${uploadPayload.media.id}/file` }),
+      method: 'PATCH',
+    });
+    applyUpdatedConversation(response.conversation);
+  }
+
+  async function updateGroupMemberRole(conversation: Conversation, member: AuthUser, makeAdmin: boolean) {
+    const response = await authedRequest<{ conversation: Conversation }>(
+      `/conversations/${conversation.id}/admins${makeAdmin ? '' : `/${member.id}`}`,
+      makeAdmin
+        ? { body: JSON.stringify({ userIds: [member.id] }), method: 'POST' }
+        : { method: 'DELETE' },
+    );
+    applyUpdatedConversation(response.conversation);
+  }
+
+  async function removeGroupMember(conversation: Conversation, member: AuthUser) {
+    if (!window.confirm(`${t('removeMember')}: ${member.displayName || member.username}?`)) return;
+    const response = await authedRequest<{ conversation: Conversation }>(
+      `/conversations/${conversation.id}/members/${member.id}`,
+      { method: 'DELETE' },
+    );
+    applyUpdatedConversation(response.conversation);
+  }
+
+  async function transferGroupOwnership(conversation: Conversation, member: AuthUser) {
+    if (!window.confirm(`${t('transferOwnership')}: ${member.displayName || member.username}?`)) return;
+    const response = await authedRequest<{ conversation: Conversation }>(`/conversations/${conversation.id}/owner`, {
+      body: JSON.stringify({ userId: member.id }),
+      method: 'PATCH',
+    });
+    applyUpdatedConversation(response.conversation);
+  }
+
+  async function deleteGroupFromWeb(conversation: Conversation) {
+    if (!window.confirm(`${t('deleteGroup')}: ${conversation.title}?`)) return;
+    await authedRequest(`/conversations/${conversation.id}/group`, { method: 'DELETE' });
+    setConversations((current) => current.filter((item) => item.id !== conversation.id));
+    setSelectedConversationId(null);
+    setGroupDetailsOpen(false);
+  }
+
+  async function addSelectedGroupMembers(conversation: Conversation) {
+    if (selectedGroupMemberIds.size === 0) return;
+    const response = await authedRequest<{ conversation: Conversation }>(`/conversations/${conversation.id}/members`, {
+      body: JSON.stringify({ userIds: [...selectedGroupMemberIds] }),
+      method: 'POST',
+    });
+    applyUpdatedConversation(response.conversation);
+    setSelectedGroupMemberIds(new Set());
+    setGroupMemberPickerOpen(false);
+  }
+
+  async function leaveGroupFromWeb(conversation: Conversation) {
+    if (!user || !window.confirm(`${t('leaveGroup')}: ${conversation.title}?`)) return;
+    await authedRequest(`/conversations/${conversation.id}/members/${user.id}`, { method: 'DELETE' });
+    setConversations((current) => current.filter((item) => item.id !== conversation.id));
+    setSelectedConversationId(null);
+    setGroupDetailsOpen(false);
+  }
+
   async function runChatHeaderAction(action: 'block' | 'delete' | 'group-details' | 'mute' | 'report' | 'unblock' | 'unmute', conversation: Conversation) {
     setChatHeaderMenuOpen(false);
 
@@ -3934,6 +4204,14 @@ function App() {
   async function runMessageAction(action: MessageContextAction, message: Message) {
     setContextMenu(null);
 
+    if (action === 'select') {
+      setSelectedMessageIds((current) => {
+        const next = new Set(current);
+        next.add(message.id);
+        return next;
+      });
+      return;
+    }
     if (action === 'copy') {
       await navigator.clipboard.writeText(message.body);
       return;
@@ -4023,6 +4301,87 @@ function App() {
         [message.conversationId]: nextMessages,
       };
     });
+  }
+
+  function toggleSelectedMessage(messageId: string) {
+    setSelectedMessageIds((current) => {
+      const next = new Set(current);
+      if (next.has(messageId)) {
+        next.delete(messageId);
+      } else {
+        next.add(messageId);
+      }
+      return next;
+    });
+  }
+
+  async function deleteSelectedMessages(mode: 'all' | 'me') {
+    if (selectedMessages.length === 0 || !selectedConversation) {
+      return;
+    }
+
+    setBulkActionPending(true);
+    try {
+      await Promise.all(selectedMessages.map((message) => authedRequest(
+        `/conversations/${message.conversationId}/messages/${message.id}`,
+        { body: JSON.stringify({ mode }), method: 'DELETE' },
+      )));
+      const deletedIds = new Set(selectedMessages.map((message) => message.id));
+      setMessagesByConversation((current) => {
+        const nextMessages = (current[selectedConversation.id] ?? []).filter((message) => !deletedIds.has(message.id));
+        cacheConversationMessages(user?.id, selectedConversation.id, nextMessages);
+        return { ...current, [selectedConversation.id]: nextMessages };
+      });
+      setSelectedMessageIds(new Set());
+      setBulkDeleteOpen(false);
+    } catch (error) {
+      setAttachmentError(error instanceof Error ? error.message : t('attachmentFailed'));
+    } finally {
+      setBulkActionPending(false);
+    }
+  }
+
+  async function resolveForwardTargetConversation(target: ForwardTarget) {
+    if (target.conversationId) {
+      return target.conversationId;
+    }
+    if (!target.userId) {
+      throw new Error(t('attachmentFailed'));
+    }
+
+    const response = await authedRequest<{ conversation: Conversation }>('/conversations/direct', {
+      body: JSON.stringify({ userId: target.userId }),
+      method: 'POST',
+    });
+    setConversations((current) => [
+      response.conversation,
+      ...current.filter((conversation) => conversation.id !== response.conversation.id),
+    ]);
+    return response.conversation.id;
+  }
+
+  async function forwardSelectedMessages() {
+    const targets = forwardTargets.filter((target) => selectedForwardTargetIds.has(target.id));
+    if (targets.length === 0 || forwardableSelectedMessages.length === 0) {
+      return;
+    }
+
+    setBulkActionPending(true);
+    try {
+      for (const target of targets) {
+        const conversationId = await resolveForwardTargetConversation(target);
+        for (const message of forwardableSelectedMessages) {
+          await forwardMessageToConversation(conversationId, message);
+        }
+      }
+      setBulkForwardOpen(false);
+      setSelectedForwardTargetIds(new Set());
+      setSelectedMessageIds(new Set());
+    } catch (error) {
+      setAttachmentError(error instanceof Error ? error.message : t('attachmentFailed'));
+    } finally {
+      setBulkActionPending(false);
+    }
   }
 
   async function runChatAction(action: 'add-contact' | 'block' | 'delete' | 'mute' | 'report' | 'unblock' | 'unmute', conversation: Conversation) {
@@ -5017,19 +5376,38 @@ function App() {
       </aside>
       <main className="chat-panel">
         <header className="topbar">
-          <div>
+          <button
+            className={`chat-header-identity ${selectedConversation?.type === 'GROUP' ? 'clickable' : ''}`}
+            disabled={selectedConversation?.type !== 'GROUP'}
+            onClick={() => selectedConversation?.type === 'GROUP' && setGroupDetailsOpen(true)}
+          >
             <strong>{getMainPanelTitle(activePanelTab, selectedConversation, selectedPeer, t)}</strong>
             <span>{activePanelTab === 'chats' ? getConversationHeaderSubtitle(selectedConversation, selectedPeer, t, language) : ''}</span>
-          </div>
+          </button>
           {activePanelTab === 'chats' ? <div className="topbar-actions">
-            <button aria-label={t('voiceCall')} disabled={!selectedConversation} onClick={() => void startCall('voice')} title={t('voiceCall')}>
+            {isMessageSelectionActive ? (
+              <>
+                <strong className="selection-count">{selectedMessageIds.size} {t('selectedMessages')}</strong>
+                <button aria-label={t('delete')} onClick={() => setBulkDeleteOpen(true)} title={t('delete')}>
+                  <Trash2 aria-hidden size={18} />
+                </button>
+                <button aria-label={t('forward')} disabled={forwardableSelectedMessages.length === 0} onClick={() => setBulkForwardOpen(true)} title={t('forward')}>
+                  <Send aria-hidden size={18} />
+                </button>
+                <button aria-label={t('cancel')} onClick={() => setSelectedMessageIds(new Set())} title={t('cancel')}>
+                  <X aria-hidden size={18} />
+                </button>
+              </>
+            ) : (
+            <>
+            {canManageSelectedGroup ? <button aria-label={t('voiceCall')} disabled={!selectedConversation} onClick={() => void startCall('voice')} title={t('voiceCall')}>
               <Phone aria-hidden size={18} />
               <span>{t('voiceCall')}</span>
-            </button>
-            <button aria-label={t('videoCall')} disabled={!selectedConversation} onClick={() => void startCall('video')} title={t('videoCall')}>
+            </button> : null}
+            {canManageSelectedGroup ? <button aria-label={t('videoCall')} disabled={!selectedConversation} onClick={() => void startCall('video')} title={t('videoCall')}>
               <Video aria-hidden size={18} />
               <span>{t('videoCall')}</span>
-            </button>
+            </button> : null}
             <div className="chat-header-menu-wrap">
               <button
                 aria-label={t('chatOptions')}
@@ -5064,6 +5442,8 @@ function App() {
                 </div>
               ) : null}
             </div>
+            </>
+            )}
           </div> : null}
         </header>
         {activePanelTab === 'settings' ? (
@@ -5168,12 +5548,16 @@ function App() {
             ) : (
               <div
                 key={row.message.id}
-                className={`message ${row.message.senderId === user?.id ? 'mine' : ''}`}
+                className={`message ${row.message.senderId === user?.id ? 'mine' : ''} ${selectedMessageIds.has(row.message.id) ? 'selected' : ''} ${isMessageSelectionActive ? 'selecting' : ''}`}
+                onClick={isMessageSelectionActive ? () => toggleSelectedMessage(row.message.id) : undefined}
                 onContextMenu={(event) => {
                   event.preventDefault();
                   setContextMenu({ kind: 'message', message: row.message, x: event.clientX, y: event.clientY });
                 }}
               >
+                {isMessageSelectionActive ? (
+                  <span className="message-select-box" aria-hidden>{selectedMessageIds.has(row.message.id) ? <Check size={15} /> : null}</span>
+                ) : null}
                 <div className="sender">{row.message.sender?.displayName ?? row.message.sender?.username ?? ''}</div>
                 <MessageContent
                   cacheConfig={webMediaCacheConfig}
@@ -5614,9 +5998,16 @@ function App() {
           <div className="caption-modal">
             <header>
               <strong>{t('addCaption')}</strong>
-              <button aria-label={t('cancel')} className="modal-close" onClick={closeCaptionModal}>
-                <X aria-hidden size={20} />
-              </button>
+              <div className="caption-header-actions">
+                {pendingCaptionAttachment.kind === 'IMAGE' ? (
+                  <button aria-label={t('editImage')} className="modal-close" onClick={() => setImageEditorOpen(true)} title={t('editImage')}>
+                    <Pencil aria-hidden size={19} />
+                  </button>
+                ) : null}
+                <button aria-label={t('cancel')} className="modal-close" onClick={closeCaptionModal}>
+                  <X aria-hidden size={20} />
+                </button>
+              </div>
             </header>
             <div className="caption-preview">
               {pendingCaptionAttachment.kind === 'IMAGE' && pendingCaptionAttachment.previewUrl ? (
@@ -5645,6 +6036,67 @@ function App() {
                 {isSendingAttachment ? <LoaderCircle aria-hidden className="spin" size={18} /> : <Send aria-hidden size={18} />}
               </button>
             </div>
+          </div>
+        </div>
+      ) : null}
+      {isImageEditorOpen && pendingCaptionAttachment?.kind === 'IMAGE' && pendingCaptionAttachment.previewUrl ? (
+        <ImageDrawingEditor
+          fileName={pendingCaptionAttachment.file.name}
+          imageUrl={pendingCaptionAttachment.previewUrl}
+          onCancel={() => setImageEditorOpen(false)}
+          onSave={applyEditedImage}
+          t={t}
+        />
+      ) : null}
+      {isBulkDeleteOpen ? (
+        <div className="modal-backdrop" onClick={() => setBulkDeleteOpen(false)}>
+          <div className="bulk-action-modal" onClick={(event) => event.stopPropagation()}>
+            <header>
+              <strong>{t('delete')} ({selectedMessageIds.size})</strong>
+              <button aria-label={t('cancel')} className="modal-close" onClick={() => setBulkDeleteOpen(false)}><X size={20} /></button>
+            </header>
+            <button disabled={isBulkActionPending} onClick={() => void deleteSelectedMessages('me')}>{t('deleteForMe')}</button>
+            {canDeleteAllSelectedMessages ? (
+              <button className="danger" disabled={isBulkActionPending} onClick={() => void deleteSelectedMessages('all')}>{t('deleteForEveryone')}</button>
+            ) : null}
+            <button disabled={isBulkActionPending} onClick={() => setBulkDeleteOpen(false)}>{t('cancel')}</button>
+          </div>
+        </div>
+      ) : null}
+      {isBulkForwardOpen ? (
+        <div className="modal-backdrop" onClick={() => setBulkForwardOpen(false)}>
+          <div className="forward-picker-modal" onClick={(event) => event.stopPropagation()}>
+            <header>
+              <div><strong>{t('chooseRecipients')}</strong><span>{t('recipientsLimit')}</span></div>
+              <button aria-label={t('cancel')} className="modal-close" onClick={() => setBulkForwardOpen(false)}><X size={20} /></button>
+            </header>
+            <div className="forward-target-list">
+              {forwardTargets.map((target) => {
+                const checked = selectedForwardTargetIds.has(target.id);
+                return (
+                  <label key={target.id}>
+                    <input
+                      checked={checked}
+                      disabled={!checked && selectedForwardTargetIds.size >= 5}
+                      onChange={() => setSelectedForwardTargetIds((current) => {
+                        const next = new Set(current);
+                        if (next.has(target.id)) next.delete(target.id);
+                        else if (next.size < 5) next.add(target.id);
+                        return next;
+                      })}
+                      type="checkbox"
+                    />
+                    <span><strong>{target.title}</strong>{target.username ? <small>@{target.username}</small> : null}</span>
+                  </label>
+                );
+              })}
+            </div>
+            <footer>
+              <button className="secondary" disabled={isBulkActionPending} onClick={() => setBulkForwardOpen(false)}>{t('cancel')}</button>
+              <button disabled={isBulkActionPending || selectedForwardTargetIds.size === 0} onClick={() => void forwardSelectedMessages()}>
+                {isBulkActionPending ? t('sending') : t('send')}
+              </button>
+            </footer>
           </div>
         </div>
       ) : null}
@@ -5787,11 +6239,34 @@ function App() {
               </button>
             </header>
             <section className="group-details-hero">
-              <Avatar title={selectedConversation.title} url={selectedConversation.avatarUrl} />
+              <button
+                className="group-avatar-button"
+                disabled={!selectedConversationRole}
+                onClick={() => groupAvatarInputRef.current?.click()}
+                title={t('changePicture')}
+              >
+                <Avatar title={selectedConversation.title} url={selectedConversation.avatarUrl} />
+              </button>
+              <input
+                accept="image/*"
+                hidden
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (file) void updateGroupAvatar(selectedConversation, file).catch((error) => setAttachmentError(error instanceof Error ? error.message : t('attachmentFailed')));
+                  event.currentTarget.value = '';
+                }}
+                ref={groupAvatarInputRef}
+                type="file"
+              />
               <div>
                 <strong>{selectedConversation.title}</strong>
                 {selectedConversation.showMemberCount !== false ? <span>{selectedConversation.memberCount ?? 0} {t('members')}</span> : null}
               </div>
+              {selectedConversationRole ? (
+                <button className="group-inline-action" onClick={() => void updateGroupTitle(selectedConversation)} title={t('changeGroupName')}>
+                  <Pencil size={18} />
+                </button>
+              ) : null}
             </section>
             <section className="group-details-section">
               <div className="group-details-section-title">
@@ -5806,11 +6281,36 @@ function App() {
                       <strong>{member.displayName || member.username}</strong>
                       <small>@{member.username}</small>
                     </span>
-                    {member.id === selectedConversation.ownerId ? <em>{t('owner')}</em> : selectedConversation.adminIds?.includes(member.id) ? <em>{t('admin')}</em> : null}
+                    <div className="group-member-actions">
+                      {member.id === selectedConversation.ownerId ? <em>{t('owner')}</em> : selectedConversation.adminIds?.includes(member.id) ? <em>{t('admin')}</em> : null}
+                      {selectedConversation.ownerId === user?.id && member.id !== user?.id ? (
+                        <>
+                          {selectedConversation.adminIds?.includes(member.id) ? (
+                            <>
+                              <button onClick={() => void transferGroupOwnership(selectedConversation, member)} title={t('transferOwnership')}><Shield size={16} /></button>
+                              <button onClick={() => void updateGroupMemberRole(selectedConversation, member, false)} title={t('removeAdmin')}><X size={16} /></button>
+                            </>
+                          ) : (
+                            <button onClick={() => void updateGroupMemberRole(selectedConversation, member, true)} title={t('makeAdmin')}><Shield size={16} /></button>
+                          )}
+                        </>
+                      ) : null}
+                      {selectedConversationRole && member.id !== user?.id && member.id !== selectedConversation.ownerId ? (
+                        <button className="danger" onClick={() => void removeGroupMember(selectedConversation, member)} title={t('removeMember')}><Trash2 size={16} /></button>
+                      ) : null}
+                    </div>
                   </div>
                 )) : <div className="center">{selectedConversation.hideMembers ? t('hideMembers') : t('contactsEmpty')}</div>}
               </div>
             </section>
+            {selectedConversationRole ? (
+              <section className="group-details-section">
+                <button className="group-management-action" onClick={() => setGroupMemberPickerOpen(true)}>
+                  <UserPlus size={18} />
+                  <span>{t('addMembers')}</span>
+                </button>
+              </section>
+            ) : null}
             {selectedConversation.ownerId === user?.id ? (
               <section className="group-details-section">
                 <div className="group-details-section-title">
@@ -5841,8 +6341,50 @@ function App() {
                     type="checkbox"
                   />
                 </label>
+                <button className="group-delete-action" onClick={() => void deleteGroupFromWeb(selectedConversation)}>
+                  <Trash2 size={18} />
+                  <span>{t('deleteGroup')}</span>
+                </button>
               </section>
-            ) : null}
+            ) : (
+              <section className="group-details-section">
+                <button className="group-delete-action" onClick={() => void leaveGroupFromWeb(selectedConversation)}>
+                  <X size={18} />
+                  <span>{t('leaveGroup')}</span>
+                </button>
+              </section>
+            )}
+          </div>
+        </div>
+      ) : null}
+      {isGroupMemberPickerOpen && selectedConversation?.type === 'GROUP' ? (
+        <div className="modal-backdrop" onClick={() => setGroupMemberPickerOpen(false)}>
+          <div className="forward-picker-modal" onClick={(event) => event.stopPropagation()}>
+            <header>
+              <strong>{t('addMembers')}</strong>
+              <button aria-label={t('cancel')} className="modal-close" onClick={() => setGroupMemberPickerOpen(false)}><X size={20} /></button>
+            </header>
+            <div className="forward-target-list">
+              {addableGroupContacts.map((contact) => (
+                <label key={contact.id}>
+                  <input
+                    checked={selectedGroupMemberIds.has(contact.id)}
+                    onChange={() => setSelectedGroupMemberIds((current) => {
+                      const next = new Set(current);
+                      if (next.has(contact.id)) next.delete(contact.id);
+                      else next.add(contact.id);
+                      return next;
+                    })}
+                    type="checkbox"
+                  />
+                  <span><strong>{contact.displayName || contact.username}</strong><small>@{contact.username}</small></span>
+                </label>
+              ))}
+            </div>
+            <footer>
+              <button className="secondary" onClick={() => setGroupMemberPickerOpen(false)}>{t('cancel')}</button>
+              <button disabled={selectedGroupMemberIds.size === 0} onClick={() => void addSelectedGroupMembers(selectedConversation)}>{t('addMembers')}</button>
+            </footer>
           </div>
         </div>
       ) : null}
@@ -6164,6 +6706,13 @@ function App() {
         <ContextMenu
           context={contextMenu}
           currentUserId={user?.id}
+          canDeleteForEveryone={
+            contextMenu.kind === 'message' &&
+            conversations.some((conversation) => (
+              conversation.id === contextMenu.message.conversationId &&
+              getConversationRoleBadge(conversation, user?.id) !== null
+            ))
+          }
           isBlocked={
             contextMenu.kind === 'chat'
               ? !!contextMenu.conversation.otherUserId && blockedUserIds.has(contextMenu.conversation.otherUserId)
@@ -6192,7 +6741,7 @@ function App() {
   );
 }
 
-type MessageContextAction = 'copy' | 'copy-image' | 'delete-all' | 'delete-me' | 'download' | 'edit' | 'forward' | 'pin' | 'reply' | 'report' | 'unpin';
+type MessageContextAction = 'copy' | 'copy-image' | 'delete-all' | 'delete-me' | 'download' | 'edit' | 'forward' | 'pin' | 'reply' | 'report' | 'select' | 'unpin';
 type ChatContextAction = 'add-contact' | 'block' | 'delete' | 'mute' | 'report' | 'unblock' | 'unmute';
 type ContactContextAction = 'block' | 'chat' | 'delete-contact' | 'report' | 'share' | 'video' | 'voice';
 
@@ -6201,6 +6750,7 @@ function ContextMenu({
   currentUserId,
   isBlocked,
   isPinned,
+  canDeleteForEveryone,
   onChatAction,
   onContactAction,
   onClose,
@@ -6211,6 +6761,7 @@ function ContextMenu({
   currentUserId?: string;
   isBlocked: boolean;
   isPinned: boolean;
+  canDeleteForEveryone: boolean;
   onChatAction: (action: ChatContextAction, conversation: Conversation) => void;
   onContactAction: (action: ContactContextAction, contact: AuthUser) => void;
   onClose: () => void;
@@ -6238,6 +6789,7 @@ function ContextMenu({
             {context.message.kind !== 'CALL' ? (
               <ContextMenuButton icon={Send} label={t('forward')} onClick={() => onMessageAction('forward', context.message)} />
             ) : null}
+            <ContextMenuButton icon={Check} label={t('select')} onClick={() => onMessageAction('select', context.message)} />
             <ContextMenuButton
               icon={Pin}
               label={t(isPinned ? 'unpin' : 'pin')}
@@ -6250,7 +6802,7 @@ function ContextMenu({
             {context.message.senderId !== currentUserId ? (
               <ContextMenuButton destructive icon={Flag} label={t('report')} onClick={() => onMessageAction('report', context.message)} />
             ) : null}
-            {context.message.senderId === currentUserId ? (
+            {context.message.senderId === currentUserId || canDeleteForEveryone ? (
               <ContextMenuButton destructive icon={Trash2} label={t('deleteForEveryone')} onClick={() => onMessageAction('delete-all', context.message)} />
             ) : null}
             <ContextMenuButton destructive icon={Trash2} label={t('deleteForMe')} onClick={() => onMessageAction('delete-me', context.message)} />
@@ -6539,6 +7091,117 @@ function MeetingEndSummaryModal({
   );
 }
 
+function ImageDrawingEditor({
+  fileName,
+  imageUrl,
+  onCancel,
+  onSave,
+  t,
+}: {
+  fileName: string;
+  imageUrl: string;
+  onCancel: () => void;
+  onSave: (file: globalThis.File) => void;
+  t: (key: TranslationKey) => string;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const imageRef = useRef<HTMLImageElement | null>(null);
+  const drawingRef = useRef(false);
+  const lastPointRef = useRef<{ x: number; y: number } | null>(null);
+
+  const drawBaseImage = useCallback(() => {
+    const canvas = canvasRef.current;
+    const image = imageRef.current;
+    if (!canvas || !image) return;
+    canvas.width = image.naturalWidth;
+    canvas.height = image.naturalHeight;
+    canvas.getContext('2d')?.drawImage(image, 0, 0);
+  }, []);
+
+  useEffect(() => {
+    const image = new window.Image();
+    image.onload = () => {
+      imageRef.current = image;
+      drawBaseImage();
+    };
+    image.src = imageUrl;
+    return () => {
+      imageRef.current = null;
+    };
+  }, [drawBaseImage, imageUrl]);
+
+  function getCanvasPoint(event: React.PointerEvent<HTMLCanvasElement>) {
+    const canvas = event.currentTarget;
+    const bounds = canvas.getBoundingClientRect();
+    return {
+      x: (event.clientX - bounds.left) * (canvas.width / bounds.width),
+      y: (event.clientY - bounds.top) * (canvas.height / bounds.height),
+    };
+  }
+
+  function beginDrawing(event: React.PointerEvent<HTMLCanvasElement>) {
+    event.currentTarget.setPointerCapture(event.pointerId);
+    drawingRef.current = true;
+    lastPointRef.current = getCanvasPoint(event);
+  }
+
+  function continueDrawing(event: React.PointerEvent<HTMLCanvasElement>) {
+    if (!drawingRef.current || !lastPointRef.current) return;
+    const canvas = event.currentTarget;
+    const context = canvas.getContext('2d');
+    const nextPoint = getCanvasPoint(event);
+    if (!context) return;
+    context.strokeStyle = '#ff334f';
+    context.lineCap = 'round';
+    context.lineJoin = 'round';
+    context.lineWidth = Math.max(4, canvas.width / 180);
+    context.beginPath();
+    context.moveTo(lastPointRef.current.x, lastPointRef.current.y);
+    context.lineTo(nextPoint.x, nextPoint.y);
+    context.stroke();
+    lastPointRef.current = nextPoint;
+  }
+
+  function endDrawing() {
+    drawingRef.current = false;
+    lastPointRef.current = null;
+  }
+
+  async function saveDrawing() {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.92));
+    if (!blob) return;
+    const baseName = fileName.replace(/\.[^.]+$/, '') || 'image';
+    onSave(new globalThis.File([blob], `${baseName}-edited.jpg`, { type: 'image/jpeg' }));
+  }
+
+  return (
+    <div className="modal-backdrop image-editor-backdrop">
+      <div className="image-editor-modal">
+        <header>
+          <strong>{t('editImage')}</strong>
+          <button aria-label={t('cancel')} className="modal-close" onClick={onCancel}><X size={20} /></button>
+        </header>
+        <div className="image-editor-stage">
+          <canvas
+            onPointerCancel={endDrawing}
+            onPointerDown={beginDrawing}
+            onPointerMove={continueDrawing}
+            onPointerUp={endDrawing}
+            ref={canvasRef}
+          />
+        </div>
+        <footer>
+          <button className="secondary" onClick={drawBaseImage}>{t('clear')}</button>
+          <button className="secondary" onClick={onCancel}>{t('cancel')}</button>
+          <button onClick={() => void saveDrawing()}>{t('save')}</button>
+        </footer>
+      </div>
+    </div>
+  );
+}
+
 function MessageContent({
   cacheConfig,
   message,
@@ -6603,9 +7266,40 @@ function MessageContent({
   return (
     <>
       {replyPreview ? <MessageReplyPreview reply={replyPreview} /> : null}
-      <p>{message.body}</p>
+      <p>{renderLinkedMessageText(message.body)}</p>
     </>
   );
+}
+
+function renderLinkedMessageText(body: string) {
+  const linkPattern = /((?:https?:\/\/|www\.)[^\s<]+|(?:[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?\.)+(?:com|net|org|io|co|me|az|tr|ru|de|fr|it|es|pt|uk|app|dev|info|biz)(?:\/[^\s<]*)?)/gi;
+  const parts: React.ReactNode[] = [];
+  let lastIndex = 0;
+
+  for (const match of body.matchAll(linkPattern)) {
+    const index = match.index ?? 0;
+    const rawValue = match[0];
+    const trailing = rawValue.match(/[),.!?:;]+$/)?.[0] ?? '';
+    const value = trailing ? rawValue.slice(0, -trailing.length) : rawValue;
+    if (index > lastIndex) {
+      parts.push(body.slice(lastIndex, index));
+    }
+    const href = /^https?:\/\//i.test(value) ? value : `https://${value}`;
+    parts.push(
+      <a href={href} key={`${index}:${value}`} onClick={(event) => event.stopPropagation()} rel="noopener noreferrer" target="_blank">
+        {value}
+      </a>,
+    );
+    if (trailing) {
+      parts.push(trailing);
+    }
+    lastIndex = index + rawValue.length;
+  }
+
+  if (lastIndex < body.length) {
+    parts.push(body.slice(lastIndex));
+  }
+  return parts.length > 0 ? parts : body;
 }
 
 function MessageReplyPreview({ reply }: { reply: { body?: string; kind?: string; senderName?: string } }) {
@@ -6911,6 +7605,7 @@ async function normalizeClipboardImageBlob(blob: Blob) {
 
 function AuthenticatedImageMedia({ cacheConfig, caption, media, onContentReady, onOpenMedia, previewUrl, token }: { cacheConfig: WebMediaCacheConfig; caption?: string; media: NonNullable<Message['media']>; onContentReady?: () => void; onOpenMedia?: (viewer: MediaViewerState) => void; previewUrl?: string | null; token: string | null }) {
   const imageUrl = useAuthenticatedMediaUrl(media.id, token, previewUrl, onContentReady, cacheConfig, media);
+  const [aspectRatio, setAspectRatio] = useState(4 / 3);
 
   return (
     <button
@@ -6919,7 +7614,10 @@ function AuthenticatedImageMedia({ cacheConfig, caption, media, onContentReady, 
       onClick={() => imageUrl && onOpenMedia?.({ caption, kind: 'IMAGE', media, url: imageUrl })}
       type="button"
     >
-      {imageUrl ? <img alt={media.originalName} className="message-media" loading="lazy" src={imageUrl} /> : <div className="message-media media-loading" />}
+      {imageUrl ? <img alt={media.originalName} className="message-media" loading="lazy" onLoad={(event) => {
+        const image = event.currentTarget;
+        if (image.naturalWidth && image.naturalHeight) setAspectRatio(image.naturalWidth / image.naturalHeight);
+      }} src={imageUrl} style={{ aspectRatio }} /> : <div className="message-media media-loading" style={{ aspectRatio }} />}
       {caption ? <span>{caption}</span> : null}
     </button>
   );
@@ -6927,6 +7625,7 @@ function AuthenticatedImageMedia({ cacheConfig, caption, media, onContentReady, 
 
 function AuthenticatedVideoMedia({ cacheConfig, caption, media, onContentReady, onOpenMedia, previewUrl, token }: { cacheConfig: WebMediaCacheConfig; caption?: string; media: NonNullable<Message['media']>; onContentReady?: () => void; onOpenMedia?: (viewer: MediaViewerState) => void; previewUrl?: string | null; token: string | null }) {
   const videoUrl = useAuthenticatedMediaUrl(media.id, token, previewUrl, onContentReady, cacheConfig, media);
+  const [aspectRatio, setAspectRatio] = useState(16 / 9);
 
   return (
     <button
@@ -6935,7 +7634,10 @@ function AuthenticatedVideoMedia({ cacheConfig, caption, media, onContentReady, 
       onClick={() => videoUrl && onOpenMedia?.({ caption, kind: 'VIDEO', media, url: videoUrl })}
       type="button"
     >
-      {videoUrl ? <video className="message-media" muted preload="metadata" src={videoUrl} /> : <div className="message-media media-loading" />}
+      {videoUrl ? <video className="message-media" muted onLoadedMetadata={(event) => {
+        const video = event.currentTarget;
+        if (video.videoWidth && video.videoHeight) setAspectRatio(video.videoWidth / video.videoHeight);
+      }} preload="metadata" src={videoUrl} style={{ aspectRatio }} /> : <div className="message-media media-loading" style={{ aspectRatio }} />}
       {caption ? <span>{caption}</span> : <span>{media.originalName}</span>}
     </button>
   );

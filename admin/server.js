@@ -571,6 +571,7 @@ const ADMIN_TR = {
   'Add contact': 'Kişi ekle',
   'Add contact by username': 'Kullanıcı adıyla kişi ekle',
   'Add to group': 'Gruba ekle',
+  'Add user': 'Kullanıcı ekle',
   'Add user or admin': 'Kullanıcı veya admin ekle',
   'Admin actions': 'Admin işlemleri',
   'Admin blocked': 'Admin tarafından engellenenler',
@@ -585,6 +586,7 @@ const ADMIN_TR = {
   'App version': 'Uygulama sürümü',
   'Audit group ownership, admins, members, settings, and reports.': 'Grup sahipliği, adminler, üyeler, ayarlar ve raporları denetleyin.',
   'Back': 'Geri',
+  'Back to users': 'Kullanıcılara dön',
   'Back to calls': 'Aramalara dön',
   'Bad request': 'Hatalı istek',
   'Billing retry': 'Faturalama tekrar deneniyor',
@@ -802,6 +804,14 @@ const ADMIN_TR = {
   'Operations': 'Operasyonlar',
   'Oldest first': 'En eskiler önce',
   'Password': 'Şifre',
+  'Generated when empty': 'Boş bırakılırsa oluşturulur',
+  'Generated credentials are shown only on this page.': 'Oluşturulan giriş bilgileri yalnızca bu sayfada gösterilir.',
+  'Nickname': 'Rumuz',
+  'Display name': 'Görünen ad',
+  'Uses nickname when empty': 'Boş bırakılırsa rumuz kullanılır',
+  'User created': 'Kullanıcı oluşturuldu',
+  'User created successfully.': 'Kullanıcı başarıyla oluşturuldu.',
+  'The account can now sign in from a phone.': 'Hesap artık telefondan giriş yapabilir.',
   'Password must be at least 8 characters.': 'Şifre en az 8 karakter olmalıdır.',
   'Paid entitlement records with account display names, Apple/Google identifiers, expiration, renewal state, and raw webhook payloads.': 'Hesap görünen adları, Apple/Google kimlikleri, bitiş tarihi, yenileme durumu ve ham webhook verileriyle ücretli yetki kayıtları.',
   'Paid entitlement records with account display names, Apple/Google/manual identifiers, expiration, renewal state, and raw payment payloads.': 'Hesap görünen adları, Apple/Google/manuel kimlikleri, bitiş tarihi, yenileme durumu ve ham ödeme verileriyle ücretli yetki kayıtları.',
@@ -1496,6 +1506,92 @@ app.get('/', requireAdmin, async (_req, res, next) => {
   }
 });
 
+app.post('/users', requireAdmin, requireSection('users', 'edit'), async (req, res, next) => {
+  try {
+    const requestedUsername = String(req.body.nickname || '').trim().toLowerCase();
+    const requestedPassword = String(req.body.password || '');
+    const requestedDisplayName = String(req.body.displayName || '').trim();
+    const generatedUsername = !requestedUsername;
+    const generatedPassword = !requestedPassword;
+    let username = requestedUsername;
+
+    if (username && (!/^[a-z0-9_]{6,32}$/.test(username) || username === 'meetvap')) {
+      throw new Error('Nickname must be 6-32 characters using letters, numbers, or underscore.');
+    }
+    if (requestedPassword && (
+      requestedPassword.length < 7 ||
+      requestedPassword.length > 200 ||
+      !/[A-Za-z]/.test(requestedPassword) ||
+      !/\d/.test(requestedPassword)
+    )) {
+      throw new Error('Password must be 7-200 characters and contain at least one letter and one number.');
+    }
+    if (requestedDisplayName && (requestedDisplayName.length < 2 || requestedDisplayName.length > 80)) {
+      throw new Error('Display name must be 2-80 characters.');
+    }
+
+    if (!username) {
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        const candidate = `user_${crypto.randomBytes(6).toString('hex')}`;
+        const existing = await pool.query('select 1 from "User" where username = $1 limit 1', [candidate]);
+        if (existing.rowCount === 0) {
+          username = candidate;
+          break;
+        }
+      }
+    }
+    if (!username) {
+      throw new Error('Could not generate a unique nickname.');
+    }
+
+    const password = requestedPassword || `${crypto.randomBytes(8).toString('base64url')}A1`;
+    const displayName = requestedDisplayName || username;
+    const passwordHash = await bcrypt.hash(password, 12);
+    const now = new Date();
+    const id = cuid();
+
+    await pool.query(`
+      insert into "User" (
+        id,
+        "displayName",
+        username,
+        "passwordHash",
+        "hideNickname",
+        "useGroupAliases",
+        "registrationPlatform",
+        "registrationLocale",
+        "registrationUserAgent",
+        "termsAcceptedAt",
+        "termsAcceptedPlatform",
+        "termsAcceptedLocale",
+        "termsVersion",
+        "createdAt",
+        "updatedAt"
+      )
+      values ($1, $2, $3, $4, false, true, 'admin', 'en', $5, $6, 'admin', 'en', '2026-05-30', $6, $6)
+    `, [id, displayName, username, passwordHash, `MeetVap Admin (${req.admin.username})`, now]);
+
+    res.send(page({
+      active: 'users',
+      body: `
+        ${hero('User created', 'The account can now sign in from a phone.', `<div class="actions"><a class="btn secondary" href="/users">${escapeHtml(translateText('Back to users'))}</a>${logout()}</div>`)}
+        <section class="panel">
+          <div class="notice success"><strong>${escapeHtml(translateText('User created successfully.'))}</strong></div>
+          <div class="info-list">
+            <div class="info-row"><span>${escapeHtml(translateText('Nickname'))}</span><code>${escapeHtml(username)}</code></div>
+            <div class="info-row"><span>${escapeHtml(translateText('Password'))}</span><code>${escapeHtml(password)}</code></div>
+            <div class="info-row"><span>${escapeHtml(translateText('Display name'))}</span><strong>${escapeHtml(displayName)}</strong></div>
+          </div>
+          ${(generatedUsername || generatedPassword) ? `<p class="subtle">${escapeHtml(translateText('Generated credentials are shown only on this page.'))}</p>` : ''}
+        </section>
+      `,
+      title: 'User created',
+    }));
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get('/users', requireAdmin, requireSection('users'), async (req, res, next) => {
   try {
     const sort = SORTS[req.query.sort] ? req.query.sort : 'created_at';
@@ -1531,7 +1627,26 @@ app.get('/users', requireAdmin, requireSection('users'), async (req, res, next) 
     res.send(page({
       active: 'users',
       body: `
-        ${hero('Users', `${number(pagination.total)} users with activity, calls, contacts, devices, and subscription data.`, `<div class="actions"><a class="btn secondary" href="/undelivered-messages">${escapeHtml(translateText('Undelivered messages'))}</a>${logout()}</div>`)}
+        ${hero('Users', `${number(pagination.total)} users with activity, calls, contacts, devices, and subscription data.`, `<div class="actions">${canEdit('users') ? `<button type="button" onclick="document.getElementById('user-create-modal').showModal()">${escapeHtml(translateText('Add user'))}</button>` : ''}<a class="btn secondary" href="/undelivered-messages">${escapeHtml(translateText('Undelivered messages'))}</a>${logout()}</div>`)}
+        ${canEdit('users') ? `
+          <dialog class="admin-modal" id="user-create-modal">
+            <form class="admin-modal-card" method="post" action="/users">
+              <div class="admin-modal-head">
+                <h3>${escapeHtml(translateText('Add user'))}</h3>
+                <button class="secondary small" type="button" onclick="this.closest('dialog').close()">×</button>
+              </div>
+              <div class="admin-modal-body">
+                <label>${escapeHtml(translateText('Nickname'))}<input autocomplete="off" maxlength="32" minlength="6" name="nickname" pattern="[A-Za-z0-9_]+" placeholder="${escapeAttr(translateText('Generated when empty'))}"></label>
+                <label>${escapeHtml(translateText('Password'))}<input autocomplete="new-password" maxlength="200" minlength="7" name="password" placeholder="${escapeAttr(translateText('Generated when empty'))}" type="password"></label>
+                <label>${escapeHtml(translateText('Display name'))}<input maxlength="80" name="displayName" placeholder="${escapeAttr(translateText('Uses nickname when empty'))}"></label>
+              </div>
+              <div class="actions">
+                <button class="secondary" type="button" onclick="this.closest('dialog').close()">${escapeHtml(translateText('Cancel'))}</button>
+                <button type="submit">${escapeHtml(translateText('Add user'))}</button>
+              </div>
+            </form>
+          </dialog>
+        ` : ''}
         <form class="toolbar" method="get">
           ${adminBlocked ? '<input type="hidden" name="adminBlocked" value="1">' : ''}
           <label>Search <input name="q" value="${escapeAttr(q)}" placeholder="${escapeAttr(translateText('Username or display name'))}"></label>

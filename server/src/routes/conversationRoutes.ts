@@ -3962,7 +3962,21 @@ conversationRoutes.delete('/:conversationId/call-messages/:callId', async (req, 
     const input = deleteMessageSchema.parse(req.body);
     await assertConversationMember(req.params.conversationId, currentUser.id);
     const message = await prisma.message.findFirst({
-      select: { id: true, metadata: true },
+      select: {
+        id: true,
+        metadata: true,
+        senderId: true,
+        conversation: {
+          select: {
+            ownerId: true,
+            type: true,
+            members: {
+              select: { isAdmin: true, userId: true },
+              where: { userId: currentUser.id },
+            },
+          },
+        },
+      },
       where: {
         conversationId: req.params.conversationId,
         deletedAt: null,
@@ -3997,6 +4011,17 @@ conversationRoutes.delete('/:conversationId/call-messages/:callId', async (req, 
     const io = req.app.get('io');
 
     if (input.mode === 'all') {
+      const membership = message.conversation.members[0];
+      const canDeleteForEveryone = message.senderId === currentUser.id ||
+        (
+          message.conversation.type === 'GROUP' &&
+          (message.conversation.ownerId === currentUser.id || membership?.isAdmin === true)
+        );
+
+      if (!canDeleteForEveryone) {
+        throw new HttpError(403, 'Only the sender or a group admin can delete this message for everyone');
+      }
+
       await prisma.message.update({
         data: { body: '', contentPurgedAt: new Date(), deletedAt: new Date(), mediaId: null },
         where: { id: message.id },
@@ -4096,7 +4121,21 @@ conversationRoutes.delete('/:conversationId/messages/:messageId', async (req, re
     const input = deleteMessageSchema.parse(req.body);
     await assertConversationMember(req.params.conversationId, currentUser.id);
     const message = await prisma.message.findFirst({
-      select: { id: true, metadata: true },
+      select: {
+        id: true,
+        metadata: true,
+        senderId: true,
+        conversation: {
+          select: {
+            ownerId: true,
+            type: true,
+            members: {
+              select: { isAdmin: true, userId: true },
+              where: { userId: currentUser.id },
+            },
+          },
+        },
+      },
       where: {
         conversationId: req.params.conversationId,
         deletedAt: null,
@@ -4144,6 +4183,17 @@ conversationRoutes.delete('/:conversationId/messages/:messageId', async (req, re
     const io = req.app.get('io');
 
     if (input.mode === 'all') {
+      const membership = message.conversation.members[0];
+      const canDeleteForEveryone = message.senderId === currentUser.id ||
+        (
+          message.conversation.type === 'GROUP' &&
+          (message.conversation.ownerId === currentUser.id || membership?.isAdmin === true)
+        );
+
+      if (!canDeleteForEveryone) {
+        throw new HttpError(403, 'Only the sender or a group admin can delete this message for everyone');
+      }
+
       await deleteMessageMediaFiles([message.id]);
       await prisma.message.update({
         data: { body: '', contentPurgedAt: new Date(), deletedAt: new Date(), mediaId: null },

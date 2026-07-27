@@ -1611,14 +1611,17 @@ function CountdownConfirmModal(props: CountdownConfirmProps) {
 }
 
 function CountdownConfirmOverlay(props: CountdownConfirmProps) {
-  if (!props.visible) {
-    return null;
-  }
-
   return (
-    <View style={styles.countdownInlineOverlay}>
+    <Modal
+      animationType="fade"
+      onRequestClose={props.isSubmitting ? undefined : props.onCancel}
+      presentationStyle="overFullScreen"
+      statusBarTranslucent
+      transparent
+      visible={props.visible}
+    >
       <CountdownConfirmContent {...props} />
-    </View>
+    </Modal>
   );
 }
 
