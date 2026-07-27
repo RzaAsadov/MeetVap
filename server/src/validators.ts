@@ -2,6 +2,8 @@ import { z } from 'zod';
 import { containsObjectionableContent, OBJECTIONABLE_CONTENT_MESSAGE } from './moderation';
 import { CURRENT_TERMS_VERSION } from './terms';
 
+const appLocaleSchema = z.enum(['en', 'tr', 'ru', 'az', 'de', 'fr', 'it', 'es', 'pt', 'pt-BR', 'ptBR']);
+
 export const MEETVAP_PROHIBITED_NAME_MESSAGE = 'Using "MeetVap" is prohibited by system';
 
 const meetvapKeywordPattern = /meetvap/i;
@@ -46,7 +48,7 @@ const usernameSchema = z
 
 export const registerSchema = z.object({
   displayName: displayNameSchema,
-  locale: z.enum(['en', 'tr', 'ru']).optional(),
+  locale: appLocaleSchema.optional(),
   password: z
     .string()
     .min(7, 'Password must be at least 7 characters')
@@ -65,7 +67,7 @@ export const usernameAvailabilitySchema = z.object({
 
 export const loginSchema = z.object({
   password: z.string().min(1),
-  locale: z.enum(['en', 'tr', 'ru', 'az', 'de', 'fr', 'it', 'es', 'pt', 'ptBR']).optional(),
+  locale: appLocaleSchema.optional(),
   platform: z.string().trim().min(1).max(32).optional(),
   termsAccepted: z.literal(true),
   termsVersion: z.literal(CURRENT_TERMS_VERSION),
@@ -241,7 +243,7 @@ export const inviteCallParticipantSchema = z.object({
 });
 
 export const registerPushTokenSchema = z.object({
-  locale: z.enum(['en', 'tr', 'ru']).default('en'),
+  locale: appLocaleSchema.default('en'),
   platform: z.string().min(1).max(32).optional(),
   provider: z.enum(['apns', 'apns_voip', 'expo', 'fcm']).default('expo'),
   token: z.string().min(1).max(512),

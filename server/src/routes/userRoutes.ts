@@ -791,6 +791,10 @@ userRoutes.post('/push-token', requireAuth, async (req, res, next) => {
     const input = registerPushTokenSchema.parse(req.body);
     const provider = normalizePushTokenProvider(input.provider, input.platform);
     const clientMetadata = getRequestClientMetadata(req, input.platform);
+    const existingToken = await prisma.devicePushToken.findUnique({
+      select: { userId: true },
+      where: { token: input.token },
+    });
 
     await prisma.devicePushToken.upsert({
       create: {
@@ -810,7 +814,10 @@ userRoutes.post('/push-token', requireAuth, async (req, res, next) => {
       },
       where: { token: input.token },
     });
-    await invalidatePushTokenCacheForUser(currentUser.id);
+    await Promise.all(
+      [...new Set([currentUser.id, existingToken?.userId].filter((userId): userId is string => !!userId))]
+        .map(invalidatePushTokenCacheForUser),
+    );
 
     res.json({ ok: true });
   } catch (error) {

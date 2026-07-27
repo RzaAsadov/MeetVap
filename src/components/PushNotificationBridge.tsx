@@ -166,8 +166,15 @@ export function PushNotificationBridge() {
       return;
     }
 
-    void registerForPushNotifications(serverUrl, language);
-  }, [language, serverUrl, user]);
+    void registerForPushNotifications(serverUrl, language).catch((error) => {
+      logMessageDeliveryDiagnostic('push-token-registration-failed', {
+        language,
+        message: error instanceof Error ? error.message : String(error),
+        platform: Platform.OS,
+        userId: user.id,
+      });
+    });
+  }, [language, serverUrl, user?.id]);
 
   useEffect(() => {
     let isMounted = true;
