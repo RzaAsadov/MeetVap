@@ -23,7 +23,7 @@ import { recordMessageStats } from '../stats';
 import { getPremiumFeatureAccessMap, hasPremiumFeatureAccess, requirePremiumFeatureAccess } from '../subscriptions';
 import { ensureMeetVapDirectConversationForUser, getMeetVapSystemUserId } from '../systemAccount';
 import { assertNotBlockedBetween } from './userRoutes';
-import { bulkConversationAckSchema, bulkConversationSyncSchema, bulkDeleteConversationsSchema, createDirectConversationSchema, createGroupConversationSchema, createMessageSchema, createScheduledMessageSchema, declineGroupInviteSchema, deleteConversationSchema, deleteMessageSchema, editMessageSchema, messageDeletionAckSchema, messageIdsSchema, messageReactionSchema, openDisappearingMessageSchema, quickReplySchema, transferGroupOwnershipSchema, updateConversationMuteSchema, updateDisappearingMessagesSchema, updateGroupAliasSchema, updateGroupAvatarSchema, updateGroupMembersSchema, updateGroupSettingsSchema, updateGroupTitleSchema, updateVoiceRoomParticipantSchema } from '../validators';
+import { bulkConversationAckSchema, bulkConversationDeltaSchema, bulkConversationSyncSchema, bulkDeleteConversationsSchema, createDirectConversationSchema, createGroupConversationSchema, createMessageSchema, createScheduledMessageSchema, declineGroupInviteSchema, deleteConversationSchema, deleteMessageSchema, editMessageSchema, messageDeletionAckSchema, messageIdsSchema, messageReactionSchema, openDisappearingMessageSchema, quickReplySchema, transferGroupOwnershipSchema, updateConversationMuteSchema, updateDisappearingMessagesSchema, updateGroupAliasSchema, updateGroupAvatarSchema, updateGroupMembersSchema, updateGroupSettingsSchema, updateGroupTitleSchema, updateVoiceRoomParticipantSchema } from '../validators';
 import { operationalConfig } from '../operationalConfig';
 import { enforceRateLimit } from '../rateLimits';
 import { cacheDeletePattern, cacheGetJson, cacheSetJson } from '../redisCache';
@@ -2179,6 +2179,7 @@ conversationRoutes.get('/:conversationId/messages', async (req, res, next) => {
     const pendingContentOnly = req.query.pendingContent === 'true';
     const messageClient = req.messageClient ?? normalizeMessageClient(req.query.client, 'MOBILE');
     const pendingContentFilter = getPendingContentAckMessageFilter(currentUser.id, messageClient);
+    const shouldLoadLatestWindow = !afterDate && !pendingContentOnly && !pendingDeliveryOnly;
 
     const messages = await prisma.message.findMany({
       include: {
@@ -2202,7 +2203,7 @@ conversationRoutes.get('/:conversationId/messages', async (req, res, next) => {
           },
         },
       },
-      orderBy: { createdAt: 'asc' },
+      orderBy: { createdAt: shouldLoadLatestWindow ? 'desc' : 'asc' },
       take: 150,
       where: {
         conversationId: req.params.conversationId,
@@ -2234,7 +2235,7 @@ conversationRoutes.get('/:conversationId/messages', async (req, res, next) => {
               ],
             }
           : {}),
-        ...(!pendingContentOnly
+        ...(!pendingContentOnly && afterDate
           ? {
               AND: [
                 {
@@ -2255,6 +2256,7 @@ conversationRoutes.get('/:conversationId/messages', async (req, res, next) => {
         },
       },
     });
+    const orderedMessages = shouldLoadLatestWindow ? messages.reverse() : messages;
     const members = await prisma.conversationMember.findMany({
       where: { conversationId: req.params.conversationId },
     });
@@ -2279,7 +2281,7 @@ conversationRoutes.get('/:conversationId/messages', async (req, res, next) => {
     });
 
     res.json({
-      messages: messages.map((message) => serializeMessage(
+      messages: orderedMessages.map((message) => serializeMessage(
         message,
         getMessageStatusForViewer(message, currentUser.id, members),
         aliasByUserId.get(message.senderId),
@@ -2590,6 +2592,209 @@ conversationRoutes.post('/:conversationId/read', async (req, res, next) => {
     await markConversationReadForUser(req, req.params.conversationId, currentUser.id, requestedMessageIds, requestedMessageKeys);
 
     res.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+conversationRoutes.post('/sync/deltas', async (req, res, next) => {
+  try {
+    const currentUser = getAuthedUser(req);
+    const input = bulkConversationDeltaSchema.parse(req.body);
+    const requestedConversationIds = input.items.map((item) => item.conversationId);
+    const conversationIds = await getAcceptedConversationIds(requestedConversationIds, currentUser.id);
+
+    if (conversationIds.length === 0) {
+      res.json({ items: {} });
+      return;
+    }
+
+    const acceptedConversationIds = new Set(conversationIds);
+    const cursorByConversationId = new Map(input.items
+      .filter((item) => acceptedConversationIds.has(item.conversationId))
+      .map((item) => [item.conversationId, item.cursor ?? {}]));
+    const [deletions, deleteRequests, edits, statusUpdates] = await Promise.all([
+      prisma.messageDeletion.findMany({
+        orderBy: { createdAt: 'asc' },
+        select: {
+          createdAt: true,
+          message: { select: { conversationId: true } },
+          messageId: true,
+          mode: true,
+          requestedById: true,
+        },
+        where: {
+          ackedAt: null,
+          message: { conversationId: { in: conversationIds } },
+          mode: { in: ['ALL', 'SELF'] },
+          userId: currentUser.id,
+        },
+      }),
+      prisma.messageDeleteRequest.findMany({
+        orderBy: { createdAt: 'asc' },
+        select: {
+          conversationId: true,
+          createdAt: true,
+          messageKey: true,
+          mode: true,
+          requestedById: true,
+        },
+        where: {
+          conversationId: { in: conversationIds },
+          mode: 'ALL',
+          userId: currentUser.id,
+        },
+      }),
+      prisma.messageEditRequest.findMany({
+        orderBy: { createdAt: 'asc' },
+        select: {
+          body: true,
+          conversationId: true,
+          createdAt: true,
+          messageId: true,
+          messageKey: true,
+          metadata: true,
+          requestedById: true,
+        },
+        where: {
+          conversationId: { in: conversationIds },
+          userId: currentUser.id,
+        },
+      }),
+      withTransientDatabaseRetry(() => prisma.messageStatusUpdate.findMany({
+        orderBy: { updatedAt: 'asc' },
+        select: {
+          conversationId: true,
+          deliveredAt: true,
+          messageId: true,
+          messageKey: true,
+          readAt: true,
+          status: true,
+          updatedAt: true,
+        },
+        where: {
+          conversationId: { in: conversationIds },
+          OR: [
+            { deliveredAckedAt: null, status: 'DELIVERED' },
+            { readAckedAt: null, status: 'READ' },
+          ],
+          userId: currentUser.id,
+        },
+      })),
+    ]);
+    const items: Record<string, {
+      cursor: { deletions: string | null; edits: string | null; statusUpdates: string | null };
+      deletions: Array<{
+        createdAt: string;
+        messageId?: string | null;
+        messageKey?: string | null;
+        mode: string;
+        requestedById?: string | null;
+      }>;
+      edits: Array<{
+        body: string;
+        conversationId: string;
+        createdAt: string;
+        messageId?: string | null;
+        messageKey: string;
+        metadata?: Prisma.JsonValue | null;
+        requestedById?: string | null;
+      }>;
+      hasChanges: boolean;
+      statusUpdates: Array<{
+        conversationId: string;
+        deliveredAt?: string | null;
+        messageId?: string | null;
+        messageKey: string;
+        readAt?: string | null;
+        status: 'DELIVERED' | 'READ';
+        updatedAt: string;
+      }>;
+    }> = {};
+    const ensureItem = (conversationId: string) => {
+      const cursor = cursorByConversationId.get(conversationId) ?? {};
+      items[conversationId] ??= {
+        cursor: {
+          deletions: cursor.deletions ?? null,
+          edits: cursor.edits ?? null,
+          statusUpdates: cursor.statusUpdates ?? null,
+        },
+        deletions: [],
+        edits: [],
+        hasChanges: false,
+        statusUpdates: [],
+      };
+
+      return items[conversationId];
+    };
+    const bumpCursor = (conversationId: string, key: 'deletions' | 'edits' | 'statusUpdates', value: Date) => {
+      const item = ensureItem(conversationId);
+      const nextValue = value.toISOString();
+      const currentValue = item.cursor[key];
+
+      if (!currentValue || Date.parse(nextValue) > Date.parse(currentValue)) {
+        item.cursor[key] = nextValue;
+      }
+    };
+
+    conversationIds.forEach(ensureItem);
+    deletions.forEach((deletion) => {
+      const conversationId = deletion.message.conversationId;
+      const item = ensureItem(conversationId);
+
+      item.deletions.push({
+        createdAt: deletion.createdAt.toISOString(),
+        messageId: deletion.messageId,
+        mode: deletion.mode,
+        requestedById: deletion.requestedById,
+      });
+      item.hasChanges = true;
+      bumpCursor(conversationId, 'deletions', deletion.createdAt);
+    });
+    deleteRequests.forEach((deletion) => {
+      const item = ensureItem(deletion.conversationId);
+
+      item.deletions.push({
+        createdAt: deletion.createdAt.toISOString(),
+        messageKey: deletion.messageKey,
+        mode: deletion.mode,
+        requestedById: deletion.requestedById,
+      });
+      item.hasChanges = true;
+      bumpCursor(deletion.conversationId, 'deletions', deletion.createdAt);
+    });
+    edits.forEach((edit) => {
+      const item = ensureItem(edit.conversationId);
+
+      item.edits.push({
+        body: edit.body,
+        conversationId: edit.conversationId,
+        createdAt: edit.createdAt.toISOString(),
+        messageId: edit.messageId,
+        messageKey: edit.messageKey,
+        metadata: edit.metadata,
+        requestedById: edit.requestedById,
+      });
+      item.hasChanges = true;
+      bumpCursor(edit.conversationId, 'edits', edit.createdAt);
+    });
+    statusUpdates.forEach((update) => {
+      const item = ensureItem(update.conversationId);
+
+      item.statusUpdates.push({
+        conversationId: update.conversationId,
+        deliveredAt: update.deliveredAt?.toISOString() ?? null,
+        messageId: update.messageId,
+        messageKey: update.messageKey,
+        readAt: update.readAt?.toISOString() ?? null,
+        status: update.status as 'DELIVERED' | 'READ',
+        updatedAt: update.updatedAt.toISOString(),
+      });
+      item.hasChanges = true;
+      bumpCursor(update.conversationId, 'statusUpdates', update.updatedAt);
+    });
+
+    res.json({ items });
   } catch (error) {
     next(error);
   }
@@ -5320,7 +5525,7 @@ function hasRequiredContentAcksForParticipant(
   const clientAcks = clientAcksByUserId.get(userId) ?? new Set<MessageClientIdentity>();
 
   if (!activeClients || activeClients.size === 0) {
-    return userId === senderId || legacyMobileAckedUserIds.has(userId) || clientAcks.size > 0;
+    return userId === senderId;
   }
 
   return [...activeClients].every((client) => (

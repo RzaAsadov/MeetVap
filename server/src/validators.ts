@@ -200,6 +200,17 @@ export const bulkConversationSyncSchema = z.object({
   conversationIds: z.array(z.string().min(1)).max(100).default([]),
 });
 
+export const bulkConversationDeltaSchema = z.object({
+  items: z.array(z.object({
+    conversationId: z.string().min(1),
+    cursor: z.object({
+      deletions: z.string().max(64).nullable().optional(),
+      edits: z.string().max(64).nullable().optional(),
+      statusUpdates: z.string().max(64).nullable().optional(),
+    }).default({}),
+  })).max(100).default([]),
+});
+
 export const bulkConversationAckSchema = z.object({
   items: z.array(z.object({
     conversationId: z.string().min(1),

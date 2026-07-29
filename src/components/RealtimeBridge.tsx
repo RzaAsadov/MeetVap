@@ -112,6 +112,18 @@ export function RealtimeBridge() {
       });
     }
 
+    function shouldApplyPresenceToVisibleDirectChat(userId: string) {
+      const visibleConversationId = getVisibleChatRoomConversationId();
+
+      if (!visibleConversationId) {
+        return false;
+      }
+
+      const conversation = useAppStore.getState().conversations.find((item) => item.id === visibleConversationId);
+
+      return !!conversation && conversation.type !== 'GROUP' && conversation.otherUserId === userId;
+    }
+
     async function connectSocket() {
       const [, token] = await Promise.all([
         initializeClientInstallationId(),
@@ -260,11 +272,15 @@ export function RealtimeBridge() {
       });
 
       socket.on('presence:update', (payload: { isOnline: boolean; lastSeenAt?: string | null; showLastSeen?: boolean; userId: string }) => {
-        updateUserPresence(payload);
+        if (shouldApplyPresenceToVisibleDirectChat(payload.userId)) {
+          updateUserPresence(payload);
+        }
       });
 
       socket.on('presence:privacy', (payload: { showLastSeen: boolean; userId: string }) => {
-        updateUserPresence({ isOnline: payload.showLastSeen, showLastSeen: payload.showLastSeen, userId: payload.userId });
+        if (shouldApplyPresenceToVisibleDirectChat(payload.userId)) {
+          updateUserPresence({ isOnline: payload.showLastSeen, showLastSeen: payload.showLastSeen, userId: payload.userId });
+        }
       });
 
       socket.on('user:updated', (payload: { user?: AuthUser }) => {

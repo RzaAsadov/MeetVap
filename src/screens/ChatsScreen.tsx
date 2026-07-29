@@ -1652,12 +1652,6 @@ function createStyles() {
   messageStatusIcon: {
     marginRight: 2,
   },
-  onlineDot: {
-    backgroundColor: '#22c55e',
-    borderRadius: 5,
-    height: 10,
-    width: 10,
-  },
   title: {
     color: colors.textPrimary,
     flex: 1,
@@ -1769,7 +1763,6 @@ const ConnectedChatRow = memo(function ConnectedChatRow({
       directContactPeer={directContactPeer}
       hasUnviewedStatus={hasUnviewedStatus}
       isBlocked={conversation.type !== 'GROUP' && !!conversation.otherUserId && blockedUserIds.has(conversation.otherUserId)}
-      isOtherUserOnline={conversation.type !== 'GROUP' && getConversationOtherUser(conversation)?.isOnline === true}
       isSystemChat={isSystemChat}
       language={language}
       messageTimeText={conversation.lastMessageAt}
@@ -1793,7 +1786,6 @@ const ChatRow = memo(function ChatRow({
   directContactPeer,
   hasUnviewedStatus,
   isBlocked,
-  isOtherUserOnline,
   isSystemChat,
   language,
   messageTimeText,
@@ -1807,7 +1799,6 @@ const ChatRow = memo(function ChatRow({
   directContactPeer?: AuthUser;
   hasUnviewedStatus: boolean;
   isBlocked: boolean;
-  isOtherUserOnline: boolean;
   isSystemChat: boolean;
   language: AppLanguage;
   messageTimeText: string;
@@ -1892,11 +1883,7 @@ const ChatRow = memo(function ChatRow({
               <Text style={styles.invitedBadgeText}>{t('invited', {}, language)}</Text>
             </View>
           ) : null}
-          {isOtherUserOnline ? (
-            <View style={styles.onlineDot} />
-          ) : (
-            <Text style={styles.time}>{messageTimeText}</Text>
-          )}
+          <Text style={styles.time}>{messageTimeText}</Text>
         </View>
         <View style={styles.bottomLine}>
           <View style={styles.previewRow}>
@@ -2094,7 +2081,6 @@ function areChatRowsEqual(
     directContactPeer?: AuthUser;
     hasUnviewedStatus: boolean;
     isBlocked: boolean;
-    isOtherUserOnline: boolean;
     isSystemChat: boolean;
     language: AppLanguage;
     messageTimeText: string;
@@ -2109,7 +2095,6 @@ function areChatRowsEqual(
     directContactPeer?: AuthUser;
     hasUnviewedStatus: boolean;
     isBlocked: boolean;
-    isOtherUserOnline: boolean;
     isSystemChat: boolean;
     language: AppLanguage;
     messageTimeText: string;
@@ -2123,7 +2108,6 @@ function areChatRowsEqual(
     && previous.themeKey === next.themeKey
     && previous.isBlocked === next.isBlocked
     && previous.hasUnviewedStatus === next.hasUnviewedStatus
-    && previous.isOtherUserOnline === next.isOtherUserOnline
     && previous.isSystemChat === next.isSystemChat
     && previous.language === next.language
     && previous.messageTimeText === next.messageTimeText
@@ -2150,10 +2134,6 @@ function areChatRowsEqual(
     && previous.conversation.members?.find((member) => member.id !== previous.currentUserId)?.hasPremiumAccess === next.conversation.members?.find((member) => member.id !== next.currentUserId)?.hasPremiumAccess
     && previous.directContactPeer?.hasPremiumAccess === next.directContactPeer?.hasPremiumAccess
     && (previous.conversation.adminIds ?? []).join(',') === (next.conversation.adminIds ?? []).join(',');
-}
-
-function getConversationOtherUser(conversation: Conversation) {
-  return conversation.members?.find((member) => member.id === conversation.otherUserId) ?? null;
 }
 
 function matchesChatFilter(conversation: Conversation, filter: ChatFilter, favoriteConversationIds: string[]) {

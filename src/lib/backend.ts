@@ -187,6 +187,20 @@ export type MessageDeletionUpdate = {
   requestedById?: string | null;
 };
 
+export type ConversationDeltaCursor = {
+  deletions?: string | null;
+  edits?: string | null;
+  statusUpdates?: string | null;
+};
+
+export type ConversationDelta = {
+  cursor: ConversationDeltaCursor;
+  deletions: MessageDeletionUpdate[];
+  edits: MessageEdit[];
+  hasChanges: boolean;
+  statusUpdates: MessageStatusUpdate[];
+};
+
 export type AttestationChallengeResponse = {
   challenge: string;
   challengeId: string;
@@ -831,6 +845,25 @@ export async function listBulkMessageEdits(serverUrl: string, conversationIds: s
 
   const response = await apiRequest<{ items: Record<string, MessageEdit[]> }>('/conversations/sync/edits', {
     body: JSON.stringify({ conversationIds }),
+    method: 'POST',
+    serverUrl,
+  });
+
+  return response.items;
+}
+
+export async function listConversationDeltas(serverUrl: string, cursors: Record<string, ConversationDeltaCursor>) {
+  const items = Object.entries(cursors).map(([conversationId, cursor]) => ({
+    conversationId,
+    cursor,
+  }));
+
+  if (items.length === 0) {
+    return {};
+  }
+
+  const response = await apiRequest<{ items: Record<string, ConversationDelta> }>('/conversations/sync/deltas', {
+    body: JSON.stringify({ items }),
     method: 'POST',
     serverUrl,
   });

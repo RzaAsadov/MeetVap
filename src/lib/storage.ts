@@ -24,6 +24,8 @@ const ERASE_PIN_ALERT_CONFIG_KEY = 'messenger.erasePinAlertConfig';
 const ERASE_PIN_DELETE_PEERS_KEY = 'messenger.erasePinDeletePeers';
 const DECOY_OFFLINE_KEY = 'messenger.decoyOffline';
 const SUBSCRIPTION_STATUS_KEY = 'messenger.subscriptionStatus';
+const CONVERSATION_SYNC_CURSOR_PREFIX = 'messenger.conversationSyncCursor.';
+const CONVERSATION_MEDIA_CACHE_CURSOR_PREFIX = 'messenger.conversationMediaCacheCursor.';
 const PREMIUM_TRIAL_INTRO_SEEN_PREFIX = 'messenger.premiumTrialIntroSeen.';
 const SUBSCRIPTION_EXPIRY_NOTICE_SEEN_PREFIX = 'messenger.subscriptionExpiryNoticeSeen.';
 const VOICE_CALL_TIP_DISMISSED_PREFIX = 'messenger.voiceCallTipDismissed.';
@@ -34,6 +36,12 @@ export type ErasePinAlertConfig = {
   message: string;
   sendLiveLocation?: boolean;
   targetUserIds: string[];
+};
+
+export type StoredConversationSyncCursor = {
+  deletions?: string | null;
+  edits?: string | null;
+  statusUpdates?: string | null;
 };
 
 export async function getServerUrl() {
@@ -182,6 +190,68 @@ export async function setDeletedConversationAfter(conversationId: string, timest
 
 export async function clearDeletedConversationAfter(conversationId: string) {
   await AsyncStorage.removeItem(`${DELETED_CHAT_PREFIX}${conversationId}`);
+}
+
+export async function getStoredConversationSyncCursor(conversationId: string): Promise<StoredConversationSyncCursor> {
+  const raw = await AsyncStorage.getItem(`${CONVERSATION_SYNC_CURSOR_PREFIX}${conversationId}`);
+
+  if (!raw) {
+    return {};
+  }
+
+  try {
+    return JSON.parse(raw) as StoredConversationSyncCursor;
+  } catch {
+    return {};
+  }
+}
+
+export async function getStoredConversationSyncCursors(conversationIds: string[]) {
+  const uniqueConversationIds = Array.from(new Set(conversationIds));
+  const values = await AsyncStorage.multiGet(uniqueConversationIds.map((conversationId) => `${CONVERSATION_SYNC_CURSOR_PREFIX}${conversationId}`));
+  const cursors: Record<string, StoredConversationSyncCursor> = {};
+
+  values.forEach(([key, raw]) => {
+    const conversationId = key.slice(CONVERSATION_SYNC_CURSOR_PREFIX.length);
+
+    if (!raw) {
+      cursors[conversationId] = {};
+      return;
+    }
+
+    try {
+      cursors[conversationId] = JSON.parse(raw) as StoredConversationSyncCursor;
+    } catch {
+      cursors[conversationId] = {};
+    }
+  });
+
+  return cursors;
+}
+
+export async function setStoredConversationSyncCursor(conversationId: string, cursor: StoredConversationSyncCursor) {
+  await AsyncStorage.setItem(`${CONVERSATION_SYNC_CURSOR_PREFIX}${conversationId}`, JSON.stringify(cursor));
+}
+
+export async function setStoredConversationSyncCursors(cursors: Record<string, StoredConversationSyncCursor>) {
+  const entries = Object.entries(cursors);
+
+  if (entries.length === 0) {
+    return;
+  }
+
+  await AsyncStorage.multiSet(entries.map(([conversationId, cursor]) => [
+    `${CONVERSATION_SYNC_CURSOR_PREFIX}${conversationId}`,
+    JSON.stringify(cursor),
+  ]));
+}
+
+export async function getStoredConversationMediaCacheCursor(conversationId: string) {
+  return AsyncStorage.getItem(`${CONVERSATION_MEDIA_CACHE_CURSOR_PREFIX}${conversationId}`);
+}
+
+export async function setStoredConversationMediaCacheCursor(conversationId: string, cursor: string) {
+  await AsyncStorage.setItem(`${CONVERSATION_MEDIA_CACHE_CURSOR_PREFIX}${conversationId}`, cursor);
 }
 
 export async function getStoredCallLogs() {

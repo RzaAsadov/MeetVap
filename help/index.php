@@ -21,12 +21,12 @@ $text = [
 
 'title' => 'MeetVap is now free',
 
-'subtitle' => 'Premium security features are free for 15 days',
+'subtitle' => 'Premium security features are free for 1 year',
 
 'description' =>
 'Messaging and calling remain free forever. After the trial ends, only the advanced security features below will require a subscription.',
 
-'trial' => '15 days of free Premium access',
+'trial' => '1 year of free Premium access',
 
 'features' => [
 'PANIC PIN with pinned messages and live location',
@@ -40,12 +40,12 @@ $text = [
 
 'title' => 'MeetVap теперь бесплатен',
 
-'subtitle' => 'Премиум-инструменты безопасности бесплатны 15 дней',
+'subtitle' => 'Премиум-инструменты безопасности бесплатны 1 год',
 
 'description' =>
 'Основные сообщения и звонки остаются бесплатными. После окончания пробного периода без подписки отключатся только расширенные инструменты безопасности ниже.',
 
-'trial' => '15 дней бесплатного премиум-доступа',
+'trial' => '1 год бесплатного премиум-доступа',
 
 'features' => [
 'PANIC PIN с закрепленными сообщениями и живой геопозицией',
@@ -59,12 +59,12 @@ $text = [
 
 'title' => 'MeetVap artık ücretsiz',
 
-'subtitle' => 'Premium güvenlik özellikleri 15 gün ücretsiz',
+'subtitle' => 'Premium güvenlik özellikleri 1 yıl ücretsiz',
 
 'description' =>
 'Mesajlaşma ve aramalar her zaman ücretsiz kalır. Deneme süresi sona erdiğinde yalnızca aşağıdaki gelişmiş güvenlik özellikleri abonelik gerektirir.',
 
-'trial' => '15 gün ücretsiz Premium erişim',
+'trial' => '1 yıl ücretsiz Premium erişim',
 
 'features' => [
 'Sabitlenmiş mesajlar ve canlı konum ile PANIC PIN',

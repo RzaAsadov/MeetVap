@@ -103,14 +103,6 @@ export function createSocketServer(server: Server) {
     socket.join(`user:${userId}`);
     socket.emit('presence:ready', { userId });
     void recordUserClientActivity(userId, messageClient);
-    if (onlineCount === 0) {
-      void prisma.user.update({
-        data: { lastSeenAt: new Date() },
-        where: { id: userId },
-      }).then((user) => {
-        void emitUserPresence(io, user.id, true, user.showLastSeen, user.lastSeenAt);
-      }).catch(() => undefined);
-    }
 
     socket.on('conversation:join', async (conversationId: string, ack?: (response: { ok: boolean; error?: string }) => void) => {
       const member = await prisma.conversationMember.findUnique({
@@ -159,11 +151,11 @@ export function createSocketServer(server: Server) {
 
     socket.on('app:state', (payload: { isForeground?: boolean; state?: string } | undefined) => {
       const isForeground = payload?.isForeground === true || payload?.state === 'active';
-      updateSocketForegroundState(socket, userId, isForeground);
+      void updateSocketForegroundState(io, socket, userId, isForeground);
     });
 
     socket.on('disconnect', () => {
-      updateSocketForegroundState(socket, userId, false);
+      void updateSocketForegroundState(io, socket, userId, false);
 
       const currentCount = onlineSocketsByUser.get(userId) ?? 1;
       const nextCount = Math.max(0, currentCount - 1);
@@ -186,7 +178,7 @@ export function createSocketServer(server: Server) {
   return io;
 }
 
-function updateSocketForegroundState(socket: { data: Record<string, unknown> }, userId: string, isForeground: boolean) {
+async function updateSocketForegroundState(io: SocketServer, socket: { data: Record<string, unknown> }, userId: string, isForeground: boolean) {
   const wasForeground = socket.data.isForeground === true;
 
   if (wasForeground === isForeground) {
@@ -196,7 +188,15 @@ function updateSocketForegroundState(socket: { data: Record<string, unknown> }, 
   socket.data.isForeground = isForeground;
 
   if (isForeground) {
-    foregroundSocketsByUser.set(userId, (foregroundSocketsByUser.get(userId) ?? 0) + 1);
+    const previousCount = foregroundSocketsByUser.get(userId) ?? 0;
+
+    foregroundSocketsByUser.set(userId, previousCount + 1);
+    if (previousCount === 0) {
+      await prisma.user.update({
+        data: { lastSeenAt: new Date() },
+        where: { id: userId },
+      }).then((user) => emitUserPresence(io, user.id, true, user.showLastSeen, user.lastSeenAt)).catch(() => undefined);
+    }
     return;
   }
 
@@ -208,6 +208,10 @@ function updateSocketForegroundState(socket: { data: Record<string, unknown> }, 
   }
 
   foregroundSocketsByUser.delete(userId);
+  await prisma.user.update({
+    data: { lastSeenAt: new Date() },
+    where: { id: userId },
+  }).then((user) => emitUserPresence(io, user.id, false, user.showLastSeen, user.lastSeenAt)).catch(() => undefined);
 }
 
 function getSocketAuthToken(auth: Record<string, unknown>, authorization?: string) {

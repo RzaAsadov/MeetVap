@@ -1,6 +1,6 @@
 import { Conversation, ConversationMember, Message, MessageStatus, Prisma } from '@prisma/client';
 
-import { isUserCurrentlyOnline } from './socket';
+import { isUserCurrentlyForeground } from './socket';
 import { isMeetVapSystemUsername } from './systemAccount';
 import { AuthUser } from './types';
 import { isConversationMembershipMuted } from './conversationMute';
@@ -35,7 +35,7 @@ export function serializeUser(user: AuthUser, options?: { revealNickname?: boole
     hasPremiumAccess: user.hasPremiumAccess === true,
     id: user.id,
     isSystem: isMeetVapSystemUsername(user.username),
-    isOnline: user.showLastSeen === false ? false : isUserCurrentlyOnline(user.id),
+    isOnline: user.showLastSeen === false ? false : isUserCurrentlyForeground(user.id),
     lastSeenAt: user.showLastSeen === false ? null : user.lastSeenAt?.toISOString() ?? null,
     onlyContactsCanCall: user.onlyContactsCanCall === true,
     preventPeerScreenshots: user.preventPeerScreenshots !== false,
