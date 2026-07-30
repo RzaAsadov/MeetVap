@@ -286,7 +286,7 @@ export type AppState = {
   conversationsQuery: string;
   conversationsFilter: ConversationListFilter;
   conversationsLastFetchedAt: number;
-  totalUnreadConversations: number;
+  unreadConversationIds: string[];
   isRefreshingConversations: boolean;
   isDecoyOffline: boolean;
   language: AppLanguage;
@@ -417,7 +417,7 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
   conversationsQuery: '',
   conversationsFilter: 'all',
   conversationsLastFetchedAt: 0,
-  totalUnreadConversations: 0,
+  unreadConversationIds: [],
   isRefreshingConversations: false,
   hasLoadedConversations: false,
   hasMoreConversations: false,
@@ -473,7 +473,7 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
       conversationsQuery: '',
       conversationsFilter: 'all',
       conversationsLastFetchedAt: storedConversationsLoadedAt,
-      totalUnreadConversations: visibleStoredConversations.filter((conversation) => conversation.unreadCount > 0 || conversation.myGroupInvitePending).length,
+      unreadConversationIds: getUnreadConversationIds(visibleStoredConversations),
       hasLoadedConversations: visibleStoredConversations.length > 0,
       hasMoreConversations: visibleStoredConversations.length >= CONVERSATION_PAGE_SIZE,
       isBootstrapping: false,
@@ -499,7 +499,7 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
             set({
               conversations: repairedConversations,
               conversationsNextOffset: repairedConversations.length,
-              totalUnreadConversations: repairedConversations.filter((conversation) => conversation.unreadCount > 0 || conversation.myGroupInvitePending).length,
+              unreadConversationIds: getUnreadConversationIds(repairedConversations),
             });
             void setStoredConversations(repairedConversations);
           })
@@ -524,7 +524,7 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
           if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
             await Promise.all([clearAuthToken(), clearStoredUser(), clearStoredSubscriptionStatus()]);
             clearNativeQuickReplyCredentials();
-            set({ blockedUsers: [], callLogs: [], catalogUrl: null, helpUrl: null, contacts: [], conversations: [], conversationsNextOffset: 0, conversationsQuery: '', hasLoadedConversations: false, hasMoreConversations: false, isCheckingSubscription: false, isLoadingMoreConversations: false, messagesByConversation: {}, subscriptionStatus: null, user: null });
+            set({ blockedUsers: [], callLogs: [], catalogUrl: null, helpUrl: null, contacts: [], conversations: [], conversationsNextOffset: 0, conversationsQuery: '', hasLoadedConversations: false, hasMoreConversations: false, isCheckingSubscription: false, isLoadingMoreConversations: false, messagesByConversation: {}, subscriptionStatus: null, unreadConversationIds: [], user: null });
             return;
           }
 
@@ -590,6 +590,7 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
         isLoadingConversations: false,
         isLoadingMoreConversations: false,
         messagesByConversation: {},
+        unreadConversationIds: [],
       });
       await Promise.all([
         setStoredDecoyOffline(true),
@@ -668,6 +669,7 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
       isLoadingMoreConversations: false,
       messagesByConversation: {},
       subscriptionStatus: null,
+      unreadConversationIds: [],
       serverUrl,
       user: response.user,
     });
@@ -718,6 +720,7 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
       isLoadingMoreConversations: false,
       messagesByConversation: {},
       subscriptionStatus: null,
+      unreadConversationIds: [],
       user: response.user,
     });
     try {
@@ -739,7 +742,7 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
 
     await deleteAccountRequest(serverUrl, password);
     await clearLocalSession();
-    set({ blockedUsers: [], callLogs: [], catalogUrl: null, helpUrl: null, contacts: [], conversations: [], conversationsNextOffset: 0, conversationsQuery: '', hasLoadedConversations: false, hasMoreConversations: false, isCheckingSubscription: false, isLoadingMoreConversations: false, messagesByConversation: {}, subscriptionStatus: null, user: null });
+    set({ blockedUsers: [], callLogs: [], catalogUrl: null, helpUrl: null, contacts: [], conversations: [], conversationsNextOffset: 0, conversationsQuery: '', hasLoadedConversations: false, hasMoreConversations: false, isCheckingSubscription: false, isLoadingMoreConversations: false, messagesByConversation: {}, subscriptionStatus: null, unreadConversationIds: [], user: null });
   },
 
   async wipeChatsOnlyData(preservePeerConversationIds = []) {
@@ -795,6 +798,7 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
       hasMoreConversations: false,
       isLoadingMoreConversations: false,
       messagesByConversation: {},
+      unreadConversationIds: [],
       uploadProgressByMessageId: {},
     });
   },
@@ -864,6 +868,8 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
 
     let request!: Promise<void>;
     request = (async () => {
+      const unreadConversationIdsAtRequestStart = useAppStore.getState().unreadConversationIds;
+
       try {
         const response = await listConversations(serverUrl, normalizedQuery, {
           filter: serverFilter,
@@ -878,6 +884,7 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
           serverCount: response.conversations.length,
           serverPreview: summarizeConversationDiagnostics(response.conversations),
           totalUnreadConversations: response.totalUnreadConversations,
+          unreadConversationIdCount: response.unreadConversationIds?.length,
         });
         const serverConversations = await applyLocalConversationClearBoundaries(response.conversations);
         const conversations = await repairConversationPreviewsWithStoredMessages(
@@ -896,7 +903,12 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
           conversationsQuery: normalizedQuery,
           hasLoadedConversations: true,
           hasMoreConversations: response.hasMore,
-          totalUnreadConversations: response.totalUnreadConversations,
+          unreadConversationIds: resolveUnreadConversationIds(
+            response.unreadConversationIds,
+            conversations,
+            unreadConversationIdsAtRequestStart,
+            useAppStore.getState().unreadConversationIds,
+          ),
         });
         scheduleStoredConversationsPersist(LOW_PRIORITY_MESSAGE_MAINTENANCE_DELAY_MS);
         if (!normalizedQuery && serverFilter === 'all') {
@@ -979,6 +991,8 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
 
     let request!: Promise<void>;
     request = (async () => {
+      const unreadConversationIdsAtRequestStart = useAppStore.getState().unreadConversationIds;
+
       try {
         const response = await listConversations(serverUrl, normalizedQuery, {
           filter: serverFilter,
@@ -999,7 +1013,12 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
           conversationsLastFetchedAt: Date.now(),
           conversationsNextOffset: response.nextOffset,
           hasMoreConversations: response.hasMore,
-          totalUnreadConversations: response.totalUnreadConversations,
+          unreadConversationIds: resolveUnreadConversationIds(
+            response.unreadConversationIds,
+            conversations,
+            unreadConversationIdsAtRequestStart,
+            useAppStore.getState().unreadConversationIds,
+          ),
         });
         scheduleStoredConversationsPersist(LOW_PRIORITY_MESSAGE_MAINTENANCE_DELAY_MS);
         if (!normalizedQuery && serverFilter === 'all') {
@@ -1102,16 +1121,11 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
     }
     rememberConversationReadThrough(conversationId);
     set((state) => {
-      const currentConversation = state.conversations.find((conversation) => conversation.id === conversationId);
-      const hadUnread = (currentConversation?.unreadCount ?? 0) > 0 || currentConversation?.myGroupInvitePending === true;
-
       return {
         conversations: state.conversations.map((conversation) => (
           conversation.id === conversationId ? { ...conversation, unreadCount: 0 } : conversation
         )),
-        totalUnreadConversations: hadUnread
-          ? Math.max(0, state.totalUnreadConversations - 1)
-          : state.totalUnreadConversations,
+        unreadConversationIds: removeUnreadConversationId(state.unreadConversationIds, conversationId),
       };
     });
     scheduleStoredConversationsPersist();
@@ -1139,7 +1153,8 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
 
           return { ...conversation, unreadCount: 0 };
         }),
-        totalUnreadConversations: 0,
+        unreadConversationIds: response.unreadConversationIds ??
+          state.conversations.filter((conversation) => conversation.myGroupInvitePending).map((conversation) => conversation.id),
       }));
     } catch {
       set({ connectionNotice: 'No connection to server. Read status will sync later.', connectionStatus: 'offline' });
@@ -1680,6 +1695,7 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
       return {
         conversations: state.conversations.filter((conversation) => conversation.id !== conversationId),
         messagesByConversation: nextMessages,
+        unreadConversationIds: removeUnreadConversationId(state.unreadConversationIds, conversationId),
       };
     });
     scheduleStoredConversationsPersist();
@@ -1713,6 +1729,7 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
         ...state.messagesByConversation,
         [conversationId]: [],
       },
+      unreadConversationIds: removeUnreadConversationId(state.unreadConversationIds, conversationId),
     }));
     scheduleStoredConversationsPersist();
   },
@@ -1861,6 +1878,7 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
 
     set((state) => ({
       conversations: upsertConversation(state.conversations, conversation),
+      unreadConversationIds: updateUnreadConversationIdsForConversation(state.unreadConversationIds, conversation),
     }));
     scheduleStoredConversationsPersist();
   },
@@ -1876,6 +1894,7 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
 
     set((state) => ({
       conversations: upsertConversation(state.conversations, conversation),
+      unreadConversationIds: updateUnreadConversationIdsForConversation(state.unreadConversationIds, conversation),
     }));
     scheduleStoredConversationsPersist();
 
@@ -1893,6 +1912,7 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
     set((state) => ({
       conversations: state.conversations.filter((conversation) => conversation.id !== conversationId),
       messagesByConversation: omitRecordKey(state.messagesByConversation, conversationId),
+      unreadConversationIds: removeUnreadConversationId(state.unreadConversationIds, conversationId),
     }));
     await removeStoredMessages(conversationId);
     scheduleStoredConversationsPersist();
@@ -1943,6 +1963,7 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
     set((state) => ({
       conversations: state.conversations.filter((conversation) => conversation.id !== conversationId),
       messagesByConversation: omitRecordKey(state.messagesByConversation, conversationId),
+      unreadConversationIds: removeUnreadConversationId(state.unreadConversationIds, conversationId),
     }));
     await removeStoredMessages(conversationId);
     scheduleStoredConversationsPersist();
@@ -1961,6 +1982,7 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
       set((state) => ({
         conversations: state.conversations.filter((item) => item.id !== conversationId),
         messagesByConversation: omitRecordKey(state.messagesByConversation, conversationId),
+        unreadConversationIds: removeUnreadConversationId(state.unreadConversationIds, conversationId),
       }));
       await removeStoredMessages(conversationId);
     } else {
@@ -2485,7 +2507,6 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
       const unreadDelta = getUnreadCountDelta(nextMessage, currentMessage, state.user?.id);
       const existingConversation = state.conversations.find((conversation) => conversation.id === nextMessage.conversationId);
       const revivedConversation = existingConversation ?? createConversationFromIncomingMessage(nextMessage, state.user?.id);
-      const hadUnreadBefore = (existingConversation?.unreadCount ?? 0) > 0 || existingConversation?.myGroupInvitePending === true;
       const conversations = revivedConversation
         ? upsertConversation(state.conversations, {
             ...applyMessagePreviewToConversation(revivedConversation, mergedMessage),
@@ -2497,9 +2518,9 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
 
       return {
         conversations,
-        totalUnreadConversations: !hadUnreadBefore && hasUnreadNow && unreadDelta > 0
-          ? state.totalUnreadConversations + 1
-          : state.totalUnreadConversations,
+        unreadConversationIds: hasUnreadNow && unreadDelta > 0
+          ? addUnreadConversationId(state.unreadConversationIds, nextMessage.conversationId)
+          : state.unreadConversationIds,
         messagesByConversation: {
           ...state.messagesByConversation,
           [nextMessage.conversationId]: nextMessages,
@@ -2649,6 +2670,7 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
         conversations: state.conversations.map((conversation) => (
           conversation.id === conversationId ? { ...conversation, unreadCount: 0 } : conversation
         )),
+        unreadConversationIds: removeUnreadConversationId(state.unreadConversationIds, conversationId),
       }));
       scheduleStoredConversationsPersist();
       return;
@@ -2664,7 +2686,7 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
     olderLocalMessageRequests.clear();
     olderLocalMessagesExhaustedBeforeByConversation.clear();
 
-    set({ blockedUsers: [], callLogs: [], catalogUrl: null, helpUrl: null, contacts: [], conversations: [], conversationsNextOffset: 0, conversationsQuery: '', hasLoadedConversations: false, hasMoreConversations: false, isCheckingSubscription: false, isLoadingMoreConversations: false, messagesByConversation: {}, subscriptionStatus: null, user: null });
+    set({ blockedUsers: [], callLogs: [], catalogUrl: null, helpUrl: null, contacts: [], conversations: [], conversationsNextOffset: 0, conversationsQuery: '', hasLoadedConversations: false, hasMoreConversations: false, isCheckingSubscription: false, isLoadingMoreConversations: false, messagesByConversation: {}, subscriptionStatus: null, unreadConversationIds: [], user: null });
   },
 }));
 
@@ -4477,6 +4499,60 @@ function getConversationActivityTime(conversation: Conversation) {
   const time = value ? new Date(value).getTime() : 0;
 
   return Number.isNaN(time) ? 0 : time;
+}
+
+function getUnreadConversationIds(conversations: Conversation[]) {
+  return conversations
+    .filter((conversation) => conversation.unreadCount > 0 || conversation.myGroupInvitePending === true)
+    .map((conversation) => conversation.id);
+}
+
+function resolveUnreadConversationIds(
+  authoritativeIds: string[] | undefined,
+  conversations: Conversation[],
+  idsAtRequestStart: string[],
+  currentIds: string[],
+) {
+  if (!authoritativeIds) {
+    return getUnreadConversationIds(conversations);
+  }
+
+  const unreadIds = new Set(authoritativeIds.filter(Boolean));
+  const idsAtStart = new Set(idsAtRequestStart);
+  const currentUnreadIds = new Set(currentIds);
+  const locallyChangedIds = new Set([...idsAtStart, ...currentUnreadIds]);
+
+  locallyChangedIds.forEach((conversationId) => {
+    if (idsAtStart.has(conversationId) === currentUnreadIds.has(conversationId)) {
+      return;
+    }
+
+    if (currentUnreadIds.has(conversationId)) {
+      unreadIds.add(conversationId);
+    } else {
+      unreadIds.delete(conversationId);
+    }
+  });
+
+  return Array.from(unreadIds);
+}
+
+function addUnreadConversationId(conversationIds: string[], conversationId: string) {
+  return conversationIds.includes(conversationId)
+    ? conversationIds
+    : [...conversationIds, conversationId];
+}
+
+function removeUnreadConversationId(conversationIds: string[], conversationId: string) {
+  return conversationIds.includes(conversationId)
+    ? conversationIds.filter((id) => id !== conversationId)
+    : conversationIds;
+}
+
+function updateUnreadConversationIdsForConversation(conversationIds: string[], conversation: Conversation) {
+  return conversation.unreadCount > 0 || conversation.myGroupInvitePending === true
+    ? addUnreadConversationId(conversationIds, conversation.id)
+    : removeUnreadConversationId(conversationIds, conversation.id);
 }
 
 function rememberConversationReadThrough(conversationId: string, readAt?: string) {

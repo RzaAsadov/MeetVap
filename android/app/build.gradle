@@ -101,8 +101,8 @@ android {
         applicationId 'com.meetvap.messenger'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 298
-        versionName "22.8"
+        versionCode 299
+        versionName "22.9"
 
         missingDimensionStrategy 'store', 'play'
         manifestPlaceholders = [googleMapsApiKey: googleMapsApiKey]
@@ -175,8 +175,10 @@ dependencies {
     implementation("com.facebook.react:react-android")
     implementation(platform("com.google.firebase:firebase-bom:34.16.0"))
     implementation("com.google.firebase:firebase-messaging")
-    implementation("androidx.media3:media3-common:1.10.1")
-    implementation("androidx.media3:media3-transformer:1.10.1")
+    // Keep Media3 aligned with expo-video. Newer Media3 releases change the
+    // LoadControl ABI and crash Expo's video player at runtime.
+    implementation("androidx.media3:media3-common:1.8.0")
+    implementation("androidx.media3:media3-transformer:1.8.0")
     implementation("com.google.android.play:integrity:1.6.0")
 
     def isGifEnabled = (findProperty('expo.gif.enabled') ?: "") == "true";

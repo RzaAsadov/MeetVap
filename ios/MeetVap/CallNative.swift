@@ -345,6 +345,21 @@ class CallNative: NSObject {
     CallNativeLiveVoiceEffectController.shared.setEffect(effectId)
   }
 
+  @objc(beginLiveVoiceEffectSession:)
+  func beginLiveVoiceEffectSession(_ effectId: String) {
+    CallNativeLiveVoiceEffectController.shared.beginSession(effectId)
+  }
+
+  @objc(getLiveVoiceEffect:rejecter:)
+  func getLiveVoiceEffect(_ resolve: RCTPromiseResolveBlock, rejecter reject: RCTPromiseRejectBlock) {
+    resolve(CallNativeLiveVoiceEffectController.shared.effectId)
+  }
+
+  @objc(getLiveVoiceEffectStatus:rejecter:)
+  func getLiveVoiceEffectStatus(_ resolve: RCTPromiseResolveBlock, rejecter reject: RCTPromiseRejectBlock) {
+    resolve(CallNativeLiveVoiceEffectController.shared.status())
+  }
+
   @objc(processVoiceMessage:effectId:resolver:rejecter:)
   func processVoiceMessage(
     _ uri: String,
@@ -762,6 +777,7 @@ private final class CallNativeOutgoingRingback: NSObject, AVAudioPlayerDelegate 
   private var interruptionObserver: NSObjectProtocol?
   private var isVideoMode = false
   private var nextReplayAt: Date?
+  private var preferredRouteId: String?
   private var sourceURL: URL?
 
   func start(uri: String, mode: String) -> Bool {
@@ -769,13 +785,17 @@ private final class CallNativeOutgoingRingback: NSObject, AVAudioPlayerDelegate 
     isVideoMode = isVideo
 
     do {
+      if player == nil {
+        stop()
+        preferredRouteId = isVideo ? nil : "earpiece"
+      }
+
       try configureRoute(isVideo: isVideo)
 
       if player != nil {
         return true
       }
 
-      stop()
       guard let url = URL(string: uri), url.isFileURL else {
         return false
       }
@@ -802,7 +822,18 @@ private final class CallNativeOutgoingRingback: NSObject, AVAudioPlayerDelegate 
     player?.stop()
     player = nil
     nextReplayAt = nil
+    preferredRouteId = nil
     sourceURL = nil
+  }
+
+  func setPreferredRoute(_ routeId: String) {
+    preferredRouteId = routeId
+
+    guard player != nil else {
+      return
+    }
+
+    try? applyPreferredRoute(isVideo: isVideoMode)
   }
 
   private func configureRoute(isVideo: Bool) throws {
@@ -822,15 +853,26 @@ private final class CallNativeOutgoingRingback: NSObject, AVAudioPlayerDelegate 
   }
 
   private func applyPreferredRoute(isVideo: Bool) throws {
-    if !isVideo {
+    let routeId = preferredRouteId
+
+    if routeId == "speaker" {
       try session.setPreferredInput(
         session.availableInputs?.first(where: { $0.portType == .builtInMic })
       )
-      try session.overrideOutputAudioPort(.none)
+      try session.overrideOutputAudioPort(.speaker)
       return
     }
 
-    if let externalInput = session.availableInputs?.first(where: isExternalInput) {
+    if let routeId, routeId.hasPrefix("input:") {
+      let uid = String(routeId.dropFirst("input:".count))
+      if let externalInput = session.availableInputs?.first(where: { $0.uid == uid }) {
+        try session.overrideOutputAudioPort(.none)
+        try session.setPreferredInput(externalInput)
+        return
+      }
+    }
+
+    if isVideo, let externalInput = session.availableInputs?.first(where: isExternalInput) {
       try session.overrideOutputAudioPort(.none)
       try session.setPreferredInput(externalInput)
       return
@@ -1069,6 +1111,7 @@ private final class CallNativeAudioRouteManager {
 
     if routeId == "speaker" {
       try session.overrideOutputAudioPort(.speaker)
+      CallNativeOutgoingRingback.shared.setPreferredRoute(routeId)
       return true
     }
 
@@ -1078,6 +1121,7 @@ private final class CallNativeAudioRouteManager {
       try session.setPreferredInput(
         session.availableInputs?.first(where: { $0.portType == .builtInMic })
       )
+      CallNativeOutgoingRingback.shared.setPreferredRoute(routeId)
       return true
     }
 
@@ -1091,6 +1135,7 @@ private final class CallNativeAudioRouteManager {
     }
 
     try session.setPreferredInput(input)
+    CallNativeOutgoingRingback.shared.setPreferredRoute(routeId)
     return true
   }
 
@@ -2033,9 +2078,21 @@ private final class CallNativeLiveVoiceEffectController {
   private let processor = CallNativeLiveVoiceEffectProcessor()
   private var isRegistered = false
 
+  var effectId: String {
+    processor.requestedEffectId
+  }
+
   func setEffect(_ effectId: String) {
     processor.setEffect(effectId)
+    applyRegistration()
+  }
 
+  func beginSession(_ effectId: String) {
+    processor.beginSession(effectId)
+    applyRegistration()
+  }
+
+  private func applyRegistration() {
     if processor.isPassthrough {
       if isRegistered {
         LKAudioProcessingManager.sharedInstance().removeCapturePostProcessor(processor)
@@ -2048,6 +2105,13 @@ private final class CallNativeLiveVoiceEffectController {
       LKAudioProcessingManager.sharedInstance().addCapturePostProcessor(processor)
       isRegistered = true
     }
+  }
+
+  func status() -> [String: Any] {
+    var status = processor.status()
+    status["attached"] = isRegistered
+    status["factoryInstalled"] = true
+    return status
   }
 }
 
@@ -2073,10 +2137,20 @@ private final class CallNativeLiveVoiceEffectProcessor: NSObject, LKExternalAudi
   private var pitchPhaseByChannel = [Float](repeating: 0, count: 2)
   private var pitchWriteIndexByChannel = [Int](repeating: 0, count: 2)
   private var pitchRingBuffers = Array(repeating: [Float](repeating: 0, count: 96000), count: 2)
+  private var processedBuffers = 0
+  private var processedFrames = 0
+  private var lastProcessedEffect = Effect.normal
 
   var isPassthrough: Bool {
     lock.lock()
     let result = requestedEffect == .normal
+    lock.unlock()
+    return result
+  }
+
+  var requestedEffectId: String {
+    lock.lock()
+    let result = Self.effectId(requestedEffect)
     lock.unlock()
     return result
   }
@@ -2088,6 +2162,17 @@ private final class CallNativeLiveVoiceEffectProcessor: NSObject, LKExternalAudi
       requestedEffect = nextEffect
       resetRequested = true
     }
+    lock.unlock()
+  }
+
+  func beginSession(_ effectId: String) {
+    lock.lock()
+    requestedEffect = Self.normalize(effectId)
+    activeEffect = .normal
+    resetRequested = true
+    processedBuffers = 0
+    processedFrames = 0
+    lastProcessedEffect = .normal
     lock.unlock()
   }
 
@@ -2122,10 +2207,29 @@ private final class CallNativeLiveVoiceEffectProcessor: NSObject, LKExternalAudi
         samples[frame] = normalizedToFloatS16(apply(effect: currentEffect, input: input, channel: channel))
       }
     }
+
+    lock.lock()
+    processedBuffers += 1
+    processedFrames += frameCount
+    lastProcessedEffect = currentEffect
+    lock.unlock()
   }
 
   func audioProcessingRelease() {
     resetProcessingState()
+  }
+
+  func status() -> [String: Any] {
+    lock.lock()
+    let result: [String: Any] = [
+      "effectId": Self.effectId(requestedEffect),
+      "lastProcessedEffectId": Self.effectId(lastProcessedEffect),
+      "processedBuffers": processedBuffers,
+      "processedFrames": processedFrames,
+      "sampleScale": "float_s16",
+    ]
+    lock.unlock()
+    return result
   }
 
   private func pullControlState() -> (effect: Effect, shouldReset: Bool) {
@@ -2321,6 +2425,19 @@ private final class CallNativeLiveVoiceEffectProcessor: NSObject, LKExternalAudi
       return .helium
     default:
       return .normal
+    }
+  }
+
+  private static func effectId(_ effect: Effect) -> String {
+    switch effect {
+    case .deep:
+      return "deep"
+    case .bright:
+      return "bright"
+    case .helium:
+      return "helium"
+    case .normal:
+      return "normal"
     }
   }
 

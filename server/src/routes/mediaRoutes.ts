@@ -38,10 +38,10 @@ mediaRoutes.get('/:mediaId/file', async (req, res, next) => {
       throw new HttpError(404, 'Media not found');
     }
 
-    res.type(media.mimeType);
-    res.setHeader('Cache-Control', 'private, max-age=86400');
     await fs.access(filePath);
     const fileStats = await fs.stat(filePath);
+    res.type(media.mimeType);
+    res.setHeader('Cache-Control', 'private, max-age=86400');
     res.setHeader('Accept-Ranges', 'bytes');
 
     if (req.headers.range) {

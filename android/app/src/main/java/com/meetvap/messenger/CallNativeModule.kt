@@ -872,7 +872,12 @@ class CallNativeModule(private val reactContext: ReactApplicationContext) : Reac
     val activeExternalDevice = devices.firstOrNull {
       callAudioRouteId(it) == activeRouteId && (isBluetoothCallDevice(it) || isWiredCallDevice(it))
     }
-    val preferredDevice = if (isVideoMode) {
+    val selectedRouteId = selectedCallAudioRouteId
+    val selectedDevice = selectedRouteId?.let { routeId ->
+      devices.firstOrNull { callAudioRouteId(it) == routeId }
+    }
+    val selectedBuiltInRouteId = selectedRouteId?.takeIf { it == "speaker" || it == "earpiece" }
+    val preferredDevice = selectedDevice ?: if (isVideoMode) {
       activeExternalDevice
         ?: devices.firstOrNull(::isBluetoothCallDevice)
         ?: devices.firstOrNull(::isWiredCallDevice)
@@ -883,14 +888,20 @@ class CallNativeModule(private val reactContext: ReactApplicationContext) : Reac
         ?: devices.firstOrNull(::isBluetoothCallDevice)
     }
 
-    val preferredRouteId = preferredDevice?.let(::callAudioRouteId)
+    val preferredRouteId = selectedDevice?.let(::callAudioRouteId)
+      ?: selectedBuiltInRouteId
+      ?: preferredDevice?.let(::callAudioRouteId)
       ?: if (isVideoMode) "speaker" else "earpiece"
 
     if (activeRouteId != preferredRouteId) {
       selectCallAudioRouteInternal(preferredRouteId)
     }
 
-    return preferredDevice
+    return if (selectedBuiltInRouteId != null && selectedDevice == null) {
+      null
+    } else {
+      preferredDevice
+    }
   }
 
   @ReactMethod

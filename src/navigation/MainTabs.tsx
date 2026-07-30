@@ -47,7 +47,7 @@ export function MainTabs() {
   const insets = useSafeAreaInsets();
   const isDarkMode = useAppStore((state) => state.isDarkMode);
   const language = useAppStore((state) => state.language);
-  const unreadChatsCount = useAppStore((state) => state.totalUnreadConversations);
+  const unreadChatsCount = useAppStore((state) => state.unreadConversationIds.length);
   const hasUnviewedStatuses = useAppStore((state) => state.hasUnviewedStatuses);
   const labels = {
     calls: t('calls', {}, language),

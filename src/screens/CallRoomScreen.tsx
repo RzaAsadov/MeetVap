@@ -52,6 +52,7 @@ const OUTGOING_RINGBACK = require('../../assets/ringing.mp3') as number;
 const activeCallMicrophonePublishPromises = new WeakMap<LiveKitLocalParticipant, Promise<LocalTrackPublication | undefined>>();
 const CONNECTION_LOSS_TIMEOUT_MS = 30_000;
 const PEER_CONNECTION_NOTICE_GRACE_MS = 1_200;
+const PROXIMITY_EARPIECE_STABLE_MS = 400;
 const VIDEO_CALL_CHROME_VISIBLE_MS = 5_000;
 const VIDEO_CALL_KEEP_AWAKE_TAG = 'MeetVapVideoCall';
 const VOICE_EFFECTS: { descriptionKey: string; icon: keyof typeof Ionicons.glyphMap; id: VoiceEffectId; titleKey: string }[] = [
@@ -2449,6 +2450,9 @@ export function CallRoomScreen({ navigation, route }: Props) {
     const selectionVersion = ++callAudioRouteSelectionVersion;
     requestedCallAudioRouteIdRef.current = audioRoute.id;
     setCallAudioRoutePickerOpen(false);
+    if (audioRoute.type === 'speaker' || audioRoute.type === 'earpiece') {
+      setSpeakerOn(audioRoute.type === 'speaker');
+    }
 
     try {
       const routes = await selectExplicitCallAudioRoute(audioRoute, selectionVersion, undefined, canApplyCallAudioRoute);
@@ -2466,7 +2470,8 @@ export function CallRoomScreen({ navigation, route }: Props) {
 
   const toggleCallSpeaker = useCallback(async () => {
     const activeRoute = callAudioRoutes.find((item) => item.isActive);
-    const nextRoute = activeRoute?.type === 'speaker'
+    const nextSpeaker = activeRoute ? activeRoute.type !== 'speaker' : !isSpeakerOn;
+    const nextRoute = !nextSpeaker
       ? findPreferredNonSpeakerRoute(callAudioRoutes)
       : callAudioRoutes.find((item) => item.type === 'speaker');
 
@@ -2475,9 +2480,17 @@ export function CallRoomScreen({ navigation, route }: Props) {
       return;
     }
 
-    const nextSpeaker = !isSpeakerOn;
+    const fallbackRoute: CallAudioRoute = {
+      id: nextSpeaker ? 'speaker' : 'earpiece',
+      isActive: false,
+      name: nextSpeaker ? 'Speaker' : 'Phone',
+      type: nextSpeaker ? 'speaker' : 'earpiece',
+    };
+    hasExplicitCallAudioRouteSelection = true;
+    explicitCallAudioRoute = fallbackRoute;
+    callAudioRouteSelectionVersion += 1;
     setSpeakerOn(nextSpeaker);
-    await forceCallAudioRoute(nextSpeaker, false, undefined, canApplyCallAudioRoute).catch(() => setSpeakerOn(!nextSpeaker));
+    await forceCallAudioRoute(nextSpeaker, false, undefined, canApplyCallAudioRoute).catch(() => undefined);
   }, [callAudioRoutes, canApplyCallAudioRoute, isSpeakerOn, selectCallAudioRoute]);
 
   const showCallAudioRoutePicker = useCallback(() => {
@@ -3003,16 +3016,27 @@ export function CallRoomScreen({ navigation, route }: Props) {
     setMiniCallPosition((current) => current ? clampMiniCallPosition(current, miniCallBounds) : current);
   }, [miniCallBounds]);
 
+  const activeCallAudioRouteType = callAudioRoutes.find((item) => item.isActive)?.type;
+
   useEffect(() => {
-    const activeRoute = callAudioRoutes.find((item) => item.isActive);
     const shouldUseProximityScreenOff = route.params.mode === 'voice' &&
       !!connectedAt &&
-      (activeRoute ? activeRoute.type === 'earpiece' : !isSpeakerOn);
+      (activeCallAudioRouteType ? activeCallAudioRouteType === 'earpiece' : !isSpeakerOn);
 
-    setNativeProximityScreenOffEnabled(shouldUseProximityScreenOff);
+    if (!shouldUseProximityScreenOff) {
+      setNativeProximityScreenOffEnabled(false);
+      return undefined;
+    }
 
-    return () => setNativeProximityScreenOffEnabled(false);
-  }, [callAudioRoutes, connectedAt, isSpeakerOn, route.params.mode]);
+    const timeout = setTimeout(() => {
+      setNativeProximityScreenOffEnabled(true);
+    }, PROXIMITY_EARPIECE_STABLE_MS);
+
+    return () => {
+      clearTimeout(timeout);
+      setNativeProximityScreenOffEnabled(false);
+    };
+  }, [activeCallAudioRouteType, connectedAt, isSpeakerOn, route.params.mode]);
 
   const minimizeCall = useCallback(async () => {
     if (!liveKitToken || isLockedCallAccess) {
@@ -4637,7 +4661,7 @@ function CallAudioPublisher({
       const isEffectAttached = await confirmNativeLiveVoiceEffectAttached(voiceEffectId);
       const isEffectProcessing = await waitForNativeLiveVoiceProcessing(voiceEffectId);
 
-      if (Platform.OS === 'android' && voiceEffectId !== DEFAULT_VOICE_EFFECT_ID && (!isEffectAttached || !isEffectProcessing)) {
+      if ((Platform.OS === 'android' || Platform.OS === 'ios') && voiceEffectId !== DEFAULT_VOICE_EFFECT_ID && (!isEffectAttached || !isEffectProcessing)) {
         const microphoneTrack = localParticipant.getTrackPublication(Track.Source.Microphone)?.track as RestartableAudioTrack | undefined;
         await microphoneTrack?.restartTrack?.().catch(() => undefined);
 
@@ -5791,7 +5815,7 @@ function CallAudioRecoveryMonitor({
           return;
         }
 
-        if (Platform.OS === 'android' && latestState.voiceEffectId !== DEFAULT_VOICE_EFFECT_ID) {
+        if ((Platform.OS === 'android' || Platform.OS === 'ios') && latestState.voiceEffectId !== DEFAULT_VOICE_EFFECT_ID) {
           await publishCallMicrophoneTrack(
             localParticipant,
             latestState.audioOptions,
@@ -6387,6 +6411,9 @@ async function publishCallMicrophoneTrack(
       return publication;
     }
 
+    if ((Platform.OS === 'android' || Platform.OS === 'ios') && voiceEffectId !== DEFAULT_VOICE_EFFECT_ID) {
+      beginNativeLiveVoiceEffectSession(voiceEffectId);
+    }
     await setNativeLiveVoiceEffectAndWait(voiceEffectId);
     const publication = await localParticipant.setMicrophoneEnabled(true, audioOptions);
     return publication;
@@ -6767,14 +6794,20 @@ async function forceCallAudioRoute(
 
 async function configureCallAudioSession(
   mode: 'voice' | 'video',
-  options?: { skipAppleAudioConfiguration?: boolean; skipNativeActivation?: boolean; useCallKitManagedNative?: boolean },
+  options?: {
+    skipAppleAudioConfiguration?: boolean;
+    skipNativeActivation?: boolean;
+    useCallKitManagedNative?: boolean;
+    useSpeaker?: boolean;
+  },
 ) {
+  const useSpeaker = options?.useSpeaker ?? mode === 'video';
   const prepareIosNativeAudioSession = options?.useCallKitManagedNative
     ? prepareNativeCallKitAudioSession
     : prepareNativeCallAudioSession;
 
   if (Platform.OS === 'ios' && (options?.useCallKitManagedNative || !options?.skipNativeActivation)) {
-    await prepareIosNativeAudioSession(mode, mode === 'video').catch(() => undefined);
+    await prepareIosNativeAudioSession(mode, useSpeaker).catch(() => undefined);
   } else {
     if (Platform.OS !== 'ios') {
       await setAudioModeAsync({
@@ -6795,12 +6828,14 @@ async function configureCallAudioSession(
         audioAttributesContentType: 'speech',
         forceHandleAudioRouting: true,
       },
-      preferredOutputList: mode === 'video'
+      preferredOutputList: mode === 'video' && useSpeaker
         ? ['bluetooth', 'headset', 'speaker', 'earpiece']
-        : ['earpiece', 'headset', 'bluetooth', 'speaker'],
+        : useSpeaker
+          ? ['speaker', 'headset', 'bluetooth', 'earpiece']
+          : ['earpiece', 'headset', 'bluetooth', 'speaker'],
     },
     ios: {
-      defaultOutput: mode === 'video' ? 'speaker' : 'earpiece',
+      defaultOutput: useSpeaker ? 'speaker' : 'earpiece',
     },
   });
 
@@ -6808,14 +6843,16 @@ async function configureCallAudioSession(
     await AudioSession.setAppleAudioConfiguration({
       audioCategory: 'playAndRecord',
       audioCategoryOptions: mode === 'video'
-        ? ['allowBluetooth', 'allowBluetoothA2DP', 'defaultToSpeaker']
-        : ['allowBluetooth'],
+        ? (useSpeaker
+            ? ['allowBluetooth', 'allowBluetoothA2DP', 'defaultToSpeaker']
+            : ['allowBluetooth', 'allowBluetoothA2DP'])
+        : (useSpeaker ? ['allowBluetooth', 'defaultToSpeaker'] : ['allowBluetooth']),
       audioMode: mode === 'video' ? 'videoChat' : 'voiceChat',
     }).catch(() => undefined);
   }
 
   if (Platform.OS === 'ios' && (options?.useCallKitManagedNative || !options?.skipNativeActivation)) {
-    await prepareIosNativeAudioSession(mode, mode === 'video').catch(() => undefined);
+    await prepareIosNativeAudioSession(mode, useSpeaker).catch(() => undefined);
   }
 }
 
@@ -6844,7 +6881,7 @@ async function restoreCallAudio(
   shouldContinue?: CallAudioRouteOperationGuard,
 ) {
   const applyVersion = ++callAudioRouteApplyVersion;
-  await configureCallAudioSession(mode);
+  await configureCallAudioSession(mode, { useSpeaker });
   if (!isCallAudioRouteOperationCurrent(applyVersion, shouldContinue)) {
     return;
   }

@@ -40,7 +40,7 @@ Notifications.setNotificationHandler({
     if (isDecoyOffline) {
       return {
         shouldPlaySound: false,
-        shouldSetBadge: false,
+        shouldSetBadge: true,
         shouldShowBanner: false,
         shouldShowList: false,
       };
@@ -48,6 +48,7 @@ Notifications.setNotificationHandler({
 
     const notificationData = getNotificationTaskData(notification.request.content.data);
     await acknowledgePushDelivery(notificationData);
+    void syncApplicationIconBadge();
 
     if (AppState.currentState === 'active') {
       const data = notificationData;
@@ -70,17 +71,17 @@ Notifications.setNotificationHandler({
         getVisibleChatRoomConversationId() !== conversationId;
 
       if (isOtherChatMessage) {
-        return {
-          shouldPlaySound: true,
-          shouldSetBadge: false,
-          shouldShowBanner: true,
-          shouldShowList: true,
-        };
+          return {
+            shouldPlaySound: true,
+            shouldSetBadge: true,
+            shouldShowBanner: true,
+            shouldShowList: true,
+          };
       }
 
       return {
         shouldPlaySound: false,
-        shouldSetBadge: false,
+        shouldSetBadge: true,
         shouldShowBanner: false,
         shouldShowList: false,
       };
@@ -88,7 +89,7 @@ Notifications.setNotificationHandler({
 
     return {
       shouldPlaySound: true,
-      shouldSetBadge: false,
+      shouldSetBadge: true,
       shouldShowBanner: true,
       shouldShowList: true,
     };
@@ -145,6 +146,7 @@ if (!TaskManager.isTaskDefined(MESSAGE_PREFETCH_TASK)) {
 export function PushNotificationBridge() {
   const language = useAppStore((state) => state.language);
   const serverUrl = useAppStore((state) => state.serverUrl);
+  const unreadConversationCount = useAppStore((state) => state.unreadConversationIds.length);
   const user = useAppStore((state) => state.user);
 
   useEffect(() => {
@@ -175,6 +177,10 @@ export function PushNotificationBridge() {
       });
     });
   }, [language, serverUrl, user?.id]);
+
+  useEffect(() => {
+    void syncApplicationIconBadge(unreadConversationCount);
+  }, [unreadConversationCount]);
 
   useEffect(() => {
     let isMounted = true;
@@ -287,6 +293,14 @@ export function PushNotificationBridge() {
   }, [serverUrl]);
 
   return null;
+}
+
+async function syncApplicationIconBadge(count = useAppStore.getState().unreadConversationIds.length) {
+  if (Platform.OS !== 'ios') {
+    return;
+  }
+
+  await Notifications.setBadgeCountAsync(Math.max(0, count)).catch(() => undefined);
 }
 
 async function syncNativeQuickReplyCredentials() {

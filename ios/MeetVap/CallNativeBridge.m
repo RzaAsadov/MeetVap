@@ -59,6 +59,11 @@ RCT_EXTERN_METHOD(renderImageDrawing:(NSString *)uri
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
 RCT_EXTERN_METHOD(endCall:(NSString *)callId)
+RCT_EXTERN_METHOD(beginLiveVoiceEffectSession:(NSString *)effectId)
+RCT_EXTERN_METHOD(getLiveVoiceEffect:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+RCT_EXTERN_METHOD(getLiveVoiceEffectStatus:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
 RCT_EXTERN_METHOD(setLiveVoiceEffect:(NSString *)effectId)
 RCT_EXTERN_METHOD(setProximityScreenOffEnabled:(BOOL)enabled)
 RCT_EXTERN_METHOD(setScreenCaptureProtection:(BOOL)enabled)

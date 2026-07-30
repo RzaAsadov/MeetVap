@@ -774,6 +774,7 @@ export async function listConversations(
     hasMore?: boolean;
     nextOffset?: number;
     totalUnreadConversations?: number;
+    unreadConversationIds?: string[];
   }>(`/conversations?${params.toString()}`, {
     method: 'GET',
     serverUrl,
@@ -786,6 +787,7 @@ export async function listConversations(
     hasMore: response.hasMore === true,
     nextOffset: response.nextOffset ?? (input.offset ?? 0) + response.conversations.length,
     totalUnreadConversations: response.totalUnreadConversations ?? 0,
+    unreadConversationIds: response.unreadConversationIds,
   };
 }
 
@@ -1871,7 +1873,7 @@ export async function markConversationRead(
 }
 
 export async function markAllConversationsRead(serverUrl: string) {
-  return apiRequest<{ ok: true; conversationIds: string[]; readAt: string }>('/conversations/read-all', {
+  return apiRequest<{ ok: true; conversationIds: string[]; readAt: string; unreadConversationIds?: string[] }>('/conversations/read-all', {
     method: 'POST',
     serverUrl,
   });

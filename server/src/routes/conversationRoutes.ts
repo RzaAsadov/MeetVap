@@ -29,7 +29,6 @@ import { enforceRateLimit } from '../rateLimits';
 import { cacheDeletePattern, cacheGetJson, cacheSetJson } from '../redisCache';
 import {
   buildConversationListWhere,
-  countUnreadConversationsForUser,
   countUnreadMessagesByConversationForUser,
   listUnreadConversationIdsForUser,
   parseConversationListFilter,
@@ -175,9 +174,10 @@ conversationRoutes.get('/', async (req, res, next) => {
     }
 
     await ensureMeetVapDirectConversationForUser(currentUser.id);
-    const unreadConversationIds = filter === 'unread'
-      ? (await listUnreadConversationIdsForUser(currentUser.id, query)).slice(offset, offset + limit + 1)
+    const filteredUnreadConversationIds = filter === 'unread'
+      ? await listUnreadConversationIdsForUser(currentUser.id, query)
       : undefined;
+    const unreadConversationIds = filteredUnreadConversationIds?.slice(offset, offset + limit + 1);
     const conversations = await prisma.conversation.findMany({
       orderBy: { updatedAt: 'desc' },
       skip: filter === 'unread' ? 0 : offset,
@@ -323,7 +323,10 @@ conversationRoutes.get('/', async (req, res, next) => {
       ? serialized.sort((left, right) => Number(right.nameMatches) - Number(left.nameMatches))
       : serialized;
 
-    const totalUnreadConversations = await countUnreadConversationsForUser(currentUser.id);
+    const allUnreadConversationIds = filter === 'unread' && !query
+      ? filteredUnreadConversationIds ?? []
+      : await listUnreadConversationIdsForUser(currentUser.id);
+    const totalUnreadConversations = allUnreadConversationIds.length;
 
     const responseBody = {
       conversations: ordered.map((item) => metadataOnly ? stripConversationContent(item.result) : item.result),
@@ -334,6 +337,7 @@ conversationRoutes.get('/', async (req, res, next) => {
         ? offset + Math.min(limit, pagedConversations.length)
         : offset + pagedConversations.length,
       totalUnreadConversations,
+      unreadConversationIds: allUnreadConversationIds,
     };
 
     if (conversationListCacheKey) {
@@ -2564,7 +2568,8 @@ conversationRoutes.post('/read-all', async (req, res, next) => {
       emitConversationRead(req, conversationId, currentUser.id, readAt);
     });
 
-    res.json({ conversationIds, ok: true, readAt: readAt.toISOString() });
+    const unreadConversationIds = await listUnreadConversationIdsForUser(currentUser.id);
+    res.json({ conversationIds, ok: true, readAt: readAt.toISOString(), unreadConversationIds });
   } catch (error) {
     next(error);
   }
@@ -5331,7 +5336,7 @@ export async function purgeAcknowledgedMessageContent(messageIds: string[]) {
     const participantUserIds = uniqueStrings(messages.flatMap((message) => (
       getContentRetentionParticipants(message).map((member) => member.userId)
     )));
-    const clientActivityByUserId = await getRecentClientActivityByUserId(participantUserIds);
+    const clientAckRequirementsByUserId = await getClientAckRequirementsByUserId(participantUserIds);
     const purgeableMessages = messages.filter((message) => {
       const ackedUserIds = new Set(message.contentAcks.map((ack) => ack.userId));
       const clientAcksByUserId = getClientAcksByUserId(message.messageClientAcks);
@@ -5343,7 +5348,7 @@ export async function purgeAcknowledgedMessageContent(messageIds: string[]) {
           member.userId,
           ackedUserIds,
           clientAcksByUserId,
-          clientActivityByUserId,
+          clientAckRequirementsByUserId,
         )
       ));
     });
@@ -5435,30 +5440,44 @@ type AcknowledgedMessageForCleanup = Prisma.MessageGetPayload<{
   };
 }>;
 
-async function getRecentClientActivityByUserId(userIds: string[]) {
+type ClientAckRequirement = {
+  hasMobileClient: boolean;
+  recentClients: Set<MessageClientIdentity>;
+};
+
+async function getClientAckRequirementsByUserId(userIds: string[]) {
   if (userIds.length === 0) {
-    return new Map<string, Set<MessageClientIdentity>>();
+    return new Map<string, ClientAckRequirement>();
   }
 
   const recentClientActivityCutoff = new Date(Date.now() - operationalConfig.retention.clientContentAckHours * HOUR_MS);
   const rows = await prisma.userClientActivity.findMany({
-    select: { client: true, userId: true },
+    select: { client: true, lastSeenAt: true, userId: true },
     where: {
-      lastSeenAt: { gte: recentClientActivityCutoff },
       userId: { in: userIds },
     },
   });
-  const activityByUserId = new Map<string, Set<MessageClientIdentity>>();
+  const requirementsByUserId = new Map<string, ClientAckRequirement>();
 
   rows.forEach((row) => {
     const client = row.client;
-    const userClients = activityByUserId.get(row.userId) ?? new Set<MessageClientIdentity>();
+    const requirement = requirementsByUserId.get(row.userId) ?? {
+      hasMobileClient: false,
+      recentClients: new Set<MessageClientIdentity>(),
+    };
 
-    userClients.add(client);
-    activityByUserId.set(row.userId, userClients);
+    if (getMessageClientKind(client) === 'MOBILE') {
+      requirement.hasMobileClient = true;
+    }
+
+    if (row.lastSeenAt >= recentClientActivityCutoff) {
+      requirement.recentClients.add(client);
+    }
+
+    requirementsByUserId.set(row.userId, requirement);
   });
 
-  return activityByUserId;
+  return requirementsByUserId;
 }
 
 function getClientAcksByUserId(acks: Array<{ client: string; userId: string }>) {
@@ -5519,19 +5538,30 @@ function hasRequiredContentAcksForParticipant(
   userId: string,
   legacyMobileAckedUserIds: Set<string>,
   clientAcksByUserId: Map<string, Set<MessageClientIdentity>>,
-  clientActivityByUserId: Map<string, Set<MessageClientIdentity>>,
+  clientAckRequirementsByUserId: Map<string, ClientAckRequirement>,
 ) {
-  const activeClients = clientActivityByUserId.get(userId);
+  const requirement = clientAckRequirementsByUserId.get(userId);
+  const activeClients = requirement?.recentClients;
   const clientAcks = clientAcksByUserId.get(userId) ?? new Set<MessageClientIdentity>();
 
-  if (!activeClients || activeClients.size === 0) {
+  if ((!activeClients || activeClients.size === 0) && requirement?.hasMobileClient !== true) {
     return userId === senderId;
   }
 
-  return [...activeClients].every((client) => (
-    clientAcks.has(client) ||
-    (client === 'MOBILE' && legacyMobileAckedUserIds.has(userId))
-  ));
+  const hasMobileAck = legacyMobileAckedUserIds.has(userId) ||
+    [...clientAcks].some((client) => getMessageClientKind(client) === 'MOBILE');
+
+  if (requirement?.hasMobileClient === true && !hasMobileAck) {
+    return false;
+  }
+
+  return [...(activeClients ?? [])].every((client) => {
+    if (getMessageClientKind(client) === 'MOBILE') {
+      return hasMobileAck;
+    }
+
+    return clientAcks.has(client);
+  });
 }
 
 function getContentRetentionParticipants(message: AcknowledgedMessageForCleanup) {

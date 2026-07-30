@@ -861,17 +861,21 @@ function ChatInfoModalContent({
     (boundedMemberPage - 1) * GROUP_MEMBER_PAGE_SIZE,
     boundedMemberPage * GROUP_MEMBER_PAGE_SIZE,
   );
+  const shouldPopulateGallery = visible && (!isGroup || isGalleryModalVisible);
   const galleryMediaMessages = useMemo(() => (
-    isGalleryModalVisible
+    shouldPopulateGallery
       ? messages.filter((message) => (message.kind === 'image' || message.kind === 'video') && !!message.mediaUri)
       : EMPTY_MESSAGES
-  ), [isGalleryModalVisible, messages]);
+  ), [messages, shouldPopulateGallery]);
   const galleryFileMessages = useMemo(() => (
-    isGalleryModalVisible
+    shouldPopulateGallery
       ? messages.filter((message) => message.kind === 'file' && !!message.mediaUri)
       : EMPTY_MESSAGES
-  ), [isGalleryModalVisible, messages]);
-  const galleryLinks = useMemo(() => isGalleryModalVisible ? extractChatLinks(messages) : [], [isGalleryModalVisible, messages]);
+  ), [messages, shouldPopulateGallery]);
+  const galleryLinks = useMemo(
+    () => shouldPopulateGallery ? extractChatLinks(messages) : [],
+    [messages, shouldPopulateGallery],
+  );
   const publicGroupLink = conversation?.publicInviteCode
     ? buildSharedGroupWebUrl(conversation.publicInviteCode)
     : '';

@@ -278,7 +278,7 @@ function delay(ms: number) {
 export async function setNativeLiveVoiceEffectAndWait(effectId: VoiceEffectId) {
   setNativeLiveVoiceEffect(effectId);
 
-  if (Platform.OS !== 'android') {
+  if (Platform.OS !== 'android' && Platform.OS !== 'ios') {
     return;
   }
 
@@ -293,7 +293,7 @@ export async function setNativeLiveVoiceEffectAndWait(effectId: VoiceEffectId) {
 export async function confirmNativeLiveVoiceEffectAttached(effectId: VoiceEffectId) {
   await setNativeLiveVoiceEffectAndWait(effectId);
 
-  if (Platform.OS !== 'android') {
+  if (Platform.OS !== 'android' && Platform.OS !== 'ios') {
     return true;
   }
 
@@ -302,7 +302,7 @@ export async function confirmNativeLiveVoiceEffectAttached(effectId: VoiceEffect
 }
 
 export async function waitForNativeLiveVoiceProcessing(effectId: VoiceEffectId, baselineFrames = 0) {
-  if (Platform.OS !== 'android' || effectId === 'normal') {
+  if ((Platform.OS !== 'android' && Platform.OS !== 'ios') || effectId === 'normal') {
     return true;
   }
 

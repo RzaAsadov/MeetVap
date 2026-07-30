@@ -3,6 +3,7 @@ import { cert, getApps, initializeApp } from 'firebase-admin/app';
 import { getMessaging } from 'firebase-admin/messaging';
 import jwt from 'jsonwebtoken';
 
+import { countUnreadConversationsForUser } from './conversationList';
 import { relayPushToMainServer } from './childPushRelay';
 import { config } from './config';
 import { prisma } from './prisma';
@@ -364,6 +365,7 @@ export async function sendMessagePush(input: MessagePush) {
   const expoTokens = input.tokens.filter((item) => item.provider === 'expo');
   const fcmTokens = input.tokens.filter((item) => item.provider === 'fcm');
   const apnsTokens = input.tokens.filter((item) => item.provider === 'apns');
+  const apnsBadgeCountByUserId = await getApnsBadgeCountByUserId(apnsTokens);
   const prefetchData = {
     conversationId: input.conversationId,
     messageId: input.messageId,
@@ -409,6 +411,7 @@ export async function sendMessagePush(input: MessagePush) {
     }),
     ...apnsTokens.map((item) => sendApnsNotifications([item], {
         body: input.body,
+        badge: item.userId ? apnsBadgeCountByUserId.get(item.userId) : undefined,
         categoryId: 'message',
         data: dataForToken(item),
         title: input.title,
@@ -419,6 +422,17 @@ export async function sendMessagePush(input: MessagePush) {
   ]);
 
   return mergePushDispatchResults(results);
+}
+
+async function getApnsBadgeCountByUserId(tokens: StoredPushToken[]) {
+  const userIds = [...new Set(tokens.map((item) => item.userId).filter((userId): userId is string => !!userId))];
+  const counts = new Map<string, number>();
+
+  await Promise.all(userIds.map(async (userId) => {
+    counts.set(userId, await countUnreadConversationsForUser(userId).catch(() => 0));
+  }));
+
+  return counts;
 }
 
 async function sendExpoPushNotifications(messages: Array<{
@@ -585,6 +599,7 @@ async function sendFcmNotifications(tokens: StoredPushToken[], input: {
 }
 
 async function sendApnsNotifications(tokens: StoredPushToken[], input: {
+  badge?: number;
   body: string;
   categoryId?: string;
   data: Record<string, string>;
@@ -630,6 +645,10 @@ async function sendApnsNotifications(tokens: StoredPushToken[], input: {
     sound: input.sound ?? 'default',
     topic: config.APNS_BUNDLE_ID,
   });
+
+  if (typeof input.badge === 'number' && Number.isFinite(input.badge)) {
+    notification.badge = Math.max(0, Math.floor(input.badge));
+  }
 
   if (input.categoryId) {
     (notification as apn.Notification & { category?: string }).category = input.categoryId;

@@ -8,6 +8,8 @@ const envPaths = [
   path.resolve(process.cwd(), '.env'),
   path.resolve(__dirname, '../.env'),
 ];
+const serverRootDir = path.resolve(__dirname, '..');
+const defaultUploadDir = path.resolve(serverRootDir, '../uploads');
 
 for (const envPath of envPaths) {
   dotenv.config({ path: envPath, quiet: true });
@@ -86,7 +88,9 @@ const envSchema = z.object({
   SERVER_EVENTS_LIVEKIT_ID: optionalString,
   SERVER_EVENTS_SUPPORT_ID: optionalString,
   SUBSCRIPTION_BYPASS_USERNAMES: z.string().default(''),
-  UPLOAD_DIR: z.string().min(1).default(path.resolve(process.cwd(), '../uploads')),
+  UPLOAD_DIR: z.string().min(1).default(defaultUploadDir).transform((value) => (
+    path.resolve(serverRootDir, value)
+  )),
 });
 
 export const config = envSchema.parse(rawEnv);
