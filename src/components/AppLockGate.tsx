@@ -6,7 +6,7 @@ import { ActivityIndicator, AppState, Platform, Pressable, StyleSheet, Text, Vie
 import { PinPad } from './PinPad';
 import { launchAnsweredCallKitCallIfPending } from '../lib/answeredCallKitLaunch';
 import { t } from '../i18n';
-import { addAppLockAccessListener, getCallOnlyAccessCallId, isAppLockForegroundOperationActive, setAppLockCurrentAppState, updateAppLockStatus } from '../lib/appLockAccess';
+import { addAppLockAccessListener, beginCallOnlyAccess, getCallOnlyAccessCallId, isAppLockForegroundOperationActive, setAppLockCurrentAppState, updateAppLockStatus } from '../lib/appLockAccess';
 import { emitSecurityEvent } from '../lib/securityEvents';
 import { bulkDeleteConversations, createLiveLocation } from '../lib/backend';
 import { hasLiveLocationBackgroundAuthorization, registerLiveLocationShare } from '../lib/liveLocation';
@@ -36,7 +36,7 @@ export function AppLockGate({ children, deferPinOverlay, userId }: { children: R
   const [hasMountedApp, setHasMountedApp] = useState(false);
   const [hasLockPin, setHasLockPin] = useState(false);
   const [callOnlyAccessCallId, setCallOnlyAccessCallId] = useState<string | null>(() => getCallOnlyAccessCallId());
-  const [, setLockAccessRevision] = useState(0);
+  const [lockAccessRevision, setLockAccessRevision] = useState(0);
   const [isPinOverlayReady, setPinOverlayReady] = useState(false);
   const [isNativeAnsweredCallCheckPending, setNativeAnsweredCallCheckPending] = useState(Platform.OS === 'ios');
   const [pin, setPin] = useState('');
@@ -372,14 +372,30 @@ export function AppLockGate({ children, deferPinOverlay, userId }: { children: R
 
   const isCallOnlyRouteVisible = !!callOnlyAccessCallId && isCallRoomVisibleFor(callOnlyAccessCallId);
   const visibleCallRoomParams = getVisibleCallRoomParams();
-  const isNativeAnsweredIncomingCallVisible = visibleCallRoomParams?.direction === 'incoming' &&
-    visibleCallRoomParams.answeredByNative === true &&
-    !!visibleCallRoomParams.callId;
+  const visibleIncomingCallId = visibleCallRoomParams?.direction === 'incoming'
+    ? visibleCallRoomParams.callId ?? null
+    : null;
+  const isIncomingCallVisible = !!visibleIncomingCallId;
   const isLockedCallRoomVisible = visibleCallRoomParams?.callAccess === 'locked-call' && !!visibleCallRoomParams.callId;
-  const shouldBypassPinForCall = !!callOnlyAccessCallId || isNativeAnsweredIncomingCallVisible || isLockedCallRoomVisible;
-  const isCallOnlyRoutePending = !!callOnlyAccessCallId && !isCallOnlyRouteVisible && !isNativeAnsweredIncomingCallVisible && (lockState === 'checking' || lockState === 'locked');
+  const shouldBypassPinForCall = !!callOnlyAccessCallId || isIncomingCallVisible || isLockedCallRoomVisible;
+  const isCallOnlyRoutePending = !!callOnlyAccessCallId && !isCallOnlyRouteVisible && !isIncomingCallVisible && (lockState === 'checking' || lockState === 'locked');
   const isPinOverlayPreparing = lockState === 'locked' && !isAppObscured && !isPinOverlayReady && !shouldBypassPinForCall;
   const shouldShowDeferredPinCheck = (deferPinOverlay || isNativeAnsweredCallCheckPending) && lockState !== 'unlocked';
+
+  useEffect(() => {
+    if (
+      !visibleIncomingCallId ||
+      !hasLockPin ||
+      lockState === 'unlocked' ||
+      callOnlyAccessCallId === visibleIncomingCallId
+    ) {
+      return;
+    }
+
+    // Route changes and PIN storage hydration can finish in either order on a
+    // cold CallKit launch. Once both are known, scope the bypass to this call.
+    beginCallOnlyAccess(visibleIncomingCallId);
+  }, [callOnlyAccessCallId, hasLockPin, lockAccessRevision, lockState, visibleIncomingCallId]);
 
   return (
     <View style={styles.container}>

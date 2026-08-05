@@ -10,6 +10,7 @@ import { resolveLanguage, t, type AppLanguage } from '../i18n';
 import { formatBytes, formatDuration } from '../lib/format';
 import { downloadRemoteMediaFile, getCachedVideoThumbnailUri, getMediaDownloadProgress, getMessageMediaCacheUri, getRememberedCachedVideoThumbnailUri, isLocalMediaFileComplete, MediaDownloadProgress, pauseMediaDownload, resolveCachedMessageMediaUri, resolveLocalMediaFileUri, subscribeToMediaDownloadProgress } from '../lib/mediaCache';
 import { LIVE_LOCATION_ESTABLISHMENT_TIMEOUT_MS, stopTrackedLiveLocationShare } from '../lib/liveLocation';
+import { openMessageUrl } from '../lib/messageLinks';
 import { openNativeAndroidFile } from '../native/CallNative';
 import { useAppStore } from '../store/useAppStore';
 import { colors } from '../theme/colors';
@@ -852,7 +853,7 @@ function LinkifiedMessageText({
         const href = part.href;
 
         return href ? (
-          <Text key={part.key} onPress={() => void openMessageLink(href)} style={linkStyle}>
+          <Text key={part.key} onPress={() => void openMessageUrl(href)} style={linkStyle}>
             {part.text}
           </Text>
         ) : <Text key={part.key}>{part.text}</Text>;
@@ -958,14 +959,6 @@ function isUnmatchedClosingBracket(value: string, lastCharacter: string) {
 
 function normalizeMessageUrl(urlText: string) {
   return /^https?:\/\//i.test(urlText) ? urlText : `https://${urlText}`;
-}
-
-async function openMessageLink(url: string) {
-  try {
-    await Linking.openURL(url);
-  } catch {
-    Alert.alert(t('actionFailed'), url);
-  }
 }
 
 function UploadOverlay({ messageId, onCancel, progress }: { messageId: string; onCancel?: (messageId: string) => void; progress?: { sentBytes: number; totalBytes: number } }) {

@@ -13,6 +13,7 @@ export type LiveKitServerConfig = {
   apiSecret: string;
   enabled: boolean;
   id: string;
+  healthUrl?: string;
   maxActiveCalls?: number;
   url: string;
   weight: number;
@@ -27,6 +28,7 @@ const liveKitServerSchema = z.object({
   apiSecret: z.string().min(1),
   enabled: z.boolean().default(true),
   id: z.string().min(1).max(80),
+  healthUrl: z.string().url().optional(),
   maxActiveCalls: z.number().int().positive().optional(),
   url: z.string().url(),
   weight: z.number().positive().default(1),
@@ -350,7 +352,7 @@ async function probeLiveKitServer(server: LiveKitServerConfig): Promise<{ error?
   const timeout = setTimeout(() => controller.abort(), LIVEKIT_HEALTH_CHECK_TIMEOUT_MS);
 
   try {
-    const response = await fetch(liveKitHttpUrl(server.url), {
+    const response = await fetch(liveKitHttpUrl(server.healthUrl ?? server.url), {
       cache: 'no-store',
       method: 'GET',
       signal: controller.signal,

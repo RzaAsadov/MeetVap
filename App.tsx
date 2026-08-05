@@ -29,7 +29,11 @@ import { resolveLanguage, setI18nLanguage, t, type LanguagePreference } from './
 import { clearNativeQuickReplyCredentials, setNativeQuickReplyCredentials } from './src/native/CallNative';
 import { initializeClientInstallationId } from './src/lib/appClientInfo';
 
-registerGlobals();
+// MeetVap owns AVAudioSession activation through CallNative so incoming
+// CallKit calls and regular LiveKit calls share one authority. LiveKit's
+// automatic iOS manager would otherwise reactivate the session while CallKit
+// is still responsible for it, leaving an apparently live mic with no audio.
+registerGlobals({ autoConfigureAudioSession: false });
 setLogLevel('error');
 
 type StartupMigrationState = {

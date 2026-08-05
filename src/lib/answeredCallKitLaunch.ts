@@ -8,6 +8,7 @@ import {
 } from '../native/CallNative';
 import { beginCallOnlyAccess } from './appLockAccess';
 import { getServerUrl } from './storage';
+import { isIncomingCallUrlExpired } from './incomingCallExpiry';
 import { useAppStore } from '../store/useAppStore';
 
 const POLL_DELAYS_MS = [0, 80, 160, 320, 640, 1200, 2000];
@@ -37,11 +38,15 @@ export function beginCallOnlyAccessFromIncomingCallUrl(url: string) {
   try {
     const parsed = new URL(url);
     const callId = parsed.searchParams.get('callId');
-    const isAcceptedIncomingCall = parsed.hostname === 'incoming-call' &&
-      parsed.searchParams.get('answeredByNative') === 'true' &&
-      !!callId;
+    const opensCallScreen = parsed.searchParams.get('answeredByNative') === 'true' ||
+      parsed.searchParams.get('surface') === 'fullscreen';
+    const isIncomingCall = parsed.hostname === 'incoming-call' &&
+      !!callId &&
+      parsed.searchParams.get('action') !== 'decline' &&
+      !isIncomingCallUrlExpired(parsed.searchParams.get('expiresAt')) &&
+      opensCallScreen;
 
-    if (isAcceptedIncomingCall) {
+    if (isIncomingCall) {
       beginCallOnlyAccess(callId);
     }
   } catch {

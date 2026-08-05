@@ -184,6 +184,27 @@ export async function getDeletedConversationAfter(conversationId: string) {
   return AsyncStorage.getItem(`${DELETED_CHAT_PREFIX}${conversationId}`);
 }
 
+export async function getDeletedConversationAfters(conversationIds: string[]) {
+  const uniqueConversationIds = Array.from(new Set(conversationIds.filter(Boolean)));
+
+  if (uniqueConversationIds.length === 0) {
+    return new Map<string, string>();
+  }
+
+  const values = await AsyncStorage.multiGet(
+    uniqueConversationIds.map((conversationId) => `${DELETED_CHAT_PREFIX}${conversationId}`),
+  );
+  const deletedAfterByConversationId = new Map<string, string>();
+
+  values.forEach(([key, value]) => {
+    if (value) {
+      deletedAfterByConversationId.set(key.slice(DELETED_CHAT_PREFIX.length), value);
+    }
+  });
+
+  return deletedAfterByConversationId;
+}
+
 export async function setDeletedConversationAfter(conversationId: string, timestampIso: string) {
   await AsyncStorage.setItem(`${DELETED_CHAT_PREFIX}${conversationId}`, timestampIso);
 }

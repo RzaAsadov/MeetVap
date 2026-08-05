@@ -6,7 +6,7 @@ import * as Clipboard from 'expo-clipboard';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Alert, AppState, FlatList, Keyboard, Platform, Pressable, Text, useWindowDimensions, View } from 'react-native';
+import { Alert, AppState, FlatList, Keyboard, Platform, Pressable, Text, TextInput, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Avatar } from '../components/Avatar';
 import { PremiumUserBadge } from '../components/PremiumUserBadge';
@@ -22,6 +22,7 @@ import { getActiveCallSession } from '../lib/activeCallSession';
 import { beginAppLockForegroundOperation } from '../lib/appLockAccess';
 import { getConversationScreenshotPrivacy, isUploadCanceledError, listPinnedMessages, mapMessage, uploadMediaFile, type PinnedMessage } from '../lib/backend';
 import { isConversationMuted } from '../lib/conversationMute';
+import { clearActiveForegroundChatConversationId, setActiveForegroundChatConversationId } from '../lib/foregroundChatActivity';
 import { logMessageDeliveryDiagnostic } from '../lib/messageDeliveryDiagnostics';
 import { dismissMessageNotificationsForConversation } from '../lib/messageNotifications';
 import { takePendingShareDraft } from '../lib/pendingShareDraft';
@@ -68,14 +69,6 @@ type VoiceRecordingComposerState = {
   isPaused: boolean;
   isRecording: boolean;
 };
-
-function waitForComposerNativeTextFlush() {
-  return new Promise<void>((resolve) => {
-    requestAnimationFrame(() => {
-      setTimeout(resolve, 48);
-    });
-  });
-}
 
 const EMPTY_MESSAGES: Message[] = [];
 const EMPTY_CONVERSATIONS: Conversation[] = [];
@@ -158,6 +151,7 @@ export function useChatRoomController({ navigation, route }: Props) {
   const windowLayout = useWindowDimensions();
   const listRef = useRef<FlatList<ChatListItem>>(null);
   const composerRef = useRef<View>(null);
+  const composerTextInputRef = useRef<TextInput>(null);
   const hasInitialScrollRef = useRef(false);
   const isInitialScrollScheduledRef = useRef(false);
   const isNearBottomRef = useRef(true);
@@ -190,6 +184,17 @@ export function useChatRoomController({ navigation, route }: Props) {
   }), [route.params.conversationId]);
   useUiPerformanceStallMonitor('ChatRoomScreen', diagnosticsScopeDetails);
 
+  useFocusEffect(
+    useCallback(() => {
+      const conversationId = route.params.conversationId;
+      setActiveForegroundChatConversationId(conversationId);
+
+      return () => {
+        clearActiveForegroundChatConversationId(conversationId);
+      };
+    }, [route.params.conversationId]),
+  );
+
   useEffect(() => () => {
     releaseConversationHistory(route.params.conversationId);
   }, [releaseConversationHistory, route.params.conversationId]);
@@ -213,9 +218,11 @@ export function useChatRoomController({ navigation, route }: Props) {
   const chatScrollDebugLastDistanceRef = useRef<number | null>(null);
   const hasTailActivityDuringOpenRef = useRef(false);
   const hasShownScreenshotPrivacyWarningRef = useRef(false);
-  const [draft, setDraft] = useState('');
   const draftRef = useRef('');
-  const [draftSelection, setDraftSelection] = useState({ end: 0, start: 0 });
+  const pendingNativeDraftClearRef = useRef<string | null>(null);
+  const draftSelectionRef = useRef({ end: 0, start: 0 });
+  const [draftSelection, setDraftSelectionState] = useState({ end: 0, start: 0 });
+  const [hasDraft, setHasDraft] = useState(false);
   const [isSendingText, setSendingText] = useState(false);
   const [sendOptionsMode, setSendOptionsMode] = useState<null | 'menu' | 'schedule' | 'disappear'>(null);
   const [sendOptionsTarget, setSendOptionsTarget] = useState<'caption' | 'composer'>('composer');
@@ -226,9 +233,53 @@ export function useChatRoomController({ navigation, route }: Props) {
   const [disappearSecondsDraft, setDisappearSecondsDraft] = useState('30');
   const [isComposerEditMenuVisible, setComposerEditMenuVisible] = useState(false);
   const composerLongPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const updateDraft = useCallback((nextDraft: string) => {
+  const composerTypingActivityRef = useRef<(nextDraft: string) => void>(() => undefined);
+  const updateDraftPresence = useCallback((nextDraft: string) => {
+    const nextHasDraft = nextDraft.trim().length > 0;
+
+    setHasDraft((current) => current === nextHasDraft ? current : nextHasDraft);
+  }, []);
+  const handleDraftChange = useCallback((nextDraft: string) => {
+    const pendingClearedDraft = pendingNativeDraftClearRef.current;
+
+    if (pendingClearedDraft !== null) {
+      if (nextDraft === '') {
+        pendingNativeDraftClearRef.current = null;
+      } else if (nextDraft === pendingClearedDraft && draftRef.current === '') {
+        // An onChange event queued before the imperative clear can arrive late
+        // on a busy device. Do not resurrect the message that was just sent.
+        composerTextInputRef.current?.clear();
+        return;
+      } else {
+        pendingNativeDraftClearRef.current = null;
+      }
+    }
+
     draftRef.current = nextDraft;
-    setDraft(nextDraft);
+    updateDraftPresence(nextDraft);
+    composerTypingActivityRef.current(nextDraft);
+  }, [updateDraftPresence]);
+  const updateDraft = useCallback((nextDraft: string) => {
+    const previousDraft = draftRef.current;
+
+    draftRef.current = nextDraft;
+    if (nextDraft === '') {
+      pendingNativeDraftClearRef.current = previousDraft || null;
+      composerTextInputRef.current?.clear();
+    } else {
+      pendingNativeDraftClearRef.current = null;
+      composerTextInputRef.current?.setNativeProps({ text: nextDraft });
+    }
+    updateDraftPresence(nextDraft);
+    composerTypingActivityRef.current(nextDraft);
+  }, [updateDraftPresence]);
+  const handleDraftSelectionChange = useCallback((selection: { end: number; start: number }) => {
+    draftSelectionRef.current = selection;
+  }, []);
+  const setDraftSelection = useCallback((selection: { end: number; start: number }) => {
+    draftSelectionRef.current = selection;
+    setDraftSelectionState(selection);
+    requestAnimationFrame(() => composerTextInputRef.current?.setNativeProps({ selection }));
   }, []);
 
   useEffect(() => () => {
@@ -997,6 +1048,10 @@ export function useChatRoomController({ navigation, route }: Props) {
       return;
     }
 
+    const canDeleteForEveryone = selectedMessages.every((message) => (
+      message.senderId === user?.id || (route.params.isGroup === true && isGroupAdmin)
+    ));
+
     const deleteSelectedMessages = (mode: 'all' | 'me') => {
       const targetMessages = selectedMessages;
 
@@ -1017,16 +1072,16 @@ export function useChatRoomController({ navigation, route }: Props) {
         ? t('deleteSingleMessageDescription', {}, language)
         : t('deleteSelectedMessagesDescription', { count }, language),
       [
-        {
+        ...(canDeleteForEveryone ? [{
           text: t('deleteForAnyone', {}, language),
-          style: 'destructive',
+          style: 'destructive' as const,
           onPress: () => deleteSelectedMessages('all'),
-        },
+        }] : []),
         { text: t('deleteForMe', {}, language), onPress: () => deleteSelectedMessages('me') },
-        { text: t('cancel', {}, language), style: 'cancel' },
+        { text: t('cancel', {}, language), style: 'cancel' as const },
       ],
     );
-  }, [canUseMessageWriteActions, deleteMessage, exitSelectionMode, language, markMessagesPendingDelete, refreshPinnedMessages, route.params.conversationId, selectedMessageIds.length, selectedMessages, unmarkMessagesPendingDelete]);
+  }, [canUseMessageWriteActions, deleteMessage, exitSelectionMode, isGroupAdmin, language, markMessagesPendingDelete, refreshPinnedMessages, route.params.conversationId, route.params.isGroup, selectedMessageIds.length, selectedMessages, unmarkMessagesPendingDelete, user?.id]);
 
   const changeGroupPicture = useCallback(async () => {
     if (!serverUrl || !conversation) {
@@ -1799,7 +1854,7 @@ export function useChatRoomController({ navigation, route }: Props) {
 
       navigation.setParams({ sharedItems: undefined });
     })();
-  }, [navigation, route.params.conversationId, route.params.sharedItems, updateDraft]);
+  }, [navigation, route.params.conversationId, route.params.sharedItems, setDraftSelection, updateDraft]);
 
   useEffect(() => {
     if (messages.length === 0 || hasInitialScrollRef.current || isInitialScrollScheduledRef.current) {
@@ -1967,14 +2022,14 @@ export function useChatRoomController({ navigation, route }: Props) {
     };
   }, [otherUser?.id, route.params.conversationId, route.params.isGroup]);
 
-  useEffect(() => {
+  const updateComposerTypingActivity = useCallback((nextDraft: string) => {
     const socket = getRealtimeSocket();
 
     if (!socket || route.params.isGroup === true) {
       return;
     }
 
-    const shouldEmitTyping = canSendMessages && draft.trim().length > 0 && !voiceRecordingState.isRecording;
+    const shouldEmitTyping = canSendMessages && nextDraft.trim().length > 0 && !voiceRecordingState.isRecording;
 
     if (shouldEmitTyping) {
       if (!hasSentTypingStartRef.current) {
@@ -2003,7 +2058,12 @@ export function useChatRoomController({ navigation, route }: Props) {
       socket.emit('typing:stop', { conversationId: route.params.conversationId });
       hasSentTypingStartRef.current = false;
     }
-  }, [canSendMessages, draft, route.params.conversationId, route.params.isGroup, voiceRecordingState.isRecording]);
+  }, [canSendMessages, route.params.conversationId, route.params.isGroup, voiceRecordingState.isRecording]);
+  composerTypingActivityRef.current = updateComposerTypingActivity;
+
+  useEffect(() => {
+    updateComposerTypingActivity(draftRef.current);
+  }, [updateComposerTypingActivity]);
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (nextState) => {
@@ -2128,22 +2188,61 @@ export function useChatRoomController({ navigation, route }: Props) {
 
   const sendingRef = useRef(false);
 
+  function hasAuthoritativeMessageForClientId(clientId: string) {
+    return (useAppStore.getState().messagesByConversation[route.params.conversationId] ?? []).some((message) => (
+      !message.id.startsWith('local-') &&
+      message.metadata &&
+      typeof message.metadata === 'object' &&
+      'clientId' in message.metadata &&
+      message.metadata.clientId === clientId
+    ));
+  }
+
+  async function waitForAuthoritativeMessage(clientId: string, timeoutMs = 800) {
+    if (hasAuthoritativeMessageForClientId(clientId)) {
+      return true;
+    }
+
+    return new Promise<boolean>((resolve) => {
+      let settled = false;
+      const finish = (wasAccepted: boolean) => {
+        if (settled) {
+          return;
+        }
+
+        settled = true;
+        clearTimeout(timeout);
+        unsubscribe();
+        resolve(wasAccepted);
+      };
+      const unsubscribe = useAppStore.subscribe(() => {
+        if (hasAuthoritativeMessageForClientId(clientId)) {
+          finish(true);
+        }
+      });
+      const timeout = setTimeout(() => finish(hasAuthoritativeMessageForClientId(clientId)), timeoutMs);
+    });
+  }
+
+  function restoreDraftAfterSendFailure(body: string) {
+    // Never replace text entered while the failed request was in flight.
+    if (draftRef.current === '') {
+      updateDraft(body);
+    }
+  }
+
   async function handleSendTextMessage() {
     if (sendingRef.current) {
       return;
     }
 
-    sendingRef.current = true;
-    setSendingText(true);
-    await waitForComposerNativeTextFlush();
     const body = draftRef.current;
 
     if (!body.trim()) {
-      sendingRef.current = false;
-      setSendingText(false);
       return;
     }
 
+    sendingRef.current = true;
     updateDraft('');
     setDraftSelection({ end: 0, start: 0 });
     setEmojiPickerVisible(false);
@@ -2154,11 +2253,17 @@ export function useChatRoomController({ navigation, route }: Props) {
       kind: 'text',
       metadata: replyMetadata,
     });
+    setSendingText(true);
 
     try {
       await sendTextMessage(route.params.conversationId, body, localId ?? undefined, replyMetadata);
     } catch (error) {
-      updateDraft(body);
+      if (localId && await waitForAuthoritativeMessage(localId)) {
+        logChatLifecycleDiagnostic('send-text-reconciled-after-request-error', { localId });
+        return;
+      }
+
+      restoreDraftAfterSendFailure(body);
       setReplyingToMessage(replyingToMessage);
       if (localId) {
         removeLocalMessage(localId);
@@ -2244,7 +2349,7 @@ export function useChatRoomController({ navigation, route }: Props) {
     try {
       await scheduleTextMessage(route.params.conversationId, body, sendAt.toISOString(), Intl.DateTimeFormat().resolvedOptions().timeZone, replyMetadata);
     } catch (error) {
-      updateDraft(body);
+      restoreDraftAfterSendFailure(body);
       setReplyingToMessage(replyingToMessage);
       Alert.alert(t('scheduledMessageFailed'), error instanceof Error ? error.message : t('pleaseTryAgain'));
     } finally {
@@ -2283,17 +2388,13 @@ export function useChatRoomController({ navigation, route }: Props) {
       return;
     }
 
-    sendingRef.current = true;
-    setSendingText(true);
-    await waitForComposerNativeTextFlush();
     const body = draftRef.current;
 
     if (!body.trim()) {
-      sendingRef.current = false;
-      setSendingText(false);
       return;
     }
 
+    sendingRef.current = true;
     updateDraft('');
     setDraftSelection({ end: 0, start: 0 });
     setEmojiPickerVisible(false);
@@ -2308,11 +2409,17 @@ export function useChatRoomController({ navigation, route }: Props) {
       kind: 'text',
       metadata,
     });
+    setSendingText(true);
 
     try {
       await sendTextMessage(route.params.conversationId, body, localId ?? undefined, metadata);
     } catch (error) {
-      updateDraft(body);
+      if (localId && await waitForAuthoritativeMessage(localId)) {
+        logChatLifecycleDiagnostic('send-text-reconciled-after-request-error', { localId });
+        return;
+      }
+
+      restoreDraftAfterSendFailure(body);
       setReplyingToMessage(replyingToMessage);
       if (localId) {
         removeLocalMessage(localId);
@@ -2367,13 +2474,16 @@ export function useChatRoomController({ navigation, route }: Props) {
     clearComposerLongPressTimer();
     composerLongPressTimerRef.current = setTimeout(() => {
       composerLongPressTimerRef.current = null;
+      setDraftSelectionState(draftSelectionRef.current);
       setComposerEditMenuVisible(true);
     }, 450);
   }
 
   function replaceDraftSelection(replacement: string) {
-    const start = Math.max(0, Math.min(draftSelection.start, draft.length));
-    const end = Math.max(start, Math.min(draftSelection.end, draft.length));
+    const draft = draftRef.current;
+    const selection = draftSelectionRef.current;
+    const start = Math.max(0, Math.min(selection.start, draft.length));
+    const end = Math.max(start, Math.min(selection.end, draft.length));
     const nextDraft = `${draft.slice(0, start)}${replacement}${draft.slice(end)}`;
     const nextPosition = start + replacement.length;
 
@@ -2387,7 +2497,9 @@ export function useChatRoomController({ navigation, route }: Props) {
   }
 
   async function copyComposerSelection() {
-    const selectedText = draft.slice(draftSelection.start, draftSelection.end);
+    const draft = draftRef.current;
+    const selection = draftSelectionRef.current;
+    const selectedText = draft.slice(selection.start, selection.end);
 
     setComposerEditMenuVisible(false);
     if (selectedText) {
@@ -2396,7 +2508,9 @@ export function useChatRoomController({ navigation, route }: Props) {
   }
 
   async function cutComposerSelection() {
-    const selectedText = draft.slice(draftSelection.start, draftSelection.end);
+    const draft = draftRef.current;
+    const selection = draftSelectionRef.current;
+    const selectedText = draft.slice(selection.start, selection.end);
 
     setComposerEditMenuVisible(false);
     if (selectedText) {
@@ -2406,8 +2520,10 @@ export function useChatRoomController({ navigation, route }: Props) {
   }
 
   function insertEmoji(emoji: string) {
-    const start = Math.max(0, Math.min(draftSelection.start, draft.length));
-    const end = Math.max(start, Math.min(draftSelection.end, draft.length));
+    const draft = draftRef.current;
+    const selection = draftSelectionRef.current;
+    const start = Math.max(0, Math.min(selection.start, draft.length));
+    const end = Math.max(start, Math.min(selection.end, draft.length));
     const nextDraft = `${draft.slice(0, start)}${emoji}${draft.slice(end)}`;
     const nextPosition = start + emoji.length;
     const nextRecentEmojis = [emoji, ...recentEmojis.filter((item) => item !== emoji)].slice(0, 36);
@@ -2416,6 +2532,11 @@ export function useChatRoomController({ navigation, route }: Props) {
     setDraftSelection({ end: nextPosition, start: nextPosition });
     setRecentEmojis(nextRecentEmojis);
     void setStoredRecentEmojis(nextRecentEmojis).catch(() => undefined);
+  }
+
+  function selectAllComposerText() {
+    setComposerEditMenuVisible(false);
+    setDraftSelection({ end: draftRef.current.length, start: 0 });
   }
 
   const markVoiceMessagePlayed = useCallback((message: Message) => {
@@ -2793,7 +2914,6 @@ export function useChatRoomController({ navigation, route }: Props) {
 
   const {
     isKeyboardVisibleRef,
-    keyboardBaselineViewportHeightRef,
     keyboardLift,
     keyboardLiftRef,
   } = useChatKeyboardLift({
@@ -2801,7 +2921,6 @@ export function useChatRoomController({ navigation, route }: Props) {
     isCaptionComposerVisible,
     isNearBottomRef,
     isTailForced,
-    listViewportHeightRef,
     logLifecycle: logChatLifecycleDiagnostic,
     logScroll: logChatScrollDiagnostic,
     scheduleTailScroll,
@@ -2865,10 +2984,10 @@ export function useChatRoomController({ navigation, route }: Props) {
     selectedCallVoiceEffectIdRef, suppressNextCallPressRef, pendingJumpMessageIdRef, pendingJumpOptionsRef, pendingJumpAttemptRef,
     pendingJumpRetryTimeoutRef, pendingHistoryAnchorRef, isControlledHistoryPrependRef, isHistoryExpansionPendingRef, isOlderLocalHistoryLoadingRef,
     isOlderLocalHistoryExhaustedRef, isTailOpenLockedRef, chatScrollDebugLastScrollAtRef, chatScrollDebugLastDistanceRef, hasTailActivityDuringOpenRef,
-    draft, draftSelection, setDraftSelection, isSendingText, sendOptionsMode,
+    composerTextInputRef, draftSelection, handleDraftChange, handleDraftSelectionChange, hasDraft, isSendingText, sendOptionsMode,
     setSendOptionsMode, scheduleDateDraft, setScheduleDateDraft, scheduleHourDraft, setScheduleHourDraft,
     scheduleMinuteDraft, setScheduleMinuteDraft, scheduleSecondDraft, setScheduleSecondDraft, disappearSecondsDraft,
-    setDisappearSecondsDraft, isComposerEditMenuVisible, setComposerEditMenuVisible, updateDraft, isEmojiPickerVisible,
+    setDisappearSecondsDraft, isComposerEditMenuVisible, setComposerEditMenuVisible, isEmojiPickerVisible,
     setEmojiPickerVisible, selectedEmojiGroupKey, setSelectedEmojiGroupKey, pendingVoiceMessage, selectedVoiceEffectId,
     setSelectedVoiceEffectId, isVoiceEffectPickerVisible, setVoiceEffectPickerVisible, isProcessingVoiceEffect, selectedCallVoiceEffectId,
     setSelectedCallVoiceEffectId, groupCallVoiceEffectId, setGroupCallVoiceEffectId, isCallVoiceEffectPickerVisible, setCallVoiceEffectPickerVisible,
@@ -2904,8 +3023,8 @@ export function useChatRoomController({ navigation, route }: Props) {
     openPinnedMessages, showPinnedMessageInChat, handleSendTextMessage, openSendOptionsMenu, openCaptionSendOptionsMenu,
     closeSendOptionsMenu, sendScheduledTextMessage, sendDisappearingTextMessage, toggleEmojiPicker, handleVoiceRecorderStateChange,
     clearComposerLongPressTimer, scheduleComposerEditMenu, pasteIntoComposer, copyComposerSelection, cutComposerSelection,
-    insertEmoji, playVoiceMessage, openCallMessage, handleVoiceRecorded, cancelPendingVoiceMessage,
+    insertEmoji, selectAllComposerText, playVoiceMessage, openCallMessage, handleVoiceRecorded, cancelPendingVoiceMessage,
     sendPendingVoiceMessage, scrollTailToEnd, isTailForced, isMeasuredNearTail, scheduleTailScroll,
-    isKeyboardVisibleRef, keyboardBaselineViewportHeightRef, keyboardLift, keyboardLiftRef,
+    isKeyboardVisibleRef, keyboardLift, keyboardLiftRef,
   };
 }

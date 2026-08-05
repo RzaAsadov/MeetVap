@@ -23,6 +23,31 @@ const optionalUrl = z.preprocess(
   (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
   z.string().url().optional(),
 );
+const clientOrigins = z.string().default('*').transform((value, context) => {
+  const origins = value.split(',').map((origin) => origin.trim()).filter(Boolean);
+
+  if (origins.length === 0 || origins.includes('*')) {
+    return ['*'];
+  }
+
+  for (const origin of origins) {
+    try {
+      const parsed = new URL(origin);
+
+      if ((parsed.protocol !== 'https:' && parsed.protocol !== 'http:') || parsed.origin !== origin) {
+        throw new Error('invalid origin');
+      }
+    } catch {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `CLIENT_ORIGIN contains an invalid origin: ${origin}`,
+      });
+      return z.NEVER;
+    }
+  }
+
+  return Array.from(new Set(origins));
+});
 const publicServerBaseUrl = z.preprocess(
   (value) => {
     if (typeof value !== 'string') {
@@ -58,7 +83,7 @@ const rawEnv = {
 };
 
 const envSchema = z.object({
-  CLIENT_ORIGIN: z.string().default('*'),
+  CLIENT_ORIGIN: clientOrigins,
   CATALOG_URL: optionalUrl,
   DATABASE_URL: z.string().min(1),
   APNS_BUNDLE_ID: optionalString,

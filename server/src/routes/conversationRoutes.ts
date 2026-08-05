@@ -392,20 +392,12 @@ function getConversationListCacheKey(
 }
 
 function getPendingContentAckMessageFilter(userId: string, client: MessageClientIdentity): Prisma.MessageWhereInput {
-  if (getMessageClientKind(client) === 'WEB') {
-    return {
-      messageClientAcks: {
-        none: {
-          client: 'WEB',
-          userId,
-        },
-      },
-    };
-  }
-
   return {
-    contentAcks: {
-      none: { userId },
+    messageClientAcks: {
+      none: {
+        client,
+        userId,
+      },
     },
   };
 }
@@ -2179,13 +2171,32 @@ conversationRoutes.get('/:conversationId/messages', async (req, res, next) => {
     await assertGroupInviteAccepted(req.params.conversationId, currentUser.id);
     const after = typeof req.query.after === 'string' ? new Date(req.query.after) : null;
     const afterDate = after && !Number.isNaN(after.getTime()) ? after : null;
+    const cursorAfter = typeof req.query.cursorAfter === 'string' ? new Date(req.query.cursorAfter) : null;
+    const cursorAfterDate = cursorAfter && !Number.isNaN(cursorAfter.getTime()) ? cursorAfter : null;
+    const cursorAfterId = cursorAfterDate && typeof req.query.cursorAfterId === 'string' && req.query.cursorAfterId.trim()
+      ? req.query.cursorAfterId.trim()
+      : null;
     const pendingDeliveryOnly = req.query.pendingDelivery === 'true';
     const pendingContentOnly = req.query.pendingContent === 'true';
     const messageClient = req.messageClient ?? normalizeMessageClient(req.query.client, 'MOBILE');
     const pendingContentFilter = getPendingContentAckMessageFilter(currentUser.id, messageClient);
     const shouldLoadLatestWindow = !afterDate && !pendingContentOnly && !pendingDeliveryOnly;
+    const shouldPageNewestFirst = shouldLoadLatestWindow || pendingContentOnly;
+    const pageCursorFilter: Prisma.MessageWhereInput | null = cursorAfterDate
+      ? {
+          OR: [
+            { createdAt: { [shouldPageNewestFirst ? 'lt' : 'gt']: cursorAfterDate } },
+            ...(cursorAfterId
+              ? [{
+                  createdAt: cursorAfterDate,
+                  id: { [shouldPageNewestFirst ? 'lt' : 'gt']: cursorAfterId },
+                }]
+              : []),
+          ],
+        }
+      : null;
 
-    const messages = await prisma.message.findMany({
+    const messageRows = await prisma.message.findMany({
       include: {
         media: true,
         receipts: {
@@ -2207,13 +2218,17 @@ conversationRoutes.get('/:conversationId/messages', async (req, res, next) => {
           },
         },
       },
-      orderBy: { createdAt: shouldLoadLatestWindow ? 'desc' : 'asc' },
-      take: 150,
+      orderBy: [
+        { createdAt: shouldPageNewestFirst ? 'desc' : 'asc' },
+        { id: shouldPageNewestFirst ? 'desc' : 'asc' },
+      ],
+      take: 151,
       where: {
         conversationId: req.params.conversationId,
         ...(pendingContentOnly
           ? {
               ...pendingContentFilter,
+              ...(pageCursorFilter ?? {}),
               contentPurgedAt: null,
             }
           : {}),
@@ -2251,6 +2266,7 @@ conversationRoutes.get('/:conversationId/messages', async (req, res, next) => {
                     },
                   ],
                 },
+                ...(pageCursorFilter ? [pageCursorFilter] : []),
               ],
             }
           : {}),
@@ -2260,7 +2276,10 @@ conversationRoutes.get('/:conversationId/messages', async (req, res, next) => {
         },
       },
     });
-    const orderedMessages = shouldLoadLatestWindow ? messages.reverse() : messages;
+    const hasMore = messageRows.length > 150;
+    const pageMessages = messageRows.slice(0, 150);
+    const nextCursorMessage = shouldLoadLatestWindow ? null : pageMessages.at(-1);
+    const orderedMessages = shouldLoadLatestWindow ? pageMessages.reverse() : pageMessages;
     const members = await prisma.conversationMember.findMany({
       where: { conversationId: req.params.conversationId },
     });
@@ -2285,11 +2304,18 @@ conversationRoutes.get('/:conversationId/messages', async (req, res, next) => {
     });
 
     res.json({
+      hasMore,
       messages: orderedMessages.map((message) => serializeMessage(
         message,
         getMessageStatusForViewer(message, currentUser.id, members),
         aliasByUserId.get(message.senderId),
       )),
+      nextCursor: nextCursorMessage
+        ? {
+            cursorAfter: nextCursorMessage.createdAt.toISOString(),
+            cursorAfterId: nextCursorMessage.id,
+          }
+        : null,
       readThrough: latestReadMessage?.createdAt.toISOString() ?? null,
     });
   } catch (error) {
@@ -2539,7 +2565,6 @@ conversationRoutes.delete('/:conversationId/messages/:messageId/pin', async (req
 conversationRoutes.post('/read-all', async (req, res, next) => {
   try {
     const currentUser = getAuthedUser(req);
-    const messageClient = req.messageClient ?? normalizeMessageClient(req.body?.client, 'MOBILE');
     const readAt = new Date();
     const memberships = await prisma.conversationMember.findMany({
       select: { conversationId: true },
@@ -2559,9 +2584,7 @@ conversationRoutes.post('/read-all', async (req, res, next) => {
         userId: currentUser.id,
       },
     });
-    const readMessages = await markConversationMessagesReadByUser(conversationIds, currentUser.id, readAt);
-    await acknowledgeInlineMessageContent(readMessages.messageIds, currentUser.id, messageClient);
-    await purgeAcknowledgedMessageContent(readMessages.messageIds);
+    await markConversationMessagesReadByUser(conversationIds, currentUser.id, readAt);
     await invalidateConversationListCacheForUsers([currentUser.id]);
 
     conversationIds.forEach((conversationId) => {
@@ -3308,7 +3331,6 @@ async function markConversationReadForUser(
   requestedMessageIds: string[],
   requestedMessageKeys: string[] = [],
 ) {
-  const messageClient = req.messageClient ?? normalizeMessageClient(req.body?.client, 'MOBILE');
   const readAt = new Date();
   await prisma.conversationMember.update({
     data: { lastReadAt: readAt },
@@ -3327,8 +3349,6 @@ async function markConversationReadForUser(
     },
   });
   const readMessages = await markConversationMessagesReadByUser([conversationId], userId, readAt, requestedMessageIds, requestedMessageKeys);
-  await acknowledgeInlineMessageContent(readMessages.messageIds, userId, messageClient);
-  await purgeAcknowledgedMessageContent(readMessages.messageIds);
   await invalidateConversationListCacheForUsers([userId]);
 
   emitConversationRead(req, conversationId, userId, readAt, readMessages.messageIds, readMessages.messageKeys);
@@ -3829,8 +3849,6 @@ export async function createAndBroadcastConversationMessage(
     : undefined;
   const metadata = ensureMessageDeleteKey(input.metadata);
   const sentAt = new Date();
-  const requestMessageClient = req.messageClient ?? normalizeMessageClient(req.body?.client, 'MOBILE');
-
   const message = await prisma.$transaction(async (tx) => {
     const createdMessage = await tx.message.create({
       data: {
@@ -3891,21 +3909,6 @@ export async function createAndBroadcastConversationMessage(
         },
       },
     });
-    await tx.messageClientAck.create({
-      data: {
-        client: requestMessageClient,
-        messageId: createdMessage.id,
-        userId: currentUserId,
-      },
-    });
-    if (getMessageClientKind(requestMessageClient) === 'MOBILE') {
-      await tx.messageContentAck.create({
-        data: {
-          messageId: createdMessage.id,
-          userId: currentUserId,
-        },
-      });
-    }
     await tx.conversationDeletion.deleteMany({
       where: {
         conversationId,
@@ -5494,45 +5497,6 @@ function getClientAcksByUserId(acks: Array<{ client: string; userId: string }>) 
   return clientAcksByUserId;
 }
 
-async function acknowledgeInlineMessageContent(messageIds: string[], userId: string, client: MessageClientIdentity) {
-  if (messageIds.length === 0) {
-    return;
-  }
-
-  const inlineMessages = await withTransientDatabaseRetry(() => prisma.message.findMany({
-    select: { id: true },
-    where: {
-      id: { in: messageIds },
-      kind: 'TEXT',
-      mediaId: null,
-    },
-  }));
-  const inlineMessageIds = inlineMessages.map((message) => message.id);
-
-  if (inlineMessageIds.length === 0) {
-    return;
-  }
-
-  await withTransientDatabaseRetry(() => prisma.messageClientAck.createMany({
-    data: inlineMessageIds.map((messageId) => ({
-      client,
-      messageId,
-      userId,
-    })),
-    skipDuplicates: true,
-  }));
-
-  if (getMessageClientKind(client) === 'MOBILE') {
-    await withTransientDatabaseRetry(() => prisma.messageContentAck.createMany({
-      data: inlineMessageIds.map((messageId) => ({
-        messageId,
-        userId,
-      })),
-      skipDuplicates: true,
-    }));
-  }
-}
-
 function hasRequiredContentAcksForParticipant(
   senderId: string,
   userId: string,
@@ -5556,11 +5520,17 @@ function hasRequiredContentAcksForParticipant(
   }
 
   return [...(activeClients ?? [])].every((client) => {
-    if (getMessageClientKind(client) === 'MOBILE') {
-      return hasMobileAck;
+    if (clientAcks.has(client)) {
+      return true;
     }
 
-    return clientAcks.has(client);
+    // Legacy mobile builds had no installation ID and only produced the
+    // user-level content ACK. Never use that ACK for a modern installation.
+    if (client === 'MOBILE') {
+      return legacyMobileAckedUserIds.has(userId);
+    }
+
+    return false;
   });
 }
 

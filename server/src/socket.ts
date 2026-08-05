@@ -23,9 +23,10 @@ export function isUserCurrentlyForeground(userId: string) {
 }
 
 export function createSocketServer(server: Server) {
+  const corsOrigins = config.CLIENT_ORIGIN.includes('*') ? true : config.CLIENT_ORIGIN;
   const io = new SocketServer(server, {
     cors: {
-      origin: config.CLIENT_ORIGIN === '*' ? true : config.CLIENT_ORIGIN,
+      origin: corsOrigins,
     },
   });
 

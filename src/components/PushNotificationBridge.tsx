@@ -6,7 +6,7 @@ import { useEffect } from 'react';
 import { Alert, AppState, Platform } from 'react-native';
 
 import { t, type AppLanguage } from '../i18n';
-import { beginCallOnlyAccess, beginCallOnlyAccessIfLockPinEnabled } from '../lib/appLockAccess';
+import { beginCallOnlyAccess } from '../lib/appLockAccess';
 import { endCall, markConversationRead, registerPushToken, ringCall } from '../lib/backend';
 import { prefetchConversationMessages } from '../lib/backgroundPrefetch';
 import { getVisibleChatRoomConversationId, navigateToChat, navigateToChats, navigateToIncomingCall } from '../navigation/navigationRef';
@@ -14,6 +14,7 @@ import { canUseNativeFullScreenIncomingCalls, clearNativeQuickReplyCredentials, 
 import { getAuthToken, getServerUrl, getStoredDecoyOffline, getStoredUser } from '../lib/storage';
 import { dismissMessageNotificationsForConversation } from '../lib/messageNotifications';
 import { logMessageDeliveryDiagnostic } from '../lib/messageDeliveryDiagnostics';
+import { isIncomingCallUrlExpired } from '../lib/incomingCallExpiry';
 import { useAppStore } from '../store/useAppStore';
 
 type IncomingCallNotificationData = {
@@ -21,6 +22,7 @@ type IncomingCallNotificationData = {
   callId?: unknown;
   conversationId?: unknown;
   deliveryReceiptUrl?: unknown;
+  expiresAt?: unknown;
   isGroupCall?: unknown;
   messageId?: unknown;
   mode?: unknown;
@@ -49,6 +51,18 @@ Notifications.setNotificationHandler({
     const notificationData = getNotificationTaskData(notification.request.content.data);
     await acknowledgePushDelivery(notificationData);
     void syncApplicationIconBadge();
+
+    if (isExpiredIncomingCall(notificationData)) {
+      if (typeof notificationData.callId === 'string') {
+        endIosCallKitCall(notificationData.callId);
+      }
+      return {
+        shouldPlaySound: false,
+        shouldSetBadge: true,
+        shouldShowBanner: false,
+        shouldShowList: false,
+      };
+    }
 
     if (AppState.currentState === 'active') {
       const data = notificationData;
@@ -108,6 +122,10 @@ if (!TaskManager.isTaskDefined(MESSAGE_PREFETCH_TASK)) {
         await acknowledgePushDelivery(payload);
 
         if (payload.type === 'incoming-call' && typeof payload.callId === 'string') {
+          if (isExpiredIncomingCall(payload)) {
+            endIosCallKitCall(payload.callId);
+            return Notifications.BackgroundNotificationTaskResult.NoData;
+          }
           return getServerUrl()
             .then((serverUrl) => (serverUrl ? ringCall(serverUrl, payload.callId as string) : undefined))
             .then(() => Notifications.BackgroundNotificationTaskResult.NewData)
@@ -530,6 +548,11 @@ async function handleNotificationData(
     return;
   }
 
+  if (isExpiredIncomingCall(data)) {
+    endIosCallKitCall(data.callId);
+    return;
+  }
+
   if (actionIdentifier === 'cancel' || actionIdentifier === 'decline') {
     endIosCallKitCall(data.callId);
     if (serverUrl) {
@@ -611,6 +634,11 @@ export async function handleIncomingCallUrl(url: string, serverUrl: string | nul
       return;
     }
 
+    if (isIncomingCallUrlExpired(parsed.searchParams.get('expiresAt'))) {
+      endIosCallKitCall(callId);
+      return;
+    }
+
     if (parsed.searchParams.get('action') === 'decline') {
       endIosCallKitCall(callId);
       if (serverUrl) {
@@ -632,21 +660,17 @@ export async function handleIncomingCallUrl(url: string, serverUrl: string | nul
       return;
     }
 
+    // Incoming calls are allowed through the app lock only for the lifetime of
+    // this call. Establish that access before navigation so a cold CallKit
+    // launch cannot briefly expose the PIN screen.
+    beginCallOnlyAccess(callId);
     const isAnsweredByNative = parsed.searchParams.get('answeredByNative') === 'true';
-    let forceCallOnlyAccess = false;
-
-    if (isAnsweredByNative) {
-      beginCallOnlyAccess(callId);
-      forceCallOnlyAccess = true;
-    } else {
-      forceCallOnlyAccess = await beginCallOnlyAccessIfLockPinEnabled(callId);
-    }
 
     navigateToIncomingCall({
       answeredByNative: isAnsweredByNative,
       autoJoin: parsed.searchParams.get('autoJoin') === 'true',
       callId,
-      forceCallOnlyAccess,
+      forceCallOnlyAccess: true,
       conversationId,
       isGroupCall: parsed.searchParams.get('isGroupCall') === 'true',
       mode: parsed.searchParams.get('mode') === 'VIDEO' || parsed.searchParams.get('mode') === 'video' ? 'video' : 'voice',
@@ -660,6 +684,20 @@ export async function handleIncomingCallUrl(url: string, serverUrl: string | nul
   } catch {
     // Ignore URLs that do not belong to the incoming-call route.
   }
+}
+
+function isExpiredIncomingCall(data: IncomingCallNotificationData) {
+  if (data.type !== 'incoming-call') {
+    return false;
+  }
+
+  const expiresAt = typeof data.expiresAt === 'number'
+    ? data.expiresAt
+    : typeof data.expiresAt === 'string'
+      ? Number(data.expiresAt)
+      : Number.NaN;
+
+  return Number.isFinite(expiresAt) && expiresAt <= Date.now();
 }
 
 function parseParticipantNames(raw: unknown) {

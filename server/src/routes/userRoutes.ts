@@ -7,6 +7,7 @@ import { getAvatarMediaId, isAvatarMediaReferenced } from '../avatarMedia';
 import { getClientMetadataWriteData, getRequestClientMetadata } from '../clientCompatibility';
 import { config } from '../config';
 import { HttpError } from '../httpError';
+import { operationalConfig } from '../operationalConfig';
 import { prisma } from '../prisma';
 import { invalidatePushTokenCacheForUser } from '../pushTokenCache';
 import { serializeUser } from '../serializers';
@@ -385,7 +386,10 @@ userRoutes.get('/me/catalog', requireAuth, async (req, res, next) => {
 
     const catalogUrl = userCatalogUrl ?? await getDefaultCatalogUrl();
 
-    res.json({ catalogUrl });
+    res.json({
+      appDomains: operationalConfig.appdomains,
+      catalogUrl,
+    });
   } catch (error) {
     next(error);
   }

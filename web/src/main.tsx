@@ -9,8 +9,9 @@ import type { LocalTrack, LocalVideoTrack, RemoteTrack, RemoteTrackPublication, 
 import './styles.css';
 import outgoingRingbackUrl from './assets/ringing.mp3';
 import ringtoneUrl from './assets/ringtone.wav';
+import { getRuntimeApiUrl } from './runtimeConfig';
 
-const API_URL = import.meta.env.VITE_API_URL || 'https://meetvap.com';
+const API_URL = getRuntimeApiUrl(import.meta.env.VITE_API_URL);
 const TOKEN_KEY = 'meetvap.web.token';
 const INSTALLATION_ID_KEY = 'meetvap.web.installationId.v1';
 const CALL_ANSWER_CLIENT_KEY = 'meetvap.web.callAnswerClientId';
@@ -1361,6 +1362,7 @@ function App() {
   const voiceRecordingStartedAtRef = useRef(0);
   const voiceRecordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const contentAckInFlightRef = useRef(new Map<string, Promise<void>>());
+  const contentPersistenceQueueRef = useRef(new Map<string, Promise<void>>());
   const readAckInFlightRef = useRef(new Map<string, Promise<void>>());
   const recentReadAckRef = useRef(new Map<string, { at: number; signature: string }>());
   const statusSyncInFlightRef = useRef(new Map<string, Promise<void>>());
@@ -1924,6 +1926,52 @@ function App() {
     return parsed as T;
   }, [token]);
 
+  const loadPendingWebMessages = useCallback(async (
+    conversationId: string,
+    onPage?: (messages: Message[]) => Promise<void>,
+  ) => {
+    const messages: Message[] = [];
+    let cursor: { cursorAfter: string; cursorAfterId: string } | null = null;
+
+    do {
+      const params = new URLSearchParams({
+        client: 'WEB',
+        pendingContent: 'true',
+      });
+
+      if (cursor) {
+        params.set('cursorAfter', cursor.cursorAfter);
+        params.set('cursorAfterId', cursor.cursorAfterId);
+      }
+
+      const response = await authedRequest<{
+        hasMore?: boolean;
+        messages: Message[];
+        nextCursor?: { cursorAfter: string; cursorAfterId: string } | null;
+      }>(`/conversations/${conversationId}/messages?${params.toString()}`);
+
+      messages.push(...response.messages);
+      await onPage?.(response.messages);
+
+      if (response.hasMore !== true || !response.nextCursor) {
+        cursor = null;
+        break;
+      }
+
+      if (
+        cursor?.cursorAfter === response.nextCursor.cursorAfter &&
+        cursor.cursorAfterId === response.nextCursor.cursorAfterId
+      ) {
+        cursor = null;
+        break;
+      }
+
+      cursor = response.nextCursor;
+    } while (cursor);
+
+    return messages;
+  }, [authedRequest]);
+
   const loadConversations = useCallback(async (cacheUserId = user?.id, refreshWeakPreviews = false) => {
     const response = await authedRequest<{ conversations: Conversation[] }>('/conversations?limit=100');
     const cachedMessagesByConversation = response.conversations.reduce<Record<string, Message[]>>((items, conversation) => {
@@ -2014,17 +2062,15 @@ function App() {
 
       await Promise.all(batch.map(async (conversation) => {
         try {
-          const messagesResponse = await authedRequest<{ messages: Message[] }>(
-            `/conversations/${conversation.id}/messages?client=WEB&pendingContent=true`,
-          );
-          const visibleMessages = messagesResponse.messages.filter(isVisibleChatMessage);
+          const visibleMessages = (await loadPendingWebMessages(conversation.id)).filter(isVisibleChatMessage);
 
           if (visibleMessages.length === 0) {
             return;
           }
 
+          const storedMessages = await getStoredConversationMessages(cacheUserId, conversation.id);
           const mergedMessages = mergeMessages(
-            getCachedConversationMessages(cacheUserId, conversation.id),
+            storedMessages,
             visibleMessages,
           ).filter(isVisibleChatMessage);
           const latestMessage = findLatestMessage(mergedMessages);
@@ -2033,7 +2079,7 @@ function App() {
             return;
           }
 
-          cacheConversationMessages(cacheUserId, conversation.id, mergedMessages);
+          await persistConversationMessages(cacheUserId, conversation.id, mergedMessages);
           setMessagesByConversation((current) => ({
             ...current,
             [conversation.id]: mergeMessages(current[conversation.id] ?? [], mergedMessages)
@@ -2071,10 +2117,12 @@ function App() {
             .map((message) => message.id);
 
           if (ackableMessageIds.length > 0) {
-            await authedRequest(`/conversations/${conversation.id}/messages/acks`, {
-              body: JSON.stringify({ client: 'WEB', messageIds: ackableMessageIds }),
-              method: 'POST',
-            }).catch(() => undefined);
+            for (let index = 0; index < ackableMessageIds.length; index += 250) {
+              await authedRequest(`/conversations/${conversation.id}/messages/acks`, {
+                body: JSON.stringify({ client: 'WEB', messageIds: ackableMessageIds.slice(index, index + 250) }),
+                method: 'POST',
+              }).catch(() => undefined);
+            }
           }
 
           const incomingMessageIds = visibleMessages
@@ -2092,7 +2140,7 @@ function App() {
         }
       }));
     }
-  }, [authedRequest, t, user?.id]);
+  }, [authedRequest, loadPendingWebMessages, t, user?.id]);
 
   const scheduleConversationRefresh = useCallback(() => {
     if (conversationRefreshTimerRef.current) {
@@ -2328,16 +2376,45 @@ function App() {
       return;
     }
 
-    const request = authedRequest(`/conversations/${conversationId}/messages/acks`, {
-      body: JSON.stringify({ client: 'WEB', messageIds: ackableMessageIds }),
-      method: 'POST',
-    }).then(() => undefined).finally(() => {
+    const request = (async () => {
+      for (let index = 0; index < ackableMessageIds.length; index += 250) {
+        await authedRequest(`/conversations/${conversationId}/messages/acks`, {
+          body: JSON.stringify({ client: 'WEB', messageIds: ackableMessageIds.slice(index, index + 250) }),
+          method: 'POST',
+        });
+      }
+    })().finally(() => {
       contentAckInFlightRef.current.delete(requestKey);
     });
 
     contentAckInFlightRef.current.set(requestKey, request);
     await request;
   }, [authedRequest]);
+
+  const persistAndAcknowledgeWebMessageContent = useCallback((
+    conversationId: string,
+    messages: Message[],
+    includeMedia = false,
+  ) => {
+    const previous = contentPersistenceQueueRef.current.get(conversationId) ?? Promise.resolve();
+    const request = previous
+      .catch(() => undefined)
+      .then(async () => {
+        const storedMessages = await getStoredConversationMessages(user?.id, conversationId);
+        const mergedMessages = mergeMessages(storedMessages, messages).filter(isVisibleChatMessage);
+
+        await persistConversationMessages(user?.id, conversationId, mergedMessages);
+        await acknowledgeWebMessageContent(conversationId, messages, includeMedia);
+      })
+      .finally(() => {
+        if (contentPersistenceQueueRef.current.get(conversationId) === request) {
+          contentPersistenceQueueRef.current.delete(conversationId);
+        }
+      });
+
+    contentPersistenceQueueRef.current.set(conversationId, request);
+    return request;
+  }, [acknowledgeWebMessageContent, user?.id]);
 
   const syncMessageStatusUpdates = useCallback(async (conversationId: string) => {
     const activeRequest = statusSyncInFlightRef.current.get(conversationId);
@@ -2417,10 +2494,19 @@ function App() {
   }, [syncMessageStatusUpdates]);
 
   const loadMessages = useCallback(async (conversationId: string) => {
-    const response = await authedRequest<{ messages: Message[] }>(
-      `/conversations/${conversationId}/messages?client=WEB&pendingContent=true`,
-    );
-    const visibleMessages = response.messages.filter(isVisibleChatMessage);
+    let persistedMessages = await getStoredConversationMessages(user?.id, conversationId);
+    const visibleMessages = (await loadPendingWebMessages(conversationId, async (pageMessages) => {
+      const visiblePageMessages = pageMessages.filter(isVisibleChatMessage);
+
+      if (visiblePageMessages.length === 0) {
+        return;
+      }
+
+      persistedMessages = mergeMessages(persistedMessages, visiblePageMessages).filter(isVisibleChatMessage);
+      await persistConversationMessages(user?.id, conversationId, persistedMessages);
+      mergeConversationMessages(conversationId, visiblePageMessages);
+      await acknowledgeWebMessageContent(conversationId, visiblePageMessages).catch(() => undefined);
+    })).filter(isVisibleChatMessage);
     const latestMessage = findLatestMessage(visibleMessages);
 
     mergeConversationMessages(conversationId, visibleMessages);
@@ -2430,7 +2516,7 @@ function App() {
     await acknowledgeWebMessageContent(conversationId, visibleMessages).catch(() => undefined);
     await syncMessageStatusUpdates(conversationId).catch(() => undefined);
     await markMessagesReceived(conversationId, visibleMessages, isPageActivelyViewed());
-  }, [acknowledgeWebMessageContent, authedRequest, markMessagesReceived, mergeConversationMessages, syncMessageStatusUpdates, updateConversationPreviewFromMessage]);
+  }, [acknowledgeWebMessageContent, loadPendingWebMessages, markMessagesReceived, mergeConversationMessages, syncMessageStatusUpdates, updateConversationPreviewFromMessage, user?.id]);
 
   useEffect(() => {
     if (!token) {
@@ -2624,7 +2710,8 @@ function App() {
     socket.on('message:new', (message: Message) => {
       mergeConversationMessages(message.conversationId, [message]);
       updateConversationPreviewFromMessage(message);
-      void acknowledgeWebMessageContent(message.conversationId, [message]).catch(() => undefined);
+      void persistAndAcknowledgeWebMessageContent(message.conversationId, [message])
+        .catch(() => undefined);
       const isOpenConversation = isPageActivelyViewed() &&
         message.conversationId === selectedConversationId;
       void markMessagesReceived(message.conversationId, [message], isOpenConversation);
@@ -2797,7 +2884,7 @@ function App() {
         socketRef.current = null;
       }
     };
-  }, [acknowledgeWebMessageContent, loadConversations, loadStatuses, logout, markMessagesReceived, mergeConversationMessages, scheduleConversationRefresh, scheduleStatusSync, selectedConversationId, stopIncomingRingtone, stopOutgoingRingback, t, token, updateConversationLastMessageStatus, updateConversationPreviewFromMessage, updateKnownUser, user?.id]);
+  }, [loadConversations, loadStatuses, logout, markMessagesReceived, mergeConversationMessages, persistAndAcknowledgeWebMessageContent, scheduleConversationRefresh, scheduleStatusSync, selectedConversationId, stopIncomingRingtone, stopOutgoingRingback, t, token, updateConversationLastMessageStatus, updateConversationPreviewFromMessage, updateKnownUser, user?.id]);
 
   useEffect(() => {
     if (!selectedConversationId) {
@@ -3255,6 +3342,8 @@ function App() {
     setReplyingTo(null);
     if (response) {
       replaceOptimisticMessage(selectedConversationId, optimisticId, response.message);
+      void persistAndAcknowledgeWebMessageContent(selectedConversationId, [response.message])
+        .catch(() => undefined);
     }
   }
 
@@ -3372,6 +3461,8 @@ function App() {
       });
 
       replaceOptimisticMessage(selectedConversationId, optimisticId, response.message);
+      void persistAndAcknowledgeWebMessageContent(selectedConversationId, [response.message])
+        .catch(() => undefined);
       closeCaptionModal();
     } catch (error) {
       markOptimisticMessageFailed(selectedConversationId, optimisticId);
@@ -3529,6 +3620,8 @@ function App() {
       });
 
       replaceOptimisticMessage(selectedConversationId, optimisticId, response.message);
+      void persistAndAcknowledgeWebMessageContent(selectedConversationId, [response.message])
+        .catch(() => undefined);
     } catch (error) {
       markOptimisticMessageFailed(selectedConversationId, optimisticId);
       setAttachmentError(error instanceof Error ? error.message : t('attachmentFailed'));
@@ -3898,6 +3991,8 @@ function App() {
       });
       mergeConversationMessages(response.conversationId, [response.message]);
       updateConversationPreviewFromMessage(response.message);
+      void persistAndAcknowledgeWebMessageContent(response.conversationId, [response.message])
+        .catch(() => undefined);
       setStatusReplyText('');
       setStatusViewerGroup(null);
       setSelectedConversationId(response.conversationId);
@@ -4329,6 +4424,8 @@ function App() {
 
     mergeConversationMessages(conversationId, [response.message]);
     updateConversationPreviewFromMessage(response.message);
+    void persistAndAcknowledgeWebMessageContent(conversationId, [response.message])
+      .catch(() => undefined);
   }
 
   async function runMessageAction(action: MessageContextAction, message: Message) {
@@ -4647,6 +4744,8 @@ function App() {
 
       mergeConversationMessages(selectedConversationId, [response.message]);
       updateConversationPreviewFromMessage(response.message);
+      void persistAndAcknowledgeWebMessageContent(selectedConversationId, [response.message])
+        .catch(() => undefined);
       setContactPickerOpen(false);
     } catch (error) {
       setAttachmentError(error instanceof Error ? error.message : t('attachmentFailed'));
@@ -8598,17 +8697,22 @@ async function replaceStoredConversationMessages(userId: string | undefined, con
 }
 
 function cacheConversationMessages(userId: string | undefined, conversationId: string, messages: Message[]) {
-  try {
-    const visibleMessages = messages.filter(isVisibleChatMessage);
+  void persistConversationMessages(userId, conversationId, messages).catch(() => undefined);
+}
 
+async function persistConversationMessages(userId: string | undefined, conversationId: string, messages: Message[]) {
+  const visibleMessages = messages.filter(isVisibleChatMessage);
+
+  try {
     localStorage.setItem(
       getMessageCacheKey(userId, conversationId),
       JSON.stringify(visibleMessages.slice(-MESSAGE_CACHE_LIMIT)),
     );
-    void replaceStoredConversationMessages(userId, conversationId, visibleMessages).catch(() => undefined);
   } catch {
-    // Browser storage can be full or disabled. Fresh server loading still works.
+    // IndexedDB remains the authoritative web message cache.
   }
+
+  await replaceStoredConversationMessages(userId, conversationId, visibleMessages);
 }
 
 function isVisibleChatMessage(message: Message) {

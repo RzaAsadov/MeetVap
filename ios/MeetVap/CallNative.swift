@@ -1021,9 +1021,11 @@ private final class CallNativeAudioRouteManager {
   static let shared = CallNativeAudioRouteManager()
 
   private let session = AVAudioSession.sharedInstance()
+  private var isCallKitManagingActivation = false
 
   func prepareCallSession(mode: String, useSpeaker: Bool) throws {
     let settings = callSessionSettings(mode: mode, useSpeaker: useSpeaker)
+    isCallKitManagingActivation = false
 
     try session.setCategory(
       .playAndRecord,
@@ -1039,6 +1041,7 @@ private final class CallNativeAudioRouteManager {
 
   func prepareCallKitSession(mode: String, useSpeaker: Bool) throws {
     let settings = callSessionSettings(mode: mode, useSpeaker: useSpeaker)
+    isCallKitManagingActivation = true
 
     try session.setCategory(
       .playAndRecord,
@@ -1107,7 +1110,9 @@ private final class CallNativeAudioRouteManager {
   }
 
   func select(routeId: String) throws -> Bool {
-    try session.setActive(true)
+    if !isCallKitManagingActivation {
+      try session.setActive(true)
+    }
 
     if routeId == "speaker" {
       try session.overrideOutputAudioPort(.speaker)
@@ -1140,6 +1145,7 @@ private final class CallNativeAudioRouteManager {
   }
 
   func clear() {
+    isCallKitManagingActivation = false
     try? session.overrideOutputAudioPort(.none)
     try? session.setPreferredInput(nil)
     let rtcAudioSession = RTCAudioSession.sharedInstance()
@@ -3408,6 +3414,13 @@ private final class CallNativeCallManager: NSObject, PKPushRegistryDelegate, CXP
       URLQueryItem(name: "autoJoin", value: payload.autoJoin ? "true" : "false"),
     ]
 
+    if let expiresAt = payload.expiresAt {
+      queryItems.append(URLQueryItem(
+        name: "expiresAt",
+        value: String(Int64(expiresAt.timeIntervalSince1970 * 1000))
+      ))
+    }
+
     if !payload.participantNames.isEmpty {
       queryItems.append(URLQueryItem(name: "participantNames", value: payload.participantNames.joined(separator: ",")))
     }
@@ -3493,10 +3506,10 @@ private struct IncomingCallPayload {
     }
 
     if let issuedAt {
-      return now.timeIntervalSince(issuedAt) <= 90
+      return now.timeIntervalSince(issuedAt) <= 30
     }
 
-    return true
+    return false
   }
 
   init?(dictionary: [AnyHashable: Any]) {

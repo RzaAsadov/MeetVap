@@ -281,17 +281,15 @@ export async function upsertMessagesToDatabase(conversationId: string, messages:
   }
 
   await enqueueDatabaseWrite(() => runDatabaseTransaction(database, async (executor) => {
+    let storedRows = await getPotentialMatchingStoredMessageRowsForMessages(executor, conversationId, dedupedMessages);
+
     for (const message of dedupedMessages) {
-      const matchingRows = await getPotentialMatchingStoredMessageRows(executor, conversationId, message);
+      const lookupKeys = new Set(getPotentialStorageLookupKeys(message));
+      const matchingRows = storedRows.filter((row) => (
+        lookupKeys.has(row.dedupeKey) || lookupKeys.has(row.message.id)
+      ));
       const matchingStoredMessages = matchingRows
-        .map((row) => {
-          try {
-            return JSON.parse(row.payload) as Message;
-          } catch {
-            return null;
-          }
-        })
-        .filter((storedMessage): storedMessage is Message => !!storedMessage);
+        .map((row) => row.message);
       const matchingStoredMessage = matchingStoredMessages.find((storedMessage) => areMatchingMessages(storedMessage, message));
       const nextMessage = matchingStoredMessage ? mergeStoredMessageUpdate(matchingStoredMessage, message) : message;
       const nextDedupeKey = getMessageDedupeKey(nextMessage);
@@ -307,6 +305,11 @@ export async function upsertMessagesToDatabase(conversationId: string, messages:
       }
 
       await upsertMessageRow(executor, conversationId, nextDedupeKey, nextMessage);
+      const obsoleteDedupeKeySet = new Set(obsoleteDedupeKeys);
+      storedRows = [
+        ...storedRows.filter((row) => row.dedupeKey !== nextDedupeKey && !obsoleteDedupeKeySet.has(row.dedupeKey)),
+        { dedupeKey: nextDedupeKey, message: nextMessage },
+      ];
     }
   }));
 }
@@ -650,19 +653,35 @@ function dedupeMessages(messages: Message[]) {
   return [...byKey.values()].sort((left, right) => getMessageTimestamp(left) - getMessageTimestamp(right));
 }
 
-async function getPotentialMatchingStoredMessageRows(
+async function getPotentialMatchingStoredMessageRowsForMessages(
   executor: MessageDatabaseExecutor,
   conversationId: string,
-  message: Message,
+  messages: Message[],
 ) {
-  const keys = getPotentialStorageLookupKeys(message);
-  const placeholders = keys.map(() => '?').join(', ');
+  const keys = Array.from(new Set(messages.flatMap(getPotentialStorageLookupKeys)));
+  const rowsByDedupeKey = new Map<string, { dedupeKey: string; message: Message }>();
 
-  return executor.getAllAsync<{ dedupeKey: string; payload: string }>(
-    `select dedupeKey, payload from messages
-      where conversationId = ? and (id in (${placeholders}) or dedupeKey in (${placeholders}))`,
-    [conversationId, ...keys, ...keys],
-  );
+  for (const keyChunk of chunk(keys, 200)) {
+    const placeholders = keyChunk.map(() => '?').join(', ');
+    const rows = await executor.getAllAsync<{ dedupeKey: string; payload: string }>(
+      `select dedupeKey, payload from messages
+        where conversationId = ? and (id in (${placeholders}) or dedupeKey in (${placeholders}))`,
+      [conversationId, ...keyChunk, ...keyChunk],
+    );
+
+    rows.forEach((row) => {
+      try {
+        rowsByDedupeKey.set(row.dedupeKey, {
+          dedupeKey: row.dedupeKey,
+          message: JSON.parse(row.payload) as Message,
+        });
+      } catch {
+        // Ignore malformed historical rows.
+      }
+    });
+  }
+
+  return [...rowsByDedupeKey.values()];
 }
 
 function getPotentialStorageLookupKeys(message: Message) {

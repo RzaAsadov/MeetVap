@@ -13,6 +13,7 @@ loadEnvFile(path.join(__dirname, '..', '.env'));
 
 const configPath = path.join(__dirname, 'config.json');
 const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+const basePath = normalizeBasePath(config.basePath);
 const backendPolicyPath = path.join(__dirname, '..', 'config.json');
 const backendPolicy = JSON.parse(fs.readFileSync(backendPolicyPath, 'utf8'));
 const app = express();
@@ -101,8 +102,46 @@ function trimEnvValue(value) {
   return value;
 }
 
+function normalizeBasePath(value) {
+  const normalized = String(value || '').trim().replace(/^\/+|\/+$/g, '');
+  return normalized ? `/${normalized}` : '';
+}
+
+function withBasePath(value) {
+  if (!basePath || typeof value !== 'string' || !value.startsWith('/') || value.startsWith('//')) {
+    return value;
+  }
+
+  return `${basePath}${value}`;
+}
+
+function prefixAdminHtml(html) {
+  if (!basePath) {
+    return html;
+  }
+
+  return html
+    .replace(/(\b(?:href|src|action)=["'])\/(?!\/)/g, `$1${basePath}/`)
+    .replace(/(\bfetch\(\s*["'])\/(?!\/)/g, `$1${basePath}/`)
+    .replace(/(\bwindow\.location\.href\s*=\s*["'])\/(?!\/)/g, `$1${basePath}/`);
+}
+
 app.use(express.urlencoded({ extended: false }));
 app.use(cookieParser());
+app.use((_req, res, next) => {
+  const send = res.send.bind(res);
+  const redirect = res.redirect.bind(res);
+
+  res.send = (body) => send(typeof body === 'string' ? prefixAdminHtml(body) : body);
+  res.redirect = (statusOrPath, maybePath) => {
+    if (typeof statusOrPath === 'number') {
+      return redirect(statusOrPath, withBasePath(maybePath));
+    }
+
+    return redirect(withBasePath(statusOrPath));
+  };
+  next();
+});
 app.use((req, res, next) => {
   const queryLanguage = normalizeAdminLanguage(req.query.lang);
   const language = queryLanguage || normalizeAdminLanguage(req.cookies.meetvap_admin_lang) || detectBrowserLanguage(req);
@@ -110,6 +149,7 @@ app.use((req, res, next) => {
   if (queryLanguage) {
     res.cookie('meetvap_admin_lang', queryLanguage, {
       httpOnly: false,
+      path: basePath || '/',
       sameSite: 'lax',
       secure: config.secureCookies === true,
     });
@@ -304,6 +344,7 @@ function setSession(res, admin) {
   const value = `${Date.now()}.${crypto.randomBytes(16).toString('hex')}.${payload}`;
   res.cookie('meetvap_admin', `${value}.${sign(value)}`, {
     httpOnly: true,
+    path: basePath || '/',
     sameSite: 'lax',
     secure: config.secureCookies === true,
   });
@@ -1137,7 +1178,7 @@ app.post('/login', async (req, res, next) => {
 });
 
 app.post('/logout', requireAdmin, (_req, res) => {
-  res.clearCookie('meetvap_admin');
+  res.clearCookie('meetvap_admin', { path: basePath || '/' });
   res.redirect('/login');
 });
 

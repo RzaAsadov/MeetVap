@@ -69,7 +69,7 @@ let hasWarnedMissingFirebaseServiceAccount = false;
 export async function sendIncomingCallPush(input: IncomingCallPush) {
   if (await relayPushToMainServer('incoming-call', input)) return emptyPushDispatchResult();
   const issuedAt = Date.now();
-  const expiresAt = issuedAt + 45_000;
+  const expiresAt = issuedAt + 30_000;
   const callerTitle = input.title.trim() || 'Incoming call';
   const baseData = {
     categoryId: 'incoming-call',
@@ -127,6 +127,7 @@ export async function sendIncomingCallPush(input: IncomingCallPush) {
         data: { ...baseData, ...labels, body, ...getDeliveryReceiptData(item) },
         priority: 'high',
         sound: 'ringtone.wav',
+        ttlSeconds: 30,
         title: callerTitle,
         to: item.token,
         tokenId: item.id,
@@ -144,6 +145,7 @@ export async function sendIncomingCallPush(input: IncomingCallPush) {
         dataOnly: true,
         priority: 'high',
         sound: INCOMING_CALL_FCM_SOUND,
+        ttlMs: 30_000,
         title: callerTitle,
         imageUrl: input.avatarUrl,
       });
@@ -199,6 +201,7 @@ export async function sendIncomingCallPush(input: IncomingCallPush) {
         data: { ...baseData, ...labels, body, ...getDeliveryReceiptData(item) },
         sound: 'ringtone.wav',
         title: callerTitle,
+        expirySeconds: 30,
       });
     })),
   ]);
@@ -447,6 +450,7 @@ async function sendExpoPushNotifications(messages: Array<{
   tokenId?: string;
   imageUrl?: string | null;
   sound?: string;
+  ttlSeconds?: number;
 }>): Promise<PushDispatchResult> {
   if (messages.length === 0) {
     return emptyPushDispatchResult();
@@ -455,12 +459,13 @@ async function sendExpoPushNotifications(messages: Array<{
   const results = await Promise.all(
     chunk(messages, 100).map(async (batch) => {
       const response = await fetch(EXPO_PUSH_URL, {
-        body: JSON.stringify(batch.map(({ tokenId: _tokenId, ...message }) => ({
+        body: JSON.stringify(batch.map(({ tokenId: _tokenId, ttlSeconds, ...message }) => ({
           ...message,
           ...(message.categoryId ? { categoryIdentifier: message.categoryId } : {}),
           ...(message.contentAvailable ? { _contentAvailable: true } : {}),
           ...(message.imageUrl ? { richContent: { image: message.imageUrl } } : {}),
           ...(!message.contentAvailable ? { sound: message.sound ?? 'default' } : {}),
+          ...(ttlSeconds !== undefined ? { ttl: ttlSeconds } : {}),
         }))),
         headers: {
           Accept: 'application/json',
@@ -513,6 +518,7 @@ async function sendFcmNotifications(tokens: StoredPushToken[], input: {
   title: string;
   imageUrl?: string | null;
   sound?: string;
+  ttlMs?: number;
 }): Promise<PushDispatchResult> {
   if (tokens.length === 0) {
     return emptyPushDispatchResult();
@@ -549,6 +555,7 @@ async function sendFcmNotifications(tokens: StoredPushToken[], input: {
       const baseMessage = {
         android: {
           priority: input.priority,
+          ...(input.ttlMs !== undefined ? { ttl: input.ttlMs } : {}),
         },
         data,
         token: item.token,
@@ -603,6 +610,7 @@ async function sendApnsNotifications(tokens: StoredPushToken[], input: {
   body: string;
   categoryId?: string;
   data: Record<string, string>;
+  expirySeconds?: number;
   sound?: string;
   title: string;
 }): Promise<PushDispatchResult> {
@@ -645,6 +653,10 @@ async function sendApnsNotifications(tokens: StoredPushToken[], input: {
     sound: input.sound ?? 'default',
     topic: config.APNS_BUNDLE_ID,
   });
+
+  if (input.expirySeconds !== undefined) {
+    notification.expiry = Math.floor(Date.now() / 1000) + input.expirySeconds;
+  }
 
   if (typeof input.badge === 'number' && Number.isFinite(input.badge)) {
     notification.badge = Math.max(0, Math.floor(input.badge));

@@ -35,11 +35,12 @@ import { withRedisLock } from './redisCache';
 const app = express();
 const server = http.createServer(app);
 const io = createSocketServer(server);
+const corsOrigins = config.CLIENT_ORIGIN.includes('*') ? true : config.CLIENT_ORIGIN;
 
 app.set('io', io);
 app.set('trust proxy', true);
 app.use(helmet());
-app.use(cors({ origin: config.CLIENT_ORIGIN === '*' ? true : config.CLIENT_ORIGIN }));
+app.use(cors({ origin: corsOrigins }));
 app.use(express.json({ limit: '30mb' }));
 app.use(payloadMaskMiddleware);
 app.use(morgan(config.NODE_ENV === 'production' ? 'combined' : 'dev', {

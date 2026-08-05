@@ -26,6 +26,7 @@ import { AttachmentCaptionModal, ComposerEditMenu, DateDivider, EditMessageModal
 import { HoldVoiceRecorderButton } from './ChatRoomVoiceRecorder';
 import { formatVoiceComposerEffectLabel, getMessageFileName, getMessageMimeType, isShareableMediaMessage, isViewableImageMessage } from './lib/ChatMediaHelpers';
 import { getDisappearingSecondsAfterView, getMessagePreview, getPinnedMessageTitle, getReplySenderName } from './lib/ChatMessagePreview';
+import { openMessageUrl } from '../lib/messageLinks';
 import { getChatListItemRenderKey, getGroupCallLimit, type ChatListItem } from './lib/ChatMiscHelpers';
 import { useChatRoomController } from './ChatRoomController';
 
@@ -62,10 +63,10 @@ export function ChatRoomScreen({ navigation, route }: Props) {
     selectedCallVoiceEffectIdRef, suppressNextCallPressRef, pendingJumpMessageIdRef, pendingJumpOptionsRef, pendingJumpAttemptRef,
     pendingJumpRetryTimeoutRef, pendingHistoryAnchorRef, isControlledHistoryPrependRef, isHistoryExpansionPendingRef, isOlderLocalHistoryLoadingRef,
     isOlderLocalHistoryExhaustedRef, isTailOpenLockedRef, chatScrollDebugLastScrollAtRef, chatScrollDebugLastDistanceRef, hasTailActivityDuringOpenRef,
-    draft, draftSelection, setDraftSelection, isSendingText, sendOptionsMode,
+    composerTextInputRef, draftSelection, handleDraftChange, handleDraftSelectionChange, hasDraft, isSendingText, sendOptionsMode,
     setSendOptionsMode, scheduleDateDraft, setScheduleDateDraft, scheduleHourDraft, setScheduleHourDraft,
     scheduleMinuteDraft, setScheduleMinuteDraft, scheduleSecondDraft, setScheduleSecondDraft, disappearSecondsDraft,
-    setDisappearSecondsDraft, isComposerEditMenuVisible, setComposerEditMenuVisible, updateDraft, isEmojiPickerVisible,
+    setDisappearSecondsDraft, isComposerEditMenuVisible, setComposerEditMenuVisible, isEmojiPickerVisible,
     setEmojiPickerVisible, selectedEmojiGroupKey, setSelectedEmojiGroupKey, pendingVoiceMessage, selectedVoiceEffectId,
     setSelectedVoiceEffectId, isVoiceEffectPickerVisible, setVoiceEffectPickerVisible, isProcessingVoiceEffect, selectedCallVoiceEffectId,
     setSelectedCallVoiceEffectId, groupCallVoiceEffectId, setGroupCallVoiceEffectId, isCallVoiceEffectPickerVisible, setCallVoiceEffectPickerVisible,
@@ -101,9 +102,9 @@ export function ChatRoomScreen({ navigation, route }: Props) {
     openPinnedMessages, showPinnedMessageInChat, handleSendTextMessage, openSendOptionsMenu, openCaptionSendOptionsMenu,
     closeSendOptionsMenu, sendScheduledTextMessage, sendDisappearingTextMessage, toggleEmojiPicker, handleVoiceRecorderStateChange,
     clearComposerLongPressTimer, scheduleComposerEditMenu, pasteIntoComposer, copyComposerSelection, cutComposerSelection,
-    insertEmoji, playVoiceMessage, openCallMessage, handleVoiceRecorded, cancelPendingVoiceMessage,
+    insertEmoji, selectAllComposerText, playVoiceMessage, openCallMessage, handleVoiceRecorded, cancelPendingVoiceMessage,
     sendPendingVoiceMessage, scrollTailToEnd, isTailForced, isMeasuredNearTail, scheduleTailScroll,
-    isKeyboardVisibleRef, keyboardBaselineViewportHeightRef, keyboardLift, keyboardLiftRef,
+    isKeyboardVisibleRef, keyboardLift, keyboardLiftRef,
   } = useChatRoomController({ navigation, route });
 
   function handleMessageActions(message: Message) {
@@ -434,6 +435,10 @@ export function ChatRoomScreen({ navigation, route }: Props) {
       return;
     }
 
+    const canDeleteForEveryone = targetMessages.every((message) => (
+      message.senderId === user?.id || (route.params.isGroup === true && isGroupAdmin)
+    ));
+
     const deleteMessages = (mode: 'all' | 'me') => {
       markMessagesPendingDelete(targetMessages);
       if (shouldExitSelectionMode) {
@@ -454,13 +459,13 @@ export function ChatRoomScreen({ navigation, route }: Props) {
         ? t('deleteSingleMessageDescription', {}, language)
         : t('deleteSelectedMessagesDescription', { count }, language),
       [
-        {
+        ...(canDeleteForEveryone ? [{
           text: t('deleteForAnyone', {}, language),
-          style: 'destructive',
+          style: 'destructive' as const,
           onPress: () => deleteMessages('all'),
-        },
+        }] : []),
         { text: t('deleteForMe', {}, language), onPress: () => deleteMessages('me') },
-        { text: t('cancel', {}, language), style: 'cancel' },
+        { text: t('cancel', {}, language), style: 'cancel' as const },
       ],
     );
   }
@@ -607,13 +612,6 @@ export function ChatRoomScreen({ navigation, route }: Props) {
     const previousViewportHeight = listViewportHeightRef.current;
     listViewportHeightRef.current = event.nativeEvent.layout.height;
     const didViewportChange = Math.abs(previousViewportHeight - event.nativeEvent.layout.height) > 2;
-
-    if (Platform.OS === 'android' && !isKeyboardVisibleRef.current && event.nativeEvent.layout.height > 0) {
-      keyboardBaselineViewportHeightRef.current = Math.max(
-        keyboardBaselineViewportHeightRef.current,
-        event.nativeEvent.layout.height,
-      );
-    }
 
     if (didViewportChange) {
       logChatScrollDiagnostic('list-layout', {
@@ -1415,23 +1413,23 @@ export function ChatRoomScreen({ navigation, route }: Props) {
             ) : (
             <TextInput
               contextMenuHidden={Platform.OS !== 'ios'}
+              defaultValue=""
               multiline
-              onChangeText={updateDraft}
+              onChangeText={handleDraftChange}
               onFocus={() => {
                 setEmojiPickerVisible(false);
                 if (isNearBottomRef.current || isTailForced()) {
                   scheduleTailScroll({ reason: 'composer-focus', settle: true });
                 }
               }}
-              onSelectionChange={(event) => setDraftSelection(event.nativeEvent.selection)}
+              onSelectionChange={(event) => handleDraftSelectionChange(event.nativeEvent.selection)}
               onTouchCancel={Platform.OS === 'ios' ? undefined : clearComposerLongPressTimer}
               onTouchEnd={Platform.OS === 'ios' ? undefined : clearComposerLongPressTimer}
               onTouchStart={Platform.OS === 'ios' ? undefined : scheduleComposerEditMenu}
               placeholder={t('message')}
               placeholderTextColor={colors.mutedText}
-              selection={Platform.OS === 'ios' ? undefined : draftSelection}
+              ref={composerTextInputRef}
               style={[styles.input, styles.inputInWrap]}
-              value={draft}
             />
             )}
           </View>
@@ -1459,7 +1457,7 @@ export function ChatRoomScreen({ navigation, route }: Props) {
               {isProcessingVoiceEffect ? <ActivityIndicator color={colors.white} size="small" /> : <Ionicons color={colors.white} name="send" size={20} />}
             </Pressable>
           </View>
-          ) : draft.trim() && canSendMessages ? (
+          ) : hasDraft && canSendMessages ? (
           <Pressable disabled={isSendingText} onLongPress={openSendOptionsMenu} onPress={handleSendTextMessage} style={[styles.sendButton, isSendingText ? styles.sendButtonDisabled : undefined]}>
             {isSendingText ? <ActivityIndicator color={colors.white} size="small" /> : <Ionicons color={colors.white} name="send" size={20} />}
           </Pressable>
@@ -1790,7 +1788,7 @@ export function ChatRoomScreen({ navigation, route }: Props) {
         onOpenFile={(message) => void openChatGalleryFile(message)}
         onOpenMedia={setViewerMessage}
         onOpenSubscription={() => navigation.navigate('Subscription')}
-        onOpenUrl={(url) => void Linking.openURL(url).catch(() => undefined)}
+        onOpenUrl={(url) => void openMessageUrl(url)}
         onShowInChat={showMessageFromInfo}
         onStartCall={(mode) => void confirmStartCall(mode)}
         onTransferGroupOwnership={transferGroupOwnership}
@@ -1812,15 +1810,12 @@ export function ChatRoomScreen({ navigation, route }: Props) {
       />
       <ComposerEditMenu
         hasSelection={draftSelection.end > draftSelection.start}
-        hasText={draft.length > 0}
+        hasText={hasDraft}
         onClose={() => setComposerEditMenuVisible(false)}
         onCopy={() => void copyComposerSelection()}
         onCut={() => void cutComposerSelection()}
         onPaste={() => void pasteIntoComposer()}
-        onSelectAll={() => {
-          setComposerEditMenuVisible(false);
-          setDraftSelection({ end: draft.length, start: 0 });
-        }}
+        onSelectAll={selectAllComposerText}
         visible={isComposerEditMenuVisible}
       />
     </View>

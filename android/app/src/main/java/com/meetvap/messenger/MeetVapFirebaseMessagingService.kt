@@ -36,6 +36,12 @@ class MeetVapFirebaseMessagingService : ExpoFirebaseMessagingService() {
       return
     }
 
+    if (!payload.isFresh()) {
+      Log.i("MeetVapFCM", "Ignoring expired incoming call push for ${payload.callId}")
+      IncomingCallNotificationHelper.cancel(applicationContext, payload.callId)
+      return
+    }
+
     acknowledgeReceipt(data["ringingReceiptUrl"], "meetvap-call-ringing-receipt")
 
     if (MainActivity.isAppInForeground) {

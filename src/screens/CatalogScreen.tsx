@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
+import type { BottomTabScreenProps } from '@react-navigation/bottom-tabs';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
 import { WebView } from 'react-native-webview';
 import type { WebView as WebViewType } from 'react-native-webview';
 
@@ -10,11 +10,13 @@ import { useAppStore } from '../store/useAppStore';
 import { colors } from '../theme/colors';
 import { spacing } from '../theme/spacing';
 import { useThemeColors } from '../theme/useThemeColors';
+import type { MainTabParamList } from '../types/navigation';
 
-export function CatalogScreen() {
+type Props = BottomTabScreenProps<MainTabParamList, 'Catalog'>;
+
+export function CatalogScreen({ navigation, route }: Props) {
   useThemeColors();
   styles = createStyles();
-  const navigation = useNavigation();
   const user = useAppStore((state) => state.user);
   const serverCatalogUrl = useAppStore((state) => state.catalogUrl);
   const catalogUrlLoadError = useAppStore((state) => state.catalogUrlLoadError);
@@ -27,6 +29,8 @@ export function CatalogScreen() {
   const [webViewUrl, setWebViewUrl] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const catalogUrl = useMemo(() => buildCatalogUrl(serverCatalogUrl, user?.id), [serverCatalogUrl, user?.id]);
+  const requestedUrl = useMemo(() => normalizeWebViewUrl(route.params?.initialUrl), [route.params?.initialUrl]);
+  const startUrl = requestedUrl ?? catalogUrl;
 
   useEffect(() => {
     setHasRequestedCatalogUrl(true);
@@ -59,20 +63,23 @@ export function CatalogScreen() {
   }, [catalogUrl, navigation]);
 
   useLayoutEffect(() => {
-    setWebViewUrl(catalogUrl);
-  }, [catalogUrl]);
+    setHasError(false);
+    setLoading(true);
+    setWebViewUrl(startUrl);
+    setReloadKey((current) => current + 1);
+  }, [route.params?.requestId, startUrl]);
 
   function retry() {
     setHasError(false);
     setLoading(true);
-    if (catalogUrl) {
-      setWebViewUrl(catalogUrl);
+    if (startUrl) {
+      setWebViewUrl(startUrl);
       setReloadKey((prev) => prev + 1);
     }
     webViewRef.current?.reload();
   }
 
-  if (!catalogUrl && (!hasRequestedCatalogUrl || isLoadingCatalogUrl)) {
+  if (!startUrl && (!hasRequestedCatalogUrl || isLoadingCatalogUrl)) {
     return (
       <View style={styles.centered}>
         <ActivityIndicator color={colors.primary} />
@@ -80,7 +87,7 @@ export function CatalogScreen() {
     );
   }
 
-  if (!catalogUrl && catalogUrlLoadError) {
+  if (!startUrl && catalogUrlLoadError) {
     return (
       <View style={styles.centered}>
         <Ionicons color={colors.textSecondary} name="cloud-offline-outline" size={42} />
@@ -92,7 +99,7 @@ export function CatalogScreen() {
     );
   }
 
-  if (!catalogUrl) {
+  if (!startUrl) {
     return (
       <View style={styles.centered}>
         <Ionicons color={colors.textSecondary} name="grid-outline" size={42} />
@@ -121,7 +128,7 @@ export function CatalogScreen() {
           setLoading(true);
         }}
         pullToRefreshEnabled
-        source={{ uri: webViewUrl ?? catalogUrl ?? '' }}
+        source={{ uri: webViewUrl ?? startUrl }}
         startInLoadingState={false}
         style={styles.webView}
       />
@@ -150,6 +157,19 @@ function buildCatalogUrl(baseUrl?: string | null, userId?: string) {
 
   const separator = baseUrl.includes('?') ? '&' : '?';
   return `${baseUrl}${separator}id=${encodeURIComponent(userId)}`;
+}
+
+function normalizeWebViewUrl(value?: string) {
+  if (!value) {
+    return null;
+  }
+
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.toString() : null;
+  } catch {
+    return null;
+  }
 }
 
 let styles = createStyles();

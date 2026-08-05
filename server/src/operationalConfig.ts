@@ -4,6 +4,13 @@ import { z } from 'zod';
 
 const positiveInteger = z.number().int().positive();
 const nonNegativeInteger = z.number().int().nonnegative();
+const appDomainSchema = z.string()
+  .trim()
+  .transform((value) => value.toLowerCase().replace(/\.$/, ''))
+  .refine(
+    (value) => value.length <= 253 && /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(value),
+    'appdomains entries must be hostnames such as example.com',
+  );
 
 const operationalConfigSchema = z.object({
   serverRole: z.enum(['main', 'child']).default('main'),
@@ -13,6 +20,7 @@ const operationalConfigSchema = z.object({
     .min(24)
     .regex(/^[A-Za-z0-9_-]+$/, 'mainServerKey must contain only ASCII letters, numbers, underscore, and hyphen')
     .optional(),
+  appdomains: z.array(appDomainSchema).default([]).transform((domains) => Array.from(new Set(domains))),
   appVersions: z.object({
     android: z.object({
       latest: z.string().trim().min(1).default('0.1.0'),

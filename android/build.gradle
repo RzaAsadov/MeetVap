@@ -13,6 +13,12 @@ buildscript {
   }
 }
 
+ext {
+  // react-native-iap 12 defaults to Billing 7. Keep its stable JS/StoreKit API,
+  // but meet Google Play's Billing 8 requirement on Android.
+  playBillingSdkVersion = "8.2.1"
+}
+
 allprojects {
   repositories {
     google()

@@ -4,16 +4,17 @@ import { AppState as NativeAppState, Appearance, InteractionManager } from 'reac
 
 import { ApiError } from '../lib/api';
 import { AppLanguage, isLanguagePreference, LanguagePreference, resolveLanguage, setI18nLanguage, t } from '../i18n';
-import { acknowledgeBulkMessageDeletions, acknowledgeBulkMessageEdits, acknowledgeBulkMessageStatusUpdates, acknowledgeMessageContent, acknowledgeMessageDeletions, acknowledgeMessageEdits, acknowledgeMessageStatusUpdates, addContact, addGroupAdmins as addGroupAdminsRequest, addGroupMembers as addGroupMembersRequest, blockUser, bulkDeleteConversations, createDirectConversation, createForwardedMessage, createGroupConversation, createMediaMessage, createScheduledMessage, createStatus as createStatusRequest, createTextMessage, createVoiceMessage, createVoiceRoomConversation, declineGroupInvite as declineGroupInviteRequest, deleteAccount as deleteAccountRequest, deleteCallMessageByCallId as deleteCallMessageByCallIdRequest, deleteContact as deleteContactRequest, deleteConversation as deleteConversationRequest, deleteConversationForAnyone as deleteConversationForAnyoneRequest, deleteGroup as deleteGroupRequest, deleteMessage as deleteMessageRequest, deleteScheduledMessage as deleteScheduledMessageRequest, deleteStatus as deleteStatusRequest, editMessage as editMessageRequest, getCatalogConfig, getHelpConfig, getMe, getStatusSummary, getSubscriptionStatus as getSubscriptionStatusRequest, listBlockedUsers, listBulkMessageDeletions, listBulkMessageStatusUpdates, listContacts, listConversationDeltas, listConversations, listMessageDeletions, listMessageEdits, listMessages, listMessageStatusUpdates, listStatuses, login, markAllConversationsRead, markConversationRead, markStatusViewed as markStatusViewedRequest, openDisappearingMessage as openDisappearingMessageRequest, reactToMessage as reactToMessageRequest, register, removeGroupMember as removeGroupMemberRequest, replyToStatus as replyToStatusRequest, reportContent, revokeGroupAdmin as revokeGroupAdminRequest, transferGroupOwnership as transferGroupOwnershipRequest, unblockUser, updateConversationMute as updateConversationMuteRequest, updateDisappearingMessages as updateDisappearingMessagesRequest, updateGroupAlias as updateGroupAliasRequest, updateGroupAvatar as updateGroupAvatarRequest, updateGroupSettings as updateGroupSettingsRequest, updateGroupTitle as updateGroupTitleRequest, updateMyAvatar, updateMyPassword, updateMyProfile, updatePrivacy as updatePrivacyRequest, uploadMediaFile } from '../lib/backend';
+import { acknowledgeBulkMessageDeletions, acknowledgeBulkMessageEdits, acknowledgeBulkMessageStatusUpdates, acknowledgeMessageContent, acknowledgeMessageDeletions, acknowledgeMessageEdits, acknowledgeMessageStatusUpdates, addContact, addGroupAdmins as addGroupAdminsRequest, addGroupMembers as addGroupMembersRequest, blockUser, bulkDeleteConversations, createDirectConversation, createForwardedMessage, createGroupConversation, createMediaMessage, createScheduledMessage, createStatus as createStatusRequest, createTextMessage, createVoiceMessage, createVoiceRoomConversation, declineGroupInvite as declineGroupInviteRequest, deleteAccount as deleteAccountRequest, deleteCallMessageByCallId as deleteCallMessageByCallIdRequest, deleteContact as deleteContactRequest, deleteConversation as deleteConversationRequest, deleteConversationForAnyone as deleteConversationForAnyoneRequest, deleteGroup as deleteGroupRequest, deleteMessage as deleteMessageRequest, deleteScheduledMessage as deleteScheduledMessageRequest, deleteStatus as deleteStatusRequest, editMessage as editMessageRequest, getCatalogConfig, getHelpConfig, getMe, getStatusSummary, getSubscriptionStatus as getSubscriptionStatusRequest, listBlockedUsers, listBulkMessageDeletions, listBulkMessageStatusUpdates, listContacts, listConversationDeltas, listConversations, listMessageDeletions, listMessageEdits, listMessages, listMessageStatusUpdates, listPendingMessages, listStatuses, login, markAllConversationsRead, markConversationRead, markStatusViewed as markStatusViewedRequest, openDisappearingMessage as openDisappearingMessageRequest, reactToMessage as reactToMessageRequest, register, removeGroupMember as removeGroupMemberRequest, replyToStatus as replyToStatusRequest, reportContent, revokeGroupAdmin as revokeGroupAdminRequest, transferGroupOwnership as transferGroupOwnershipRequest, unblockUser, updateConversationMute as updateConversationMuteRequest, updateDisappearingMessages as updateDisappearingMessagesRequest, updateGroupAlias as updateGroupAliasRequest, updateGroupAvatar as updateGroupAvatarRequest, updateGroupSettings as updateGroupSettingsRequest, updateGroupTitle as updateGroupTitleRequest, updateMyAvatar, updateMyPassword, updateMyProfile, updatePrivacy as updatePrivacyRequest, uploadMediaFile } from '../lib/backend';
 import type { ConversationMuteDurationMinutes } from '../lib/conversationMute';
 import type { ConversationListFilter } from '../lib/conversationList';
 import type { DisappearingMessagesDurationMinutes } from '../lib/disappearingMessages';
 import type { ConversationDeltaCursor, MessageDeletionUpdate, MessageEdit, MessageReactionUpdate, MessageStatusUpdate, StatusGroup, StatusKind } from '../lib/backend';
 import { formatConversationActivityTime } from '../lib/format';
+import { addForegroundChatActivityListener, isForegroundChatActive } from '../lib/foregroundChatActivity';
 import { downloadRemoteMediaFile, getMessageMediaCacheUri, isLocalMediaFileComplete, removePartialMediaDownloadsForMessages, resolveCachedMessageMediaUri, resolveLocalMediaFileUri, sanitizeCacheFileName } from '../lib/mediaCache';
 import { logMessageDeliveryDiagnostic, refreshRemoteMessageDeliveryDiagnostics } from '../lib/messageDeliveryDiagnostics';
 import { dismissAllMessageNotifications, dismissMessageNotificationsForConversation } from '../lib/messageNotifications';
-import { clearAuthToken, clearDeletedConversationAfter, clearStoredConversations, clearStoredSubscriptionStatus, clearStoredUser, eraseLocalAppData, eraseLocalChatData, getAuthToken, getDeletedConversationAfter, getServerUrl, getStoredCallLogs, getStoredConversationMediaCacheCursor, getStoredConversationSyncCursors, getStoredConversations, getStoredDarkMode, getStoredDecoyOffline, getStoredErasePinDeletePeers, getStoredLanguage, getStoredLatestMessagesByConversationIds, getStoredMessages, getStoredMessagesByIds, getStoredOlderMessages, getStoredRecentMessages, getStoredSubscriptionStatus, getStoredUser, removeStoredMessageRecords, removeStoredMessages, setAuthToken, setDeletedConversationAfter, setServerUrl, setStoredCallLogs, setStoredConversationMediaCacheCursor, setStoredConversationSyncCursors, setStoredConversations, setStoredDarkMode, setStoredDecoyOffline, setStoredLanguage, setStoredSubscriptionStatus, setStoredUser, upsertStoredMessages } from '../lib/storage';
+import { clearAuthToken, clearDeletedConversationAfter, clearStoredConversations, clearStoredSubscriptionStatus, clearStoredUser, eraseLocalAppData, eraseLocalChatData, getAuthToken, getDeletedConversationAfter, getDeletedConversationAfters, getServerUrl, getStoredCallLogs, getStoredConversationMediaCacheCursor, getStoredConversationSyncCursors, getStoredConversations, getStoredDarkMode, getStoredDecoyOffline, getStoredErasePinDeletePeers, getStoredLanguage, getStoredLatestMessagesByConversationIds, getStoredMessages, getStoredMessagesByIds, getStoredOlderMessages, getStoredRecentMessages, getStoredSubscriptionStatus, getStoredUser, removeStoredMessageRecords, removeStoredMessages, setAuthToken, setDeletedConversationAfter, setServerUrl, setStoredCallLogs, setStoredConversationMediaCacheCursor, setStoredConversationSyncCursors, setStoredConversations, setStoredDarkMode, setStoredDecoyOffline, setStoredLanguage, setStoredSubscriptionStatus, setStoredUser, upsertStoredMessages } from '../lib/storage';
 import { resolveLoginServer } from '../lib/loginServerResolution';
 import { createBypassSubscriptionStatus, createEmptySubscriptionStatus, hasPremiumAccess, isSubscriptionBypassed } from '../lib/subscriptionAccess';
 import { clearNativeQuickReplyCredentials, setNativeQuickReplyCredentials } from '../native/CallNative';
@@ -27,7 +28,6 @@ const CONVERSATION_PAGE_SIZE = 100;
 const CONVERSATION_PERSIST_DEBOUNCE_MS = 700;
 const RECEIPT_BATCH_DELAY_MS = 80;
 const LOW_PRIORITY_CONVERSATION_MAINTENANCE_DELAY_MS = 10_000;
-const LOW_PRIORITY_MESSAGE_MAINTENANCE_DELAY_MS = 6_000;
 const LOW_PRIORITY_MEDIA_CACHE_DELAY_MS = 8_000;
 const BACKGROUND_CONVERSATION_SYNC_CONCURRENCY = 2;
 const BACKGROUND_CONVERSATION_SYNC_YIELD_MS = 16;
@@ -35,7 +35,6 @@ let conversationsRequest: { filter: ConversationListFilter; offset: number; prom
 const messageRequests = new Map<string, Promise<void>>();
 const messageCacheRequests = new Map<string, Promise<void>>();
 const olderLocalMessageRequests = new Map<string, Promise<number>>();
-const pendingMessageMaintenanceCancelByConversation = new Map<string, () => void>();
 const olderLocalMessagesExhaustedBeforeByConversation = new Map<string, number>();
 const uploadControllers = new Map<string, AbortController>();
 const incomingMediaCacheRequests = new Map<string, Promise<Message | null>>();
@@ -53,6 +52,17 @@ const resolvedLocalClearBoundaryConversationIds = new Set<string>();
 const locallyDeletedMessageIdsByConversation = new Map<string, Set<string>>();
 const locallyDeletedMessageKeysByConversation = new Map<string, Set<string>>();
 let pendingConversationMaintenanceCancel: (() => void) | null = null;
+let conversationMaintenanceGeneration = 0;
+
+addForegroundChatActivityListener((conversationId) => {
+  if (!conversationId) {
+    return;
+  }
+
+  conversationMaintenanceGeneration += 1;
+  pendingConversationMaintenanceCancel?.();
+  pendingConversationMaintenanceCancel = null;
+});
 
 function scheduleLowPriorityStoreTask(callback: () => void, delayMs = 0) {
   let timeout: ReturnType<typeof setTimeout> | null = null;
@@ -71,15 +81,24 @@ function scheduleLowPriorityStoreTask(callback: () => void, delayMs = 0) {
 async function processBackgroundConversations<T>(
   items: T[],
   processItem: (item: T) => Promise<void>,
+  shouldContinue: () => boolean = () => true,
 ) {
   let nextIndex = 0;
   const workerCount = Math.min(BACKGROUND_CONVERSATION_SYNC_CONCURRENCY, items.length);
 
   await Promise.all(Array.from({ length: workerCount }, async () => {
-    while (nextIndex < items.length && NativeAppState.currentState === 'active') {
+    while (
+      nextIndex < items.length &&
+      NativeAppState.currentState === 'active' &&
+      !isForegroundChatActive() &&
+      shouldContinue()
+    ) {
       const item = items[nextIndex];
       nextIndex += 1;
       await processItem(item).catch(() => undefined);
+      if (!shouldContinue()) {
+        return;
+      }
       await new Promise((resolve) => setTimeout(resolve, BACKGROUND_CONVERSATION_SYNC_YIELD_MS));
     }
   }));
@@ -87,24 +106,69 @@ async function processBackgroundConversations<T>(
 
 function scheduleConversationMaintenance(serverUrl: string, conversations: Conversation[]) {
   pendingConversationMaintenanceCancel?.();
+  pendingConversationMaintenanceCancel = null;
+
+  if (isForegroundChatActive()) {
+    return;
+  }
+
+  const generation = ++conversationMaintenanceGeneration;
+  const shouldContinue = () => generation === conversationMaintenanceGeneration &&
+    NativeAppState.currentState === 'active' &&
+    !isForegroundChatActive();
+
   pendingConversationMaintenanceCancel = scheduleLowPriorityStoreTask(() => {
     pendingConversationMaintenanceCancel = null;
     void (async () => {
-      await syncMissingOwnPreviewMessages(serverUrl, conversations);
-      await new Promise((resolve) => setTimeout(resolve, 800));
-      await syncIncomingConversationDeliveries(serverUrl, conversations);
-      await new Promise((resolve) => setTimeout(resolve, 800));
-      await syncConversationDeltasForConversations(serverUrl, conversations);
-      await new Promise((resolve) => setTimeout(resolve, 800));
+      if (!shouldContinue()) {
+        return;
+      }
+      await syncConversationDeltasForConversations(serverUrl, conversations, shouldContinue);
+      if (!shouldContinue()) {
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      if (!shouldContinue()) {
+        return;
+      }
+      await syncMissingOwnPreviewMessages(serverUrl, conversations, shouldContinue);
+      if (!shouldContinue()) {
+        return;
+      }
+      await syncIncomingConversationDeliveries(serverUrl, conversations, shouldContinue);
+      if (!shouldContinue()) {
+        return;
+      }
       resumeLoadedIncomingMediaCaching();
     })().catch(() => undefined);
   }, LOW_PRIORITY_CONVERSATION_MAINTENANCE_DELAY_MS);
 }
 
-async function syncMissingOwnPreviewMessages(serverUrl: string, conversations: Conversation[]) {
+export function reconcileLoadedConversationsInBackground() {
+  const { conversations, isDecoyOffline, serverUrl, user } = useAppStore.getState();
+
+  if (
+    !serverUrl ||
+    !user ||
+    isDecoyOffline ||
+    conversations.length === 0 ||
+    NativeAppState.currentState !== 'active' ||
+    isForegroundChatActive()
+  ) {
+    return;
+  }
+
+  scheduleConversationMaintenance(serverUrl, conversations);
+}
+
+async function syncMissingOwnPreviewMessages(
+  serverUrl: string,
+  conversations: Conversation[],
+  shouldContinue: () => boolean = () => true,
+) {
   const currentUserId = useAppStore.getState().user?.id;
 
-  if (!currentUserId || conversations.length === 0 || NativeAppState.currentState !== 'active') {
+  if (!currentUserId || conversations.length === 0 || NativeAppState.currentState !== 'active' || !shouldContinue()) {
     return;
   }
 
@@ -126,6 +190,10 @@ async function syncMissingOwnPreviewMessages(serverUrl: string, conversations: C
   try {
     latestStoredMessages = await getStoredLatestMessagesByConversationIds(candidateConversations.map((conversation) => conversation.id));
   } catch {
+    return;
+  }
+
+  if (!shouldContinue()) {
     return;
   }
 
@@ -157,61 +225,35 @@ async function syncMissingOwnPreviewMessages(serverUrl: string, conversations: C
 
   await processBackgroundConversations(missingConversations, async (conversation) => {
     await requestConversationMessages(conversation.id, serverUrl, { hydrate: false }).catch(() => undefined);
-  });
+  }, shouldContinue);
 }
 
 function scheduleMessagePostLoadMaintenance(
   serverUrl: string,
   conversationId: string,
-  messages: Message[],
-  messagesToPersist: Message[],
+  changedMessages: Message[],
 ) {
-  pendingMessageMaintenanceCancelByConversation.get(conversationId)?.();
-  pendingMessageMaintenanceCancelByConversation.set(conversationId, scheduleLowPriorityStoreTask(() => {
-    pendingMessageMaintenanceCancelByConversation.delete(conversationId);
-    void (async () => {
-      await persistChangedConversationMessages(conversationId, messagesToPersist);
-      logMessageDeliveryDiagnostic('load-messages-persisted', {
-        ackCandidateCount: messages.length,
-        conversationId,
-        persistedCount: messagesToPersist.length,
-        tailIds: messagesToPersist.slice(-10).map((message) => message.id),
-      });
-      scheduleIncomingMediaCaching(messages);
-      const ackableMessageIds = await getContentAckableMessageIds(messages, useAppStore.getState().user?.id);
+  if (changedMessages.length === 0) {
+    return;
+  }
 
-      if (ackableMessageIds.length > 0) {
-        logMessageDeliveryDiagnostic('load-messages-content-ack-start', {
-          conversationId,
-          messageCount: ackableMessageIds.length,
-          messageIds: ackableMessageIds.slice(-10),
-        });
-        void acknowledgeMessageContent(serverUrl, conversationId, ackableMessageIds)
-          .then(() => {
-            logMessageDeliveryDiagnostic('load-messages-content-ack-finished', {
-              conversationId,
-              messageCount: ackableMessageIds.length,
-              messageIds: ackableMessageIds.slice(-10),
-            });
-          })
-          .catch((error) => {
-            logMessageDeliveryDiagnostic('load-messages-content-ack-failed', {
-              conversationId,
-              message: error instanceof Error ? error.message : String(error),
-              messageCount: ackableMessageIds.length,
-              messageIds: ackableMessageIds.slice(-10),
-            });
-          });
-      }
+  const inlineMessageIds = dedupeMessages(changedMessages)
+    .filter((message) => !message.id.startsWith('local-') && !isMediaMessageKind(message.kind))
+    .map((message) => message.id);
 
-      void syncConversationDeltas(serverUrl, [conversationId]).catch(() => undefined);
-    })().catch((error) => {
-      logMessageDeliveryDiagnostic('load-messages-maintenance-failed', {
+  if (inlineMessageIds.length === 0) {
+    return;
+  }
+
+  void acknowledgeMessageContent(serverUrl, conversationId, inlineMessageIds)
+    .catch((error) => {
+      logMessageDeliveryDiagnostic('load-messages-content-ack-failed', {
         conversationId,
         message: error instanceof Error ? error.message : String(error),
+        messageCount: inlineMessageIds.length,
+        messageIds: inlineMessageIds.slice(-10),
       });
     });
-  }, LOW_PRIORITY_MESSAGE_MAINTENANCE_DELAY_MS));
 }
 const uploadProgressSnapshots = new Map<string, { ratio: number; updatedAt: number }>();
 let storedConversationsPersistTimer: ReturnType<typeof setTimeout> | null = null;
@@ -299,6 +341,7 @@ export type AppState = {
   conversations: Conversation[];
   blockedUsers: AuthUser[];
   callLogs: CallLog[];
+  appDomains: string[];
   catalogUrl: string | null;
   catalogUrlLoadError: string | null;
   helpUrl: string | null;
@@ -400,6 +443,7 @@ export type AppState = {
 };
 
 export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((set) => ({
+  appDomains: [],
   blockedUsers: [],
   callLogs: [],
   catalogUrl: null,
@@ -524,7 +568,7 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
           if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
             await Promise.all([clearAuthToken(), clearStoredUser(), clearStoredSubscriptionStatus()]);
             clearNativeQuickReplyCredentials();
-            set({ blockedUsers: [], callLogs: [], catalogUrl: null, helpUrl: null, contacts: [], conversations: [], conversationsNextOffset: 0, conversationsQuery: '', hasLoadedConversations: false, hasMoreConversations: false, isCheckingSubscription: false, isLoadingMoreConversations: false, messagesByConversation: {}, subscriptionStatus: null, unreadConversationIds: [], user: null });
+            set({ appDomains: [], blockedUsers: [], callLogs: [], catalogUrl: null, helpUrl: null, contacts: [], conversations: [], conversationsNextOffset: 0, conversationsQuery: '', hasLoadedConversations: false, hasMoreConversations: false, isCheckingSubscription: false, isLoadingMoreConversations: false, messagesByConversation: {}, subscriptionStatus: null, unreadConversationIds: [], user: null });
             return;
           }
 
@@ -575,6 +619,7 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
       uploadControllers.clear();
       clearNativeQuickReplyCredentials();
       set({
+        appDomains: [],
         blockedUsers: [],
         catalogUrl: null,
         helpUrl: null,
@@ -632,7 +677,12 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
       setNativeQuickReplyCredentials(serverUrl, token);
     }
 
-    set({ serverUrl });
+    set({
+      appDomains: [],
+      catalogUrl: null,
+      catalogUrlLoadError: null,
+      serverUrl,
+    });
   },
 
   async signInWithPassword(username, password) {
@@ -655,6 +705,7 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
     olderLocalMessagesExhaustedBeforeByConversation.clear();
     setActiveCallSession(null);
     set({
+      appDomains: [],
       blockedUsers: [],
       callLogs: [],
       catalogUrl: null,
@@ -706,6 +757,7 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
     olderLocalMessagesExhaustedBeforeByConversation.clear();
     setActiveCallSession(null);
     set({
+      appDomains: [],
       blockedUsers: [],
       callLogs: [],
       catalogUrl: null,
@@ -742,7 +794,7 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
 
     await deleteAccountRequest(serverUrl, password);
     await clearLocalSession();
-    set({ blockedUsers: [], callLogs: [], catalogUrl: null, helpUrl: null, contacts: [], conversations: [], conversationsNextOffset: 0, conversationsQuery: '', hasLoadedConversations: false, hasMoreConversations: false, isCheckingSubscription: false, isLoadingMoreConversations: false, messagesByConversation: {}, subscriptionStatus: null, unreadConversationIds: [], user: null });
+    set({ appDomains: [], blockedUsers: [], callLogs: [], catalogUrl: null, helpUrl: null, contacts: [], conversations: [], conversationsNextOffset: 0, conversationsQuery: '', hasLoadedConversations: false, hasMoreConversations: false, isCheckingSubscription: false, isLoadingMoreConversations: false, messagesByConversation: {}, subscriptionStatus: null, unreadConversationIds: [], user: null });
   },
 
   async wipeChatsOnlyData(preservePeerConversationIds = []) {
@@ -910,10 +962,7 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
             useAppStore.getState().unreadConversationIds,
           ),
         });
-        scheduleStoredConversationsPersist(LOW_PRIORITY_MESSAGE_MAINTENANCE_DELAY_MS);
-        if (!normalizedQuery && serverFilter === 'all') {
-          scheduleConversationMaintenance(serverUrl, conversations);
-        }
+        scheduleStoredConversationsPersist();
         if (useAppStore.getState().connectionStatus === 'offline') {
           set({ connectionNotice: 'Connection recovered', connectionStatus: 'online' });
         } else {
@@ -1020,10 +1069,7 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
             useAppStore.getState().unreadConversationIds,
           ),
         });
-        scheduleStoredConversationsPersist(LOW_PRIORITY_MESSAGE_MAINTENANCE_DELAY_MS);
-        if (!normalizedQuery && serverFilter === 'all') {
-          scheduleConversationMaintenance(serverUrl, conversations);
-        }
+        scheduleStoredConversationsPersist();
       } finally {
         if ((conversationsRequest as { promise: Promise<void> } | null)?.promise === request) {
           conversationsRequest = null;
@@ -1057,7 +1103,9 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
       return;
     }
 
-    return requestConversationMessages(conversationId, serverUrl, { hydrate: options?.hydrate !== false });
+    // Local-first hydration already completed above. The network phase must not
+    // read and merge the same SQLite history a second time.
+    return requestConversationMessages(conversationId, serverUrl, { hydrate: false });
   },
 
   async loadOlderLocalMessages(conversationId, options) {
@@ -1102,17 +1150,9 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
     }
 
     try {
-      let messages = useAppStore.getState().messagesByConversation[conversationId];
-      let messageIds = getReadableIncomingMessageIds(messages, user.id);
-      let messageKeys = getReadableIncomingMessageKeys(messages, user.id);
-
-      if (messageIds.length === 0 && messageKeys.length === 0) {
-        await requestConversationMessages(conversationId, serverUrl, { hydrate: false });
-
-        messages = useAppStore.getState().messagesByConversation[conversationId];
-        messageIds = getReadableIncomingMessageIds(messages, user.id);
-        messageKeys = getReadableIncomingMessageKeys(messages, user.id);
-      }
+      const messages = useAppStore.getState().messagesByConversation[conversationId];
+      const messageIds = getReadableIncomingMessageIds(messages, user.id);
+      const messageKeys = getReadableIncomingMessageKeys(messages, user.id);
 
       await markConversationRead(serverUrl, conversationId, 'chat_open', messageIds, messageKeys);
     } catch {
@@ -1178,7 +1218,9 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
       },
     }));
     void persistChangedConversationMessages(message.conversationId, [message]);
-    void cacheMessageMediaAndPersist(message).catch(() => undefined);
+    if (isMediaMessageKind(message.kind)) {
+      void cacheMessageMediaAndPersist(message).catch(() => undefined);
+    }
     scheduleStoredConversationsPersist();
   },
 
@@ -1212,7 +1254,7 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
         [conversationId]: replaceMatchingOptimisticMessage(state.messagesByConversation[conversationId] ?? [], message),
       },
     }));
-    void persistChangedConversationMessages(conversationId, [message]);
+    void persistMessageAndAcknowledgeContent(message);
     scheduleStoredConversationsPersist();
     return message;
   },
@@ -1437,7 +1479,7 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
         [conversationId]: upsertMessage(state.messagesByConversation[conversationId] ?? [], message),
       },
     }));
-    void persistChangedConversationMessages(conversationId, [message]);
+    void persistMessageAndAcknowledgeContent(message);
     scheduleStoredConversationsPersist();
     return message;
   },
@@ -1500,7 +1542,7 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
       uploadControllers.delete(input.clientId);
       uploadProgressSnapshots.delete(input.clientId);
     }
-    void persistChangedConversationMessages(input.conversationId, [confirmedMessage]);
+    void persistMessageAndAcknowledgeContent(confirmedMessage);
     scheduleStoredConversationsPersist();
     return message;
   },
@@ -1563,7 +1605,7 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
       uploadControllers.delete(input.clientId);
       uploadProgressSnapshots.delete(input.clientId);
     }
-    void persistChangedConversationMessages(input.conversationId, [confirmedMessage]);
+    void persistMessageAndAcknowledgeContent(confirmedMessage);
     scheduleStoredConversationsPersist();
     return message;
   },
@@ -2269,7 +2311,7 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
     const { isDecoyOffline, serverUrl, user } = useAppStore.getState();
 
     if (isDecoyOffline || !user) {
-      set({ catalogUrl: null, catalogUrlLoadError: null, isLoadingCatalogUrl: false });
+      set({ appDomains: [], catalogUrl: null, catalogUrlLoadError: null, isLoadingCatalogUrl: false });
       return null;
     }
 
@@ -2281,7 +2323,15 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
 
     try {
       const response = await getCatalogConfig(serverUrl);
-      set({ catalogUrl: response.catalogUrl, catalogUrlLoadError: null, isLoadingCatalogUrl: false });
+      const appDomains = Array.isArray(response.appDomains)
+        ? Array.from(new Set(
+            response.appDomains
+              .filter((domain): domain is string => typeof domain === 'string')
+              .map((domain) => domain.trim().toLowerCase())
+              .filter(Boolean),
+          ))
+        : [];
+      set({ appDomains, catalogUrl: response.catalogUrl, catalogUrlLoadError: null, isLoadingCatalogUrl: false });
       return response.catalogUrl;
     } catch (error) {
       const fallbackCatalogUrl = useAppStore.getState().catalogUrl;
@@ -2543,7 +2593,6 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
         messageId: message.id,
       });
     });
-    void persistCurrentConversationMessage(message.conversationId, message.id);
     scheduleStoredConversationsPersist();
   },
 
@@ -2686,7 +2735,7 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
     olderLocalMessageRequests.clear();
     olderLocalMessagesExhaustedBeforeByConversation.clear();
 
-    set({ blockedUsers: [], callLogs: [], catalogUrl: null, helpUrl: null, contacts: [], conversations: [], conversationsNextOffset: 0, conversationsQuery: '', hasLoadedConversations: false, hasMoreConversations: false, isCheckingSubscription: false, isLoadingMoreConversations: false, messagesByConversation: {}, subscriptionStatus: null, unreadConversationIds: [], user: null });
+    set({ appDomains: [], blockedUsers: [], callLogs: [], catalogUrl: null, helpUrl: null, contacts: [], conversations: [], conversationsNextOffset: 0, conversationsQuery: '', hasLoadedConversations: false, hasMoreConversations: false, isCheckingSubscription: false, isLoadingMoreConversations: false, messagesByConversation: {}, subscriptionStatus: null, unreadConversationIds: [], user: null });
   },
 }));
 
@@ -2722,17 +2771,39 @@ function requestConversationMessages(conversationId: string, serverUrl: string, 
   return request;
 }
 
-async function syncIncomingConversationDeliveries(serverUrl: string, conversations: Conversation[]) {
+async function syncIncomingConversationDeliveries(
+  serverUrl: string,
+  conversations: Conversation[],
+  shouldContinue: () => boolean = () => true,
+) {
   const { user } = useAppStore.getState();
 
-  if (!user || NativeAppState.currentState !== 'active') {
+  if (!user || NativeAppState.currentState !== 'active' || !shouldContinue()) {
     return;
   }
 
-  const conversationsToSync = conversations.filter((conversation) => (
+  const candidates = conversations.filter((conversation) => (
     conversation.unreadCount > 0 &&
     conversation.myGroupInvitePending !== true &&
+    !!conversation.lastMessageId &&
     !deliverySyncConversationIds.has(conversation.id)
+  ));
+
+  if (candidates.length === 0) {
+    return;
+  }
+
+  const latestStoredMessages = await getStoredLatestMessagesByConversationIds(candidates.map((conversation) => conversation.id))
+    .catch(() => new Map<string, Message>());
+
+  if (!shouldContinue()) {
+    return;
+  }
+
+  // The conversation list already carries the latest server message ID. Only
+  // open a full message request when that preview is absent locally.
+  const conversationsToSync = candidates.filter((conversation) => (
+    latestStoredMessages.get(conversation.id)?.id !== conversation.lastMessageId
   ));
 
   if (conversationsToSync.length === 0) {
@@ -2744,7 +2815,7 @@ async function syncIncomingConversationDeliveries(serverUrl: string, conversatio
   try {
     await processBackgroundConversations(conversationsToSync, async (conversation) => {
       await requestConversationMessages(conversation.id, serverUrl, { hydrate: false });
-    });
+    }, shouldContinue);
   } finally {
     conversationsToSync.forEach((conversation) => deliverySyncConversationIds.delete(conversation.id));
   }
@@ -2764,7 +2835,7 @@ async function syncPendingMessageDeletionsForConversations(serverUrl: string, co
 
   try {
     const deletionsByConversationId = await listBulkMessageDeletions(serverUrl, conversationIds);
-    const ackItems: Array<{ conversationId: string; messageIds: string[]; messageKeys: string[] }> = [];
+    const ackItems: { conversationId: string; messageIds: string[]; messageKeys: string[] }[] = [];
 
     for (const conversationId of conversationIds) {
       const result = await applyPendingMessageDeletions(conversationId, deletionsByConversationId[conversationId] ?? []);
@@ -2782,19 +2853,27 @@ async function syncPendingMessageDeletionsForConversations(serverUrl: string, co
   }
 }
 
-async function syncConversationDeltasForConversations(serverUrl: string, conversations: Conversation[]) {
+async function syncConversationDeltasForConversations(
+  serverUrl: string,
+  conversations: Conversation[],
+  shouldContinue: () => boolean = () => true,
+) {
   const conversationIds = conversations
     .filter((conversation) => conversation.myGroupInvitePending !== true)
     .map((conversation) => conversation.id);
 
-  await syncConversationDeltas(serverUrl, conversationIds);
+  await syncConversationDeltas(serverUrl, conversationIds, shouldContinue);
 }
 
-async function syncConversationDeltas(serverUrl: string, requestedConversationIds: string[]) {
+async function syncConversationDeltas(
+  serverUrl: string,
+  requestedConversationIds: string[],
+  shouldContinue: () => boolean = () => true,
+) {
   const conversationIds = Array.from(new Set(requestedConversationIds))
     .filter((conversationId) => !deltaSyncConversationIds.has(conversationId));
 
-  if (conversationIds.length === 0) {
+  if (conversationIds.length === 0 || !shouldContinue()) {
     return;
   }
 
@@ -2802,13 +2881,31 @@ async function syncConversationDeltas(serverUrl: string, requestedConversationId
 
   try {
     const cursors = await getStoredConversationSyncCursors(conversationIds);
+    if (!shouldContinue()) {
+      return;
+    }
     const deltasByConversationId = await listConversationDeltas(serverUrl, cursors as Record<string, ConversationDeltaCursor>);
-    const deletionAckItems: Array<{ conversationId: string; messageIds: string[]; messageKeys: string[] }> = [];
-    const editAckItems: Array<{ conversationId: string; messageIds: string[]; messageKeys: string[] }> = [];
-    const statusAckItems: Array<{ conversationId: string; messageIds: string[]; messageKeys: string[] }> = [];
+    if (!shouldContinue()) {
+      return;
+    }
+    const changedConversationIds = conversationIds.filter(
+      (conversationId) => deltasByConversationId[conversationId]?.hasChanges === true,
+    );
+
+    if (changedConversationIds.length === 0) {
+      return;
+    }
+
+    const deletionAckItems: { conversationId: string; messageIds: string[]; messageKeys: string[] }[] = [];
+    const editAckItems: { conversationId: string; messageIds: string[]; messageKeys: string[] }[] = [];
+    const statusAckItems: { conversationId: string; messageIds: string[]; messageKeys: string[] }[] = [];
     const nextCursors: Record<string, ConversationDeltaCursor> = {};
 
-    for (const conversationId of conversationIds) {
+    for (const conversationId of changedConversationIds) {
+      if (!shouldContinue()) {
+        return;
+      }
+
       const delta = deltasByConversationId[conversationId];
 
       if (!delta) {
@@ -2843,18 +2940,33 @@ async function syncConversationDeltas(serverUrl: string, requestedConversationId
       await new Promise((resolve) => setTimeout(resolve, BACKGROUND_CONVERSATION_SYNC_YIELD_MS));
     }
 
-    await Promise.all([
-      acknowledgeBulkMessageDeletions(serverUrl, deletionAckItems),
-      acknowledgeBulkMessageEdits(serverUrl, editAckItems),
-      acknowledgeBulkMessageStatusUpdates(serverUrl, statusAckItems),
-    ]);
-    await setStoredConversationSyncCursors(nextCursors);
+    const acknowledgementRequests: Promise<unknown>[] = [];
+
+    if (deletionAckItems.length > 0) {
+      acknowledgementRequests.push(acknowledgeBulkMessageDeletions(serverUrl, deletionAckItems));
+    }
+    if (editAckItems.length > 0) {
+      acknowledgementRequests.push(acknowledgeBulkMessageEdits(serverUrl, editAckItems));
+    }
+    if (statusAckItems.length > 0) {
+      acknowledgementRequests.push(acknowledgeBulkMessageStatusUpdates(serverUrl, statusAckItems));
+    }
+
+    if (!shouldContinue()) {
+      return;
+    }
+    await Promise.all(acknowledgementRequests);
+    if (shouldContinue()) {
+      await setStoredConversationSyncCursors(nextCursors);
+    }
   } catch (error) {
-    if (error instanceof ApiError && error.status === 404) {
+    if (error instanceof ApiError && error.status === 404 && shouldContinue()) {
       const conversations = useAppStore.getState().conversations.filter((conversation) => conversationIds.includes(conversation.id));
 
       await syncPendingMessageDeletionsForConversations(serverUrl, conversations);
-      await syncPendingMessageStatusUpdatesForConversations(serverUrl, conversations);
+      if (shouldContinue()) {
+        await syncPendingMessageStatusUpdatesForConversations(serverUrl, conversations);
+      }
     }
   } finally {
     conversationIds.forEach((conversationId) => deltaSyncConversationIds.delete(conversationId));
@@ -3013,7 +3125,7 @@ async function syncPendingMessageStatusUpdatesForConversations(serverUrl: string
 
   try {
     const updatesByConversationId = await listBulkMessageStatusUpdates(serverUrl, conversationIds);
-    const ackItems: Array<{ conversationId: string; messageIds: string[]; messageKeys: string[] }> = [];
+    const ackItems: { conversationId: string; messageIds: string[]; messageKeys: string[] }[] = [];
 
     for (const conversationId of conversationIds) {
       const result = await applyPendingMessageStatusUpdates(conversationId, updatesByConversationId[conversationId] ?? []);
@@ -3117,6 +3229,7 @@ async function loadConversationMessages(conversationId: string, serverUrl: strin
     : getOverlappingMessageFetchAfter(latestCachedMessage?.createdAtIso) ?? deletedAfter ?? undefined;
   let response: Awaited<ReturnType<typeof listMessages>>;
   let editedMessagesToPersist: Message[] = [];
+  const persistedPendingMessageKeys = new Set<string>();
 
   logMessageDeliveryDiagnostic('load-messages-fetch-plan', {
     cachedCount: cachedMessages.length,
@@ -3129,11 +3242,59 @@ async function loadConversationMessages(conversationId: string, serverUrl: strin
   });
 
   try {
-    response = await listMessages(
-      serverUrl,
-      conversationId,
-      fetchAfter,
-    );
+    const [timelineResponse, pendingResponse] = await Promise.all([
+      listMessages(
+        serverUrl,
+        conversationId,
+        fetchAfter,
+      ),
+      listPendingMessages(serverUrl, conversationId, async (pageMessages) => {
+        const messagesToPersist = pageMessages.filter((message) => (
+          !shouldRemoveMessageForLocalDeletion(message) &&
+          !isReactionFallbackMessage(message)
+        ));
+
+        if (messagesToPersist.length === 0) {
+          return;
+        }
+
+        await persistChangedConversationMessages(conversationId, messagesToPersist);
+        messagesToPersist.forEach((message) => {
+          getMessageMergeKeys(message).forEach((key) => persistedPendingMessageKeys.add(key));
+        });
+        useAppStore.setState((state) => {
+          const currentMessages = state.messagesByConversation[conversationId] ?? cachedMessages;
+          const mergedMessages = mergeMessages(currentMessages, messagesToPersist)
+            .filter((message) => !shouldRemoveMessageForLocalDeletion(message) && !isReactionFallbackMessage(message));
+
+          return {
+            messagesByConversation: {
+              ...state.messagesByConversation,
+              [conversationId]: mergedMessages,
+            },
+            conversations: state.conversations.map((currentConversation) => (
+              currentConversation.id === conversationId
+                ? syncConversationPreviewWithMessages(currentConversation, mergedMessages)
+                : currentConversation
+            )),
+          };
+        });
+        scheduleMessagePostLoadMaintenance(serverUrl, conversationId, messagesToPersist);
+        logMessageDeliveryDiagnostic('load-messages-pending-page-persisted', {
+          conversationId,
+          messageCount: messagesToPersist.length,
+          messageIds: messagesToPersist.slice(0, 10).map((message) => message.id),
+        });
+        await new Promise((resolve) => setTimeout(resolve, BACKGROUND_CONVERSATION_SYNC_YIELD_MS));
+      }),
+    ]);
+    response = {
+      messages: dedupeMessages([
+        ...timelineResponse.messages,
+        ...pendingResponse.messages,
+      ]),
+      readThrough: timelineResponse.readThrough ?? pendingResponse.readThrough,
+    };
     let deletions: MessageDeletionUpdate[] = [];
     let edits: MessageEdit[] = [];
     let statusUpdates: MessageStatusUpdate[] = [];
@@ -3283,10 +3444,13 @@ async function loadConversationMessages(conversationId: string, serverUrl: strin
   }
 
   const changedMessagesToPersist = dedupeMessages([
-    ...response.messages,
+    ...response.messages.filter((message) => (
+      !getMessageMergeKeys(message).some((key) => persistedPendingMessageKeys.has(key))
+    )),
     ...editedMessagesToPersist,
   ]).filter((message) => !shouldRemoveMessageForLocalDeletion(message) && !isReactionFallbackMessage(message));
-  scheduleMessagePostLoadMaintenance(serverUrl, conversationId, nextMessages, changedMessagesToPersist);
+  await persistChangedConversationMessages(conversationId, changedMessagesToPersist);
+  scheduleMessagePostLoadMaintenance(serverUrl, conversationId, changedMessagesToPersist);
 }
 
 async function hydrateStoredConversationMessages(conversationId: string, options?: { limit?: number }) {
@@ -3335,7 +3499,11 @@ async function hydrateStoredConversationMessages(conversationId: string, options
         storedSummary: summarizeMessagesForDiagnostics(storedMessages, useAppStore.getState().user?.id),
         stateSummary: summarizeMessagesForDiagnostics(useAppStore.getState().messagesByConversation[conversationId] ?? [], useAppStore.getState().user?.id),
       });
-      scheduleLowPriorityStoreTask(() => scheduleIncomingMediaCaching(storedMessages), LOW_PRIORITY_MEDIA_CACHE_DELAY_MS);
+      scheduleLowPriorityStoreTask(() => {
+        if (!isForegroundChatActive()) {
+          scheduleIncomingMediaCaching(storedMessages);
+        }
+      }, LOW_PRIORITY_MEDIA_CACHE_DELAY_MS);
     } finally {
       if (messageCacheRequests.get(requestKey) === request) {
         messageCacheRequests.delete(requestKey);
@@ -3431,7 +3599,7 @@ function scheduleIncomingMediaCaching(messages: Message[], options?: { limit?: n
   const currentUserId = useAppStore.getState().user?.id;
   const limit = options?.limit ?? MAX_AUTOMATIC_INCOMING_MEDIA_CACHE_MESSAGES;
 
-  if (!currentUserId || limit <= 0) {
+  if (!currentUserId || limit <= 0 || isForegroundChatActive()) {
     return;
   }
 
@@ -3486,6 +3654,7 @@ function resumeLoadedIncomingMediaCaching() {
     .slice(-MAX_AUTOMATIC_INCOMING_MEDIA_CACHE_MESSAGES);
 
   scheduleIncomingMediaCaching(latestMessages);
+  void runIncomingMediaCacheQueue();
 }
 
 function enqueueIncomingMediaCache(message: Message, options?: { priority?: 'high' | 'normal' }) {
@@ -3509,7 +3678,7 @@ async function runIncomingMediaCacheQueue() {
 
   isIncomingMediaCacheQueueRunning = true;
   try {
-    while (incomingMediaCacheQueue.length > 0) {
+    while (incomingMediaCacheQueue.length > 0 && !isForegroundChatActive()) {
       const message = incomingMediaCacheQueue.shift();
       if (!message) {
         continue;
@@ -3517,7 +3686,17 @@ async function runIncomingMediaCacheQueue() {
 
       queuedIncomingMediaCacheIds.delete(message.id);
       await new Promise((resolve) => setTimeout(resolve, 600));
-      await cacheMessageMediaAndPersist(message, { priority: 'normal' }).catch(() => null);
+      const cachedMessage = await cacheMessageMediaAndPersist(message, { priority: 'normal' }).catch(() => null);
+      const { serverUrl, user } = useAppStore.getState();
+
+      if (
+        cachedMessage &&
+        serverUrl &&
+        user &&
+        await isMessageContentReadyForAck(cachedMessage, user.id)
+      ) {
+        await acknowledgeMessageContent(serverUrl, message.conversationId, [message.id]).catch(() => undefined);
+      }
     }
   } finally {
     isIncomingMediaCacheQueueRunning = false;
@@ -3704,23 +3883,6 @@ async function isMessageContentReadyForAck(message: Message, currentUserId?: str
   }
 
   return isLocalMediaUri(message.mediaUri) && (await isLocalMediaFileComplete(message.mediaUri, message.sizeBytes));
-}
-
-async function getContentAckableMessageIds(messages: Message[], currentUserId?: string | null) {
-  const ackableIds: string[] = [];
-  let checkedCount = 0;
-
-  for (const message of messages) {
-    if (await isMessageContentReadyForAck(message, currentUserId)) {
-      ackableIds.push(message.id);
-    }
-    checkedCount += 1;
-    if (checkedCount % 20 === 0) {
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    }
-  }
-
-  return ackableIds;
 }
 
 function replaceMatchingOptimisticMessage(messages: Message[], message: Message) {
@@ -4459,6 +4621,38 @@ async function persistChangedConversationMessages(conversationId: string, messag
   await upsertStoredMessages(conversationId, changedMessages);
 }
 
+async function persistMessageAndAcknowledgeContent(message: Message) {
+  try {
+    await persistChangedConversationMessages(message.conversationId, [message]);
+  } catch (error) {
+    logMessageDeliveryDiagnostic('outgoing-content-persist-failed', {
+      conversationId: message.conversationId,
+      message: error instanceof Error ? error.message : String(error),
+      messageId: message.id,
+    });
+    return;
+  }
+
+  const { serverUrl, user } = useAppStore.getState();
+
+  if (
+    !serverUrl ||
+    !user ||
+    !(await isMessageContentReadyForAck(message, user.id))
+  ) {
+    return;
+  }
+
+  await acknowledgeMessageContent(serverUrl, message.conversationId, [message.id])
+    .catch((error) => {
+      logMessageDeliveryDiagnostic('outgoing-content-ack-failed', {
+        conversationId: message.conversationId,
+        message: error instanceof Error ? error.message : String(error),
+        messageId: message.id,
+      });
+    });
+}
+
 async function persistCurrentConversationMessage(conversationId: string, messageId: string) {
   const message = (useAppStore.getState().messagesByConversation[conversationId] ?? [])
     .find((item) => item.id === messageId || getMessageClientId(item) === messageId);
@@ -4597,11 +4791,20 @@ function getMergedUnreadCount(current: Conversation, incoming: Conversation, pre
 }
 
 async function applyLocalConversationClearBoundaries(conversations: Conversation[]) {
+  const unresolvedConversationIds = conversations
+    .map((conversation) => conversation.id)
+    .filter((conversationId) => (
+      !locallyClearedAfterByConversation.has(conversationId) &&
+      !resolvedLocalClearBoundaryConversationIds.has(conversationId)
+    ));
+  const storedClearBoundaries = await getDeletedConversationAfters(unresolvedConversationIds)
+    .catch(() => new Map<string, string>());
+
   return Promise.all(conversations.map(async (conversation) => {
     let clearedAfter = locallyClearedAfterByConversation.get(conversation.id);
 
     if (clearedAfter === undefined && !resolvedLocalClearBoundaryConversationIds.has(conversation.id)) {
-      const storedClearedAfter = await getDeletedConversationAfter(conversation.id);
+      const storedClearedAfter = storedClearBoundaries.get(conversation.id);
       const parsedClearedAfter = storedClearedAfter ? Date.parse(storedClearedAfter) : Number.NaN;
 
       if (Number.isFinite(parsedClearedAfter)) {
@@ -5550,13 +5753,14 @@ async function cacheMessageMediaAndPersist(message: Message, options?: { priorit
 async function acknowledgeMessageContentAfterLocalCache(message: Message) {
   const { serverUrl, user } = useAppStore.getState();
 
-  if (!serverUrl || !user || message.id.startsWith('local-') || message.senderId === user.id) {
+  await persistChangedConversationMessages(message.conversationId, [message]);
+
+  if (!serverUrl || !user || message.id.startsWith('local-')) {
     logMessageDeliveryDiagnostic('content-ack-after-cache-skipped-prereq', {
       conversationId: message.conversationId,
       hasServerUrl: !!serverUrl,
       hasUser: !!user,
       isLocal: message.id.startsWith('local-'),
-      isOwnMessage: message.senderId === user?.id,
       messageId: message.id,
     });
     return;
@@ -5567,6 +5771,26 @@ async function acknowledgeMessageContentAfterLocalCache(message: Message) {
     kind: message.kind,
     messageId: message.id,
   });
+
+  if (!isMediaMessageKind(message.kind)) {
+    await acknowledgeMessageContent(serverUrl, message.conversationId, [message.id]);
+    logMessageDeliveryDiagnostic('content-ack-after-cache-finished', {
+      conversationId: message.conversationId,
+      messageId: message.id,
+    });
+    return;
+  }
+
+  if (isForegroundChatActive()) {
+    enqueueIncomingMediaCache(message, { priority: 'high' });
+    logMessageDeliveryDiagnostic('content-ack-after-cache-deferred-active-chat', {
+      conversationId: message.conversationId,
+      kind: message.kind,
+      messageId: message.id,
+    });
+    return;
+  }
+
   const cachedMessage = await cacheMessageMediaAndPersist(message, { priority: 'high' });
   const messageForAck = cachedMessage ?? message;
 

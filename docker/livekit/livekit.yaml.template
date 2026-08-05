@@ -1,0 +1,30 @@
+port: 7880
+bind_addresses:
+  - "0.0.0.0"
+
+rtc:
+  tcp_port: 7881
+  port_range_start: 50000
+  port_range_end: 60000
+  use_external_ip: true
+  enable_loopback_candidate: false
+
+redis:
+  address: redis:6379
+  db: 0
+  use_tls: false
+
+turn:
+  enabled: true
+  domain: __SERVER_DOMAIN__
+  tls_port: 5349
+  udp_port: 3478
+  external_tls: false
+  cert_file: /etc/letsencrypt/live/meetvap/fullchain.pem
+  key_file: /etc/letsencrypt/live/meetvap/privkey.pem
+
+keys:
+  __LIVEKIT_API_KEY__: __LIVEKIT_API_SECRET__
+
+logging:
+  level: info

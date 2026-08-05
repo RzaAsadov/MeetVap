@@ -11,9 +11,6 @@ import { SharedIntentItem } from '../types/navigation';
 const SHARE_URL_PREFIXES = ['meetvap://share', 'com.meetvap.app://share'];
 const SHARE_CONSUME_RETRY_DELAY_MS = 250;
 const SHARE_CONSUME_MAX_ATTEMPTS = 6;
-const SHARE_IDLE_POLL_INTERVAL_MS = 2000;
-const SHARE_FOREGROUND_POLL_INTERVAL_MS = 500;
-const SHARE_FOREGROUND_POLL_DURATION_MS = 30000;
 
 export function ShareIntentBridge() {
   const user = useAppStore((state) => state.user);
@@ -22,9 +19,6 @@ export function ShareIntentBridge() {
   const consumeInFlightRef = useRef(false);
   const consumeAgainRef = useRef(false);
   const canOpenShareTargetRef = useRef(false);
-  const foregroundPollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const foregroundPollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const idlePollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const scheduleConsumeRef = useRef<(() => void) | null>(null);
   const canOpenShareTarget = !!user && !isDecoyOffline;
 
@@ -109,57 +103,17 @@ export function ShareIntentBridge() {
 
     scheduleConsumeRef.current = scheduleConsume;
 
-    const stopForegroundPolling = () => {
-      if (foregroundPollIntervalRef.current) {
-        clearInterval(foregroundPollIntervalRef.current);
-        foregroundPollIntervalRef.current = null;
-      }
-
-      if (foregroundPollTimeoutRef.current) {
-        clearTimeout(foregroundPollTimeoutRef.current);
-        foregroundPollTimeoutRef.current = null;
-      }
-    };
-
-    const startForegroundPolling = () => {
-      scheduleConsume();
-
-      if (foregroundPollIntervalRef.current) {
-        return;
-      }
-
-      foregroundPollIntervalRef.current = setInterval(scheduleConsume, SHARE_FOREGROUND_POLL_INTERVAL_MS);
-      foregroundPollTimeoutRef.current = setTimeout(stopForegroundPolling, SHARE_FOREGROUND_POLL_DURATION_MS);
-    };
-
-    const startIdlePolling = () => {
-      if (idlePollIntervalRef.current) {
-        return;
-      }
-
-      idlePollIntervalRef.current = setInterval(scheduleConsume, SHARE_IDLE_POLL_INTERVAL_MS);
-    };
-
-    const stopIdlePolling = () => {
-      if (idlePollIntervalRef.current) {
-        clearInterval(idlePollIntervalRef.current);
-        idlePollIntervalRef.current = null;
-      }
-    };
-
     const openShareTarget = (items: SharedIntentItem[]) => {
       const activeCall = getActiveCallSession();
       const currentRoute = navigationRef.isReady() ? navigationRef.getCurrentRoute() : null;
 
       if (activeCall?.callState === 'active' || currentRoute?.name === 'CallRoom') {
-        stopForegroundPolling();
         pendingItemsRef.current = null;
         emitShareIntentItems(items);
         return;
       }
 
       if (navigationRef.isReady()) {
-        stopForegroundPolling();
         pendingItemsRef.current = null;
         navigationRef.navigate('ShareTarget', { items });
         return;
@@ -172,41 +126,32 @@ export function ShareIntentBridge() {
       if (pendingItemsRef.current && navigationRef.isReady()) {
         const items = pendingItemsRef.current;
         pendingItemsRef.current = null;
-        stopForegroundPolling();
         openShareTarget(items);
       }
     };
 
-    startForegroundPolling();
-    startIdlePolling();
+    scheduleConsume();
 
     void Linking.getInitialURL().then((url) => {
       if (isShareUrl(url)) {
-        startForegroundPolling();
+        scheduleConsume();
       }
     });
 
     const urlSubscription = Linking.addEventListener('url', (event) => {
       if (isShareUrl(event.url)) {
-        startForegroundPolling();
+        scheduleConsume();
       }
     });
     const appStateSubscription = AppState.addEventListener('change', (nextState) => {
       if (nextState === 'active') {
-        startForegroundPolling();
-        return;
+        scheduleConsume();
       }
-
-      stopForegroundPolling();
     });
-    const interval = setInterval(flushPending, 250);
 
     return () => {
       isMounted = false;
       scheduleConsumeRef.current = null;
-      stopForegroundPolling();
-      stopIdlePolling();
-      clearInterval(interval);
       appStateSubscription.remove();
       urlSubscription.remove();
     };

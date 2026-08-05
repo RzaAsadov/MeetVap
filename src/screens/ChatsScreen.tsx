@@ -23,7 +23,7 @@ import { hasPremiumAccess } from '../lib/subscriptionAccess';
 import { isMeetVapSystemConversation, MEETVAP_SYSTEM_AVATAR_URL } from '../lib/systemChat';
 import { logUiPerformanceDiagnostic, useUiPerformanceStallMonitor } from '../lib/uiPerformanceDiagnostics';
 import { useConversationById } from '../hooks/useConversationById';
-import { useAppStore } from '../store/useAppStore';
+import { reconcileLoadedConversationsInBackground, useAppStore } from '../store/useAppStore';
 import { colors } from '../theme/colors';
 import { useThemeColors } from '../theme/useThemeColors';
 import { spacing } from '../theme/spacing';
@@ -157,9 +157,15 @@ export function ChatsScreen() {
           }
 
           const { conversationsFilter: currentFilter, conversationsLastFetchedAt: lastFetchedAt } = useAppStore.getState();
-          if (Date.now() - lastFetchedAt >= CONVERSATION_LIST_STALE_MS) {
-            void loadConversations(debouncedSearchRef.current, currentFilter);
-          }
+          void (async () => {
+            if (Date.now() - lastFetchedAt >= CONVERSATION_LIST_STALE_MS) {
+              await loadConversations(debouncedSearchRef.current, currentFilter);
+            }
+
+            if (isActive) {
+              reconcileLoadedConversationsInBackground();
+            }
+          })();
           void loadBlockedUsers();
           void loadStatuses();
         }, 450);

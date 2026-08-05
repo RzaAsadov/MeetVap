@@ -18,7 +18,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Avatar } from '../components/Avatar';
 import { t } from '../i18n';
 import { ApiError } from '../lib/api';
-import { beginAppLockForegroundOperation, endCallOnlyAccess } from '../lib/appLockAccess';
+import { addAppLockAccessListener, beginAppLockForegroundOperation, endCallOnlyAccess, isCallOnlyAccessFor } from '../lib/appLockAccess';
 import { getActiveCallSession, setActiveCallSession } from '../lib/activeCallSession';
 import { answerCall, createCall, endCall, getCallScreenshotPrivacy, getCallStatus as fetchCallStatus, getCallToken, getConversationScreenshotPrivacy, inviteCallParticipant, submitCallFeedback } from '../lib/backend';
 import { getMobileCallAnswerClientId } from '../lib/callAnswerClient';
@@ -51,6 +51,7 @@ const RINGTONE = require('../../assets/ringtone.wav') as number;
 const OUTGOING_RINGBACK = require('../../assets/ringing.mp3') as number;
 const activeCallMicrophonePublishPromises = new WeakMap<LiveKitLocalParticipant, Promise<LocalTrackPublication | undefined>>();
 const CONNECTION_LOSS_TIMEOUT_MS = 30_000;
+const OUTGOING_CALL_RING_TIMEOUT_MS = 30_000;
 const PEER_CONNECTION_NOTICE_GRACE_MS = 1_200;
 const PROXIMITY_EARPIECE_STABLE_MS = 400;
 const VIDEO_CALL_CHROME_VISIBLE_MS = 5_000;
@@ -68,9 +69,9 @@ let hasExplicitCallAudioRouteSelection = false;
 let explicitCallAudioRoute: CallAudioRoute | null = null;
 let callAudioPreparationQueue: Promise<void> = Promise.resolve();
 
-function enqueueCallAudioPreparation(task: () => Promise<void>) {
+function enqueueCallAudioPreparation<T>(task: () => Promise<T>) {
   const run = callAudioPreparationQueue.catch(() => undefined).then(task);
-  callAudioPreparationQueue = run.catch(() => undefined);
+  callAudioPreparationQueue = run.then(() => undefined, () => undefined);
   return run;
 }
 const ANDROID_CALL_AUDIO_CAPTURE_OPTIONS = {
@@ -731,7 +732,10 @@ export function CallRoomScreen({ navigation, route }: Props) {
   const loadContacts: AppStoreState['loadContacts'] = useAppStore((state: AppStoreState) => state.loadContacts);
   const loadConversations: AppStoreState['loadConversations'] = useAppStore((state: AppStoreState) => state.loadConversations);
   const recordCallLog: AppStoreState['recordCallLog'] = useAppStore((state: AppStoreState) => state.recordCallLog);
-  const isLockedCallAccess = route.params.callAccess === 'locked-call';
+  const [hasCallOnlyAccess, setHasCallOnlyAccess] = useState(() => isCallOnlyAccessFor(route.params.callId));
+  const isLockedCallAccess = route.params.callAccess === 'locked-call' || (
+    route.params.direction === 'incoming' && hasCallOnlyAccess
+  );
   const [incomingVoiceEffectId, setIncomingVoiceEffectId] = useState<VoiceEffectId>(() => normalizeVoiceEffectId(route.params.voiceEffectId));
   const [isIncomingVoiceEffectPickerOpen, setIncomingVoiceEffectPickerOpen] = useState(false);
   const canShowVoiceChanger = route.params.mode === 'voice';
@@ -741,6 +745,16 @@ export function CallRoomScreen({ navigation, route }: Props) {
     : DEFAULT_VOICE_EFFECT_ID;
   const nativeCallVoiceEffectIdRef = useRef(nativeCallVoiceEffectId);
   nativeCallVoiceEffectIdRef.current = nativeCallVoiceEffectId;
+
+  useEffect(() => {
+    const refreshCallOnlyAccess = () => {
+      setHasCallOnlyAccess(isCallOnlyAccessFor(route.params.callId));
+    };
+
+    refreshCallOnlyAccess();
+    return addAppLockAccessListener(refreshCallOnlyAccess);
+  }, [route.params.callId]);
+
   const callAudioCaptureOptions = useMemo(() => {
     if (Platform.OS === 'ios') {
       return undefined;
@@ -789,6 +803,9 @@ export function CallRoomScreen({ navigation, route }: Props) {
   const [localCameraRenderVersion, setLocalCameraRenderVersion] = useState(0);
   const [answeredParticipantIds, setAnsweredParticipantIds] = useState<Set<string>>(() => new Set());
 
+  const hangUpLatestRef = useRef(hangUp);
+  hangUpLatestRef.current = hangUp;
+
   useEffect(() => {
     if (isLockedCallAccess) {
       skipCallFeedbackPromptRef.current = true;
@@ -818,9 +835,11 @@ export function CallRoomScreen({ navigation, route }: Props) {
   const [isShareSending, setShareSending] = useState(false);
   const [selectedShareConversationId, setSelectedShareConversationId] = useState<string | null>(null);
   const isInitialNativeCallAudioPreparationPendingRef = useRef(Platform.OS === 'ios' && route.params.answeredByNative === true);
-  const isCallKitAudioManagedCall = Platform.OS === 'ios' &&
-    route.params.direction === 'incoming' &&
-    route.params.answeredByNative === true;
+  const [isCallKitAudioManagedCall, setCallKitAudioManagedCall] = useState(
+    Platform.OS === 'ios' &&
+      route.params.direction === 'incoming' &&
+      route.params.answeredByNative === true,
+  );
 
   useEffect(() => {
     const shouldUnlockOrientation = route.params.mode === 'video' &&
@@ -1900,9 +1919,14 @@ export function CallRoomScreen({ navigation, route }: Props) {
         ? Promise.resolve(false)
         : answerNativeIncomingCallKitCall(callId).catch(() => false);
       const shouldAwaitAudioPreparation = route.params.answeredByNative !== true;
+      const answeredByCallKit = route.params.answeredByNative === true || await callKitAnswerPromise;
+
+      if (Platform.OS === 'ios' && answeredByCallKit) {
+        setCallKitAudioManagedCall(true);
+      }
+
       const audioPreparationPromise = shouldAwaitAudioPreparation
         ? (async () => {
-            const answeredByCallKit = route.params.answeredByNative === true || await callKitAnswerPromise;
             if (answeredByCallKit && Platform.OS === 'ios') {
               await prepareCallKitManagedCallAudio(route.params.mode);
               return;
@@ -1926,7 +1950,7 @@ export function CallRoomScreen({ navigation, route }: Props) {
       }
 
       await connectLiveKitWithRetry(callId, {
-        callKitAudioManaged: isCallKitAudioManagedCall,
+        callKitAudioManaged: Platform.OS === 'ios' && answeredByCallKit,
         permissionsAlreadyGranted: true,
         skipAudioPreparation: true,
       });
@@ -1942,7 +1966,7 @@ export function CallRoomScreen({ navigation, route }: Props) {
       }
       isAnsweringCallRef.current = false;
     }
-  }, [cacheCallToken, callId, canApplyCallAudioRoute, connectLiveKitWithRetry, isCallKitAudioManagedCall, logCallTiming, markParticipantAnswered, recordCall, route.params.answeredByNative, route.params.mode, serverUrl, stopRingtone, user?.id]);
+  }, [cacheCallToken, callId, canApplyCallAudioRoute, connectLiveKitWithRetry, logCallTiming, markParticipantAnswered, recordCall, route.params.answeredByNative, route.params.mode, serverUrl, stopRingtone, user?.id]);
 
   useEffect(() => {
     if (
@@ -2393,6 +2417,21 @@ export function CallRoomScreen({ navigation, route }: Props) {
     stopOutgoingRingback,
   ]);
 
+  useEffect(() => {
+    if (route.params.direction !== 'outgoing' || !callId || isCallAccepted) {
+      return undefined;
+    }
+
+    const timeout = setTimeout(() => {
+      if (!isCallAcceptedRef.current && !isEndingCallRef.current) {
+        logCallTiming('outgoing-ring-timeout');
+        void hangUpLatestRef.current();
+      }
+    }, OUTGOING_CALL_RING_TIMEOUT_MS);
+
+    return () => clearTimeout(timeout);
+  }, [callId, isCallAccepted, logCallTiming, route.params.direction]);
+
   const refreshCallAudioRoutes = useCallback(async () => {
     if (isEndingCallRef.current || !isLiveKitRoomEnabledRef.current) {
       return;
@@ -2490,8 +2529,15 @@ export function CallRoomScreen({ navigation, route }: Props) {
     explicitCallAudioRoute = fallbackRoute;
     callAudioRouteSelectionVersion += 1;
     setSpeakerOn(nextSpeaker);
-    await forceCallAudioRoute(nextSpeaker, false, undefined, canApplyCallAudioRoute).catch(() => undefined);
-  }, [callAudioRoutes, canApplyCallAudioRoute, isSpeakerOn, selectCallAudioRoute]);
+    await forceCallAudioRoute(
+      nextSpeaker,
+      false,
+      undefined,
+      canApplyCallAudioRoute,
+      false,
+      isCallKitAudioManagedCall,
+    ).catch(() => undefined);
+  }, [callAudioRoutes, canApplyCallAudioRoute, isCallKitAudioManagedCall, isSpeakerOn, selectCallAudioRoute]);
 
   const showCallAudioRoutePicker = useCallback(() => {
     void getNativeCallAudioRoutes().then((routes) => {
@@ -2875,10 +2921,17 @@ export function CallRoomScreen({ navigation, route }: Props) {
       setConnectedAt((current) => current ?? now);
       setElapsedSeconds((current) => current || 0);
       setStatus(t('connected'));
-      void forceCallAudioRoute(isSpeakerOn, route.params.mode === 'video', undefined, canApplyCallAudioRoute, route.params.mode === 'video')
+      void forceCallAudioRoute(
+        isSpeakerOn,
+        route.params.mode === 'video',
+        undefined,
+        canApplyCallAudioRoute,
+        route.params.mode === 'video',
+        isCallKitAudioManagedCall,
+      )
         .catch(() => undefined);
     }
-  }, [canApplyCallAudioRoute, clearPeerConnectionProblem, isSpeakerOn, logCallTiming, nativeCallVoiceEffectId, route.params.mode, stopOutgoingRingback, stopRingtone]);
+  }, [canApplyCallAudioRoute, clearPeerConnectionProblem, isCallKitAudioManagedCall, isSpeakerOn, logCallTiming, nativeCallVoiceEffectId, route.params.mode, stopOutgoingRingback, stopRingtone]);
 
   const handleLiveKitConnected = useCallback(() => {
     markLiveKitConnected();
@@ -3582,7 +3635,7 @@ export function CallRoomScreen({ navigation, route }: Props) {
                 isMuted={isMuted}
                 mode={route.params.mode}
                 muteRef={isMutedRef}
-                preferMicrophoneRestart={Platform.OS === 'ios' && route.params.direction === 'incoming' && route.params.answeredByNative === true}
+                preferMicrophoneRestart={Platform.OS === 'ios' && isCallKitAudioManagedCall}
                 shouldApplyAudioRoute={canApplyCallAudioRoute}
                 useSpeaker={isSpeakerOn}
                 voiceEffectId={nativeCallVoiceEffectId}
@@ -4597,7 +4650,19 @@ function CallAudioPublisher({
         try {
           return await publishCallMicrophoneTrack(localParticipant, audioOptions, voiceEffectId);
         } catch (error) {
-          await restoreCallAudio(mode, mode === 'video').catch(() => undefined);
+          if (callKitAudioManaged) {
+            const isCallKitAudioReady = await prepareCallKitManagedCallAudio(mode).catch(() => false);
+
+            if (!isCallKitAudioReady) {
+              logCallDebug('callkit-audio-not-ready-for-microphone-retry', {
+                message: error instanceof Error ? error.message : 'unknown',
+                mode,
+              });
+              return undefined;
+            }
+          } else {
+            await restoreCallAudio(mode, mode === 'video').catch(() => undefined);
+          }
 
           if (shouldStopMicrophoneWork()) {
             return undefined;
@@ -4609,7 +4674,12 @@ function CallAudioPublisher({
       }
 
       if (callKitAudioManaged) {
-        await prepareCallKitManagedCallAudio(mode).catch(() => undefined);
+        const isCallKitAudioReady = await prepareCallKitManagedCallAudio(mode).catch(() => false);
+
+        if (!isCallKitAudioReady) {
+          logCallDebug('callkit-audio-not-ready-for-microphone-publish', { mode });
+          return;
+        }
       }
 
       if (!canPublish) {
@@ -5762,10 +5832,34 @@ function CallAudioRecoveryMonitor({
 
     const recoveryPromise = (async () => {
       const latestState = latestStateRef.current;
+      const initialMicrophoneHealth = getMicrophoneHealth();
+
+      // CallKit has already activated and configured AVAudioSession before the
+      // microphone is published. Reconfiguring a healthy session during the
+      // scheduled watchdog passes interrupts playout and can produce an iOS
+      // route-change tone. Recovery must only mutate audio when it is unhealthy.
+      if (
+        Platform.OS === 'ios' &&
+        latestState.callKitAudioManaged &&
+        initialMicrophoneHealth.isHealthy
+      ) {
+        logCallDebug('call-audio-recovery-skip-healthy', {
+          callKitAudioManaged: latestState.callKitAudioManaged,
+          mode: latestState.mode,
+          readyState: initialMicrophoneHealth.readyState,
+          upstreamPaused: initialMicrophoneHealth.upstreamPaused,
+        });
+        return;
+      }
 
       setNativeLiveVoiceEffect(latestState.voiceEffectId);
       if (latestState.callKitAudioManaged) {
-        await prepareCallKitManagedCallAudio(latestState.mode).catch(() => undefined);
+        const isCallKitAudioReady = await prepareCallKitManagedCallAudio(latestState.mode).catch(() => false);
+
+        if (!isCallKitAudioReady) {
+          logCallDebug('callkit-audio-recovery-waiting-for-activation', { mode: latestState.mode });
+          return;
+        }
       } else if (restartMicrophoneTrack) {
         await restoreCallAudio(latestState.mode, latestState.useSpeaker, shouldApplyAudioRoute).catch(() => undefined);
       } else {
@@ -5775,6 +5869,7 @@ function CallAudioRecoveryMonitor({
           undefined,
           shouldApplyAudioRoute,
           latestState.mode === 'video',
+          latestState.callKitAudioManaged,
         ).catch(() => undefined);
       }
       setNativeLiveVoiceEffect(latestState.voiceEffectId);
@@ -5815,7 +5910,33 @@ function CallAudioRecoveryMonitor({
           return;
         }
 
-        if ((Platform.OS === 'android' || Platform.OS === 'ios') && latestState.voiceEffectId !== DEFAULT_VOICE_EFFECT_ID) {
+        if (Platform.OS === 'ios' && latestState.callKitAudioManaged) {
+          if (microphoneHealth.isHealthy) {
+            logCallDebug('callkit-audio-mic-recovered-without-republish', {
+              readyState: microphoneHealth.readyState,
+              upstreamPaused: microphoneHealth.upstreamPaused,
+            });
+            return;
+          }
+
+          logCallDebug('callkit-audio-mic-republish-needed', {
+            hasPublication: microphoneHealth.hasPublication,
+            hasTrack: microphoneHealth.hasTrack,
+            isMuted: microphoneHealth.isMuted,
+            readyState: microphoneHealth.readyState,
+            upstreamPaused: microphoneHealth.upstreamPaused,
+          });
+          await republishCallMicrophoneTrack(
+            localParticipant,
+            latestState.audioOptions,
+            latestState.voiceEffectId,
+          ).catch(() => undefined);
+
+          if (muteRef.current) {
+            await disableCallMicrophone(localParticipant);
+            return;
+          }
+        } else if ((Platform.OS === 'android' || Platform.OS === 'ios') && latestState.voiceEffectId !== DEFAULT_VOICE_EFFECT_ID) {
           await publishCallMicrophoneTrack(
             localParticipant,
             latestState.audioOptions,
@@ -5879,7 +6000,7 @@ function CallAudioRecoveryMonitor({
   }, [getMicrophoneHealth, localParticipant, muteRef, shouldApplyAudioRoute]);
 
   useEffect(() => {
-    if (connectionState !== ConnectionState.Connected) {
+    if (connectionState !== ConnectionState.Connected || !canPublish || isMuted) {
       return undefined;
     }
 
@@ -5906,7 +6027,7 @@ function CallAudioRecoveryMonitor({
       subscription.remove();
       timeouts.forEach(clearTimeout);
     };
-  }, [connectionState, preferMicrophoneRestart, recoverCallAudio]);
+  }, [canPublish, connectionState, isMuted, preferMicrophoneRestart, recoverCallAudio]);
 
   return null;
 }
@@ -6703,6 +6824,7 @@ async function forceCallAudioRoute(
   applyVersion = ++callAudioRouteApplyVersion,
   shouldContinue?: CallAudioRouteOperationGuard,
   autoSelectAvailableExternalRoute = false,
+  audioSessionManagedExternally = false,
 ) {
   if (!isCallAudioRouteOperationCurrent(applyVersion, shouldContinue)) {
     return;
@@ -6712,10 +6834,12 @@ async function forceCallAudioRoute(
     return;
   }
 
-  await AudioSession.startAudioSession();
+  if (!audioSessionManagedExternally) {
+    await AudioSession.startAudioSession();
+  }
 
   if (!isCallAudioRouteOperationCurrent(applyVersion, shouldContinue)) {
-    if (areCallAudioRouteOperationsBlocked) {
+    if (areCallAudioRouteOperationsBlocked && !audioSessionManagedExternally) {
       await AudioSession.stopAudioSession().catch(() => undefined);
     }
     return;
@@ -6859,19 +6983,24 @@ async function configureCallAudioSession(
 async function prepareCallKitManagedCallAudio(mode: 'voice' | 'video') {
   if (Platform.OS !== 'ios') {
     await prepareCallAudio(mode);
-    return;
+    return true;
   }
 
-  await enqueueCallAudioPreparation(async () => {
+  return enqueueCallAudioPreparation(async () => {
     await configureCallAudioSession(mode, { useCallKitManagedNative: true });
     const activatedByCallKit = await waitForNativeCallKitAudioActivation();
 
     if (!activatedByCallKit) {
+      // A missed/delayed CallKit activation callback must not leave a connected
+      // room with no microphone publication. Fall back to MeetVap's direct
+      // native activation path after the CallKit wait has definitively expired.
+      logCallDebug('callkit-audio-activation-timeout-fallback', { mode });
       await restoreCallAudio(mode, mode === 'video');
-      return;
+      return true;
     }
 
     await configureCallAudioSession(mode, { useCallKitManagedNative: true });
+    return true;
   });
 }
 

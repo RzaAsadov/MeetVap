@@ -1,0 +1,190 @@
+name: meetvap
+
+services:
+  postgres:
+    image: postgres:17-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_USER: ${POSTGRES_USER}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks: [backend]
+    logging: &default-logging
+      driver: json-file
+      options:
+        max-file: "5"
+        max-size: 10m
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [backend]
+    logging: *default-logging
+
+  migration:
+    image: ${MEETVAP_SERVER_IMAGE:-ghcr.io/rzaasadov/meetvap-server}:${MEETVAP_VERSION:-latest}
+    command: ["npx", "prisma", "migrate", "deploy"]
+    environment: &server-environment
+      NODE_ENV: production
+      PORT: 4000
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET}
+      CLIENT_ORIGIN: https://${WEB_DOMAIN},https://${MEET_DOMAIN}
+      PUBLIC_API_URL: https://${SERVER_DOMAIN}
+      MEET_SERVER_URL: https://${MEET_DOMAIN}
+      LIVEKIT_SERVERS_CONFIG_PATH: /app/livekit-servers.json
+      UPLOAD_DIR: /uploads
+      SERVER_EVENTS_INTERNAL_SECRET: ${SERVER_EVENTS_INTERNAL_SECRET}
+    volumes:
+      - ./generated/config.json:/app/config.json:ro
+      - ./generated/livekit-servers.json:/app/livekit-servers.json:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [backend]
+    restart: "no"
+
+  server:
+    image: ${MEETVAP_SERVER_IMAGE:-ghcr.io/rzaasadov/meetvap-server}:${MEETVAP_VERSION:-latest}
+    restart: unless-stopped
+    env_file:
+      - ./generated/server-optional.env
+    environment: *server-environment
+    volumes:
+      - uploads_data:/uploads
+      - ./generated/config.json:/app/config.json:ro
+      - ./generated/livekit-servers.json:/app/livekit-servers.json:ro
+      - ./secrets:/run/secrets/meetvap:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4000/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+    networks: [backend, proxy]
+    logging: *default-logging
+
+  admin:
+    image: ${MEETVAP_ADMIN_IMAGE:-ghcr.io/rzaasadov/meetvap-admin}:${MEETVAP_VERSION:-latest}
+    restart: unless-stopped
+    volumes:
+      - ./generated/admin-config.json:/app/admin/config.json:ro
+      - ./generated/config.json:/app/config.json:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4300/login').then(r=>{if(r.status>=500)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    networks: [backend, proxy]
+    logging: *default-logging
+
+  livekit:
+    image: ${LIVEKIT_IMAGE:-livekit/livekit-server:v1.13.1}
+    restart: unless-stopped
+    command: ["--config", "/etc/livekit.yaml"]
+    volumes:
+      - ./generated/livekit.yaml:/etc/livekit.yaml:ro
+      - letsencrypt_data:/etc/letsencrypt:ro
+    ports:
+      - "3478:3478/udp"
+      - "5349:5349/tcp"
+      - "7881:7881/tcp"
+      - "50000-60000:50000-60000/udp"
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/livekit-server", "--version"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    networks: [backend, proxy]
+    logging: *default-logging
+
+  nginx:
+    image: ${MEETVAP_NGINX_IMAGE:-ghcr.io/rzaasadov/meetvap-nginx}:${MEETVAP_VERSION:-latest}
+    restart: unless-stopped
+    ports:
+      - "80:80/tcp"
+      - "443:443/tcp"
+    volumes:
+      - ./generated/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./generated/runtime-config.js:/srv/web/runtime-config.js:ro
+      - ./generated/runtime-config.js:/srv/meet/runtime-config.js:ro
+      - letsencrypt_data:/etc/letsencrypt:ro
+      - certbot_webroot:/var/www/certbot:ro
+    depends_on:
+      admin:
+        condition: service_healthy
+      livekit:
+        condition: service_started
+      server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/nginx-health"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    networks: [proxy]
+    logging: *default-logging
+
+  certbot-bootstrap:
+    image: certbot/certbot:v3.2.0
+    profiles: [bootstrap]
+    entrypoint: ["certbot"]
+    ports:
+      - "80:80/tcp"
+    volumes:
+      - letsencrypt_data:/etc/letsencrypt
+      - certbot_webroot:/var/www/certbot
+    networks: [proxy]
+
+  certbot-renew:
+    image: certbot/certbot:v3.2.0
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - "trap exit TERM; while :; do certbot renew --webroot -w /var/www/certbot --quiet; sleep 43200 & wait $$!; done"
+    volumes:
+      - letsencrypt_data:/etc/letsencrypt
+      - certbot_webroot:/var/www/certbot
+    networks: [proxy]
+    logging: *default-logging
+
+volumes:
+  certbot_webroot:
+  letsencrypt_data:
+  postgres_data:
+  redis_data:
+  uploads_data:
+
+networks:
+  backend:
+    internal: true
+  proxy:

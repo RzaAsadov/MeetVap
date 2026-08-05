@@ -101,8 +101,8 @@ android {
         applicationId 'com.meetvap.messenger'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 299
-        versionName "22.9"
+        versionCode 308
+        versionName "23.8"
 
         missingDimensionStrategy 'store', 'play'
         manifestPlaceholders = [googleMapsApiKey: googleMapsApiKey]

@@ -69,5 +69,8 @@ export type MainTabParamList = {
   Chats: undefined;
   Calls: undefined;
   Status: { authorId?: string } | undefined;
-  Catalog: undefined;
+  Catalog: {
+    initialUrl?: string;
+    requestId?: number;
+  } | undefined;
 };

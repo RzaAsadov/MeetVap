@@ -22,7 +22,7 @@ import org.json.JSONArray
 object IncomingCallNotificationHelper {
   private const val CHANNEL_ID = "incoming-calls-fullscreen"
   private const val NOTIFICATION_ID_BASE = 8700
-  private const val RINGTONE_TIMEOUT_MS = 60000L
+  private const val RINGTONE_TIMEOUT_MS = 30000L
   private const val FINISHED_CALLS_PREFS = "meetvap_finished_calls"
   private const val FINISHED_CALL_TTL_MS = 10 * 60 * 1000L
   private val mainHandler = Handler(Looper.getMainLooper())
@@ -333,11 +333,19 @@ data class IncomingCallPayload(
   val declineTitle: String = "",
   val fallbackTitle: String = "",
   val isGroupCall: Boolean = false,
+  val issuedAt: Long? = null,
   val locale: String = "",
   val mode: String,
   val participantNames: List<String> = emptyList(),
   val title: String,
+  val expiresAt: Long? = null,
 ) {
+  fun isFresh(nowMs: Long = System.currentTimeMillis()): Boolean {
+    expiresAt?.let { return it > nowMs }
+    issuedAt?.let { return it <= nowMs + 5000L && nowMs - it < 30000L }
+    return false
+  }
+
   fun toIncomingCallIntent(context: Context, answeredByNative: Boolean = false, action: String? = null): Intent {
     val uriBuilder = Uri.Builder()
       .scheme("meetvap")
@@ -349,6 +357,8 @@ data class IncomingCallPayload(
       .appendQueryParameter("isGroupCall", isGroupCall.toString())
       .appendQueryParameter("autoJoin", autoJoin.toString())
       .appendQueryParameter("surface", "fullscreen")
+
+    expiresAt?.let { uriBuilder.appendQueryParameter("expiresAt", it.toString()) }
 
     if (answeredByNative) {
       uriBuilder.appendQueryParameter("answeredByNative", "true")
@@ -398,10 +408,12 @@ data class IncomingCallPayload(
         declineTitle = data.stringValue("declineTitle") ?: "",
         fallbackTitle = data.stringValue("fallbackTitle") ?: "",
         isGroupCall = data.booleanValue("isGroupCall"),
+        issuedAt = data.longValue("issuedAt"),
         locale = data.stringValue("locale") ?: "",
         mode = mode,
         participantNames = data.stringListValue("participantNames"),
         title = title,
+        expiresAt = data.longValue("expiresAt"),
       )
     }
 
@@ -421,10 +433,12 @@ data class IncomingCallPayload(
         declineTitle = data["declineTitle"] ?: "",
         fallbackTitle = data["fallbackTitle"] ?: "",
         isGroupCall = data["isGroupCall"] == "true",
+        issuedAt = data["issuedAt"]?.toLongOrNull(),
         locale = data["locale"] ?: "",
         mode = mode,
         participantNames = participantNames,
         title = title,
+        expiresAt = data["expiresAt"]?.toLongOrNull(),
       )
     }
 
@@ -463,6 +477,18 @@ data class IncomingCallPayload(
         ReadableType.Boolean -> getBoolean(key)
         ReadableType.String -> getString(key) == "true"
         else -> false
+      }
+    }
+
+    private fun ReadableMap.longValue(key: String): Long? {
+      if (!hasKey(key) || isNull(key)) {
+        return null
+      }
+
+      return when (getType(key)) {
+        ReadableType.Number -> getDouble(key).toLong()
+        ReadableType.String -> getString(key)?.toLongOrNull()
+        else -> null
       }
     }
 

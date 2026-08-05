@@ -5,8 +5,9 @@ import { ConnectionQuality, Participant, Room, RoomEvent, Track, VideoPreset, Vi
 import type { LocalVideoTrack, RemoteTrackPublication, TrackPublishOptions, VideoCaptureOptions } from 'livekit-client';
 
 import './styles.css';
+import { getRuntimeApiUrl } from './runtimeConfig';
 
-const API_URL = import.meta.env.VITE_API_URL || 'https://meetvap.com';
+const API_URL = getRuntimeApiUrl(import.meta.env.VITE_API_URL);
 const WEB_TOKEN_KEY = 'meetvap.web.token';
 const GUEST_ID_KEY = 'meetvap.meet.guestId';
 const ACTIVE_SPEAKER_PROMOTE_MS = 5_000;

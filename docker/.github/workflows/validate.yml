@@ -1,0 +1,21 @@
+name: Validate deployment bundle
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Validate scripts and configuration
+        shell: bash
+        run: |
+          bash -n install.sh update.sh backup.sh restore.sh export-local-build.sh
+          sh -n nginx/entrypoint.sh
+          ruby -e "require 'yaml'; YAML.safe_load(File.read('compose.yml'), aliases: true)"
+          ruby -rjson -e "JSON.parse(File.read('config/config.example.json'))"

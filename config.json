@@ -1,5 +1,6 @@
 {
   "serverRole": "main",
+  "appdomains": [],
   "attestation": {
     "androidRequiredBuild": 999999,
     "challengeTtlMinutes": 2,

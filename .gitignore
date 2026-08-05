@@ -203,6 +203,10 @@ backup/
 
 # Docker local overrides
 docker-compose.override.yml
+/docker/.env
+/docker/generated/
+/docker/backups/
+/docker/secrets/
 
 # Credential files
 GoogleService-Info.plist

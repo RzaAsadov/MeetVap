@@ -41,6 +41,18 @@ export function flushPendingNavigation() {
   action();
 }
 
+export function navigateToCatalogUrl(url: string) {
+  runWhenNavigationReady(() => {
+    navigationRef.navigate('MainTabs', {
+      params: {
+        initialUrl: url,
+        requestId: Date.now(),
+      },
+      screen: 'Catalog',
+    });
+  });
+}
+
 export function navigateToIncomingCall(input: {
   answeredByNative?: boolean;
   autoJoin?: boolean;

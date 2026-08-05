@@ -24,7 +24,9 @@ callRoutes.use(requireAuth);
 
 const MAX_VOICE_PARTICIPANTS = 8;
 const MAX_VIDEO_PARTICIPANTS = 6;
-const CALL_RINGING_RECEIPT_TTL_MS = 5 * 60 * 1000;
+const CALL_RING_TIMEOUT_MS = 30 * 1000;
+const CALL_RINGING_RECEIPT_TTL_MS = CALL_RING_TIMEOUT_MS;
+const callExpiryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 type CallPushToken = {
   id: string;
@@ -51,6 +53,7 @@ publicCallRoutes.post('/:callId/ringing', async (req, res, next) => {
       throw new HttpError(401, 'Invalid ringing receipt');
     }
 
+    await expireUnansweredCall(req, req.params.callId);
     const call = await prisma.call.findFirst({
       include: {
         conversation: {
@@ -201,6 +204,7 @@ callRoutes.post('/:callId/feedback', async (req, res, next) => {
 callRoutes.get('/:callId/status', async (req, res, next) => {
   try {
     const currentUser = getAuthedUser(req);
+    await expireUnansweredCall(req, req.params.callId);
     const call = await prisma.call.findFirst({
       select: {
         conversationId: true,
@@ -330,8 +334,14 @@ callRoutes.get('/:callId/token', async (req, res, next) => {
       callId: req.params.callId,
       userId: currentUser.id,
     });
+    const didExpire = await expireUnansweredCall(req, req.params.callId);
+
+    if (didExpire) {
+      throw new HttpError(410, 'Call expired');
+    }
     const call = await prisma.call.findFirst({
       where: {
+        endedAt: null,
         id: req.params.callId,
         OR: [
           {
@@ -511,6 +521,8 @@ callRoutes.post('/:callId/invite', async (req, res, next) => {
         const directCallMessage = await createOrUpdateCallMessage({
           callId: call.id,
           conversationId: directConversation.id,
+          linkedInviteeId: input.userId,
+          linkedInviterId: currentUser.id,
           mode: call.mode,
           senderId: currentUser.id,
           startedAt: call.startedAt,
@@ -767,6 +779,7 @@ callRoutes.post('/', async (req, res, next) => {
       mode: call.mode,
       participantCount: call.participants.length,
     });
+    scheduleUnansweredCallExpiry(req, call.id, call.startedAt);
     const callMessage = await createOrUpdateCallMessage({
       callId: call.id,
       conversationId: input.conversationId,
@@ -865,6 +878,11 @@ callRoutes.post('/', async (req, res, next) => {
 callRoutes.post('/:callId/ringing', async (req, res, next) => {
   try {
     const currentUser = getAuthedUser(req);
+    const didExpire = await expireUnansweredCall(req, req.params.callId);
+
+    if (didExpire) {
+      throw new HttpError(410, 'Call expired');
+    }
     const call = await prisma.call.findFirst({
       include: {
         conversation: {
@@ -923,6 +941,11 @@ callRoutes.post('/:callId/answer', async (req, res, next) => {
       callId: req.params.callId,
       userId: currentUser.id,
     });
+    const didExpire = await expireUnansweredCall(req, req.params.callId);
+
+    if (didExpire) {
+      throw new HttpError(410, 'Call expired');
+    }
     const call = await prisma.call.findFirst({
       include: {
         conversation: {
@@ -975,6 +998,7 @@ callRoutes.post('/:callId/answer', async (req, res, next) => {
         },
       },
     });
+    clearUnansweredCallExpiry(call.id);
     logCallDebug('answer-participant-upserted', {
       callId: call.id,
       elapsedMs: Date.now() - requestStartedAt,
@@ -1077,6 +1101,7 @@ callRoutes.post('/:callId/end', async (req, res, next) => {
     }
 
     if (call.endedAt) {
+      clearUnansweredCallExpiry(call.id);
       res.json({ call });
       return;
     }
@@ -1134,6 +1159,7 @@ callRoutes.post('/:callId/end', async (req, res, next) => {
     }
 
     const endedAt = new Date();
+    clearUnansweredCallExpiry(call.id);
     const ended = await prisma.call.update({
       data: {
         endedAt,
@@ -1233,6 +1259,156 @@ function getCallUserRooms(call: {
     ...call.conversation.members,
     ...call.participants,
   ]);
+}
+
+function clearUnansweredCallExpiry(callId: string) {
+  const timer = callExpiryTimers.get(callId);
+
+  if (timer) {
+    clearTimeout(timer);
+    callExpiryTimers.delete(callId);
+  }
+}
+
+function scheduleUnansweredCallExpiry(req: Request, callId: string, startedAt: Date) {
+  clearUnansweredCallExpiry(callId);
+  const delayMs = Math.max(0, startedAt.getTime() + CALL_RING_TIMEOUT_MS - Date.now());
+  const timer = setTimeout(() => {
+    callExpiryTimers.delete(callId);
+    void expireUnansweredCall(req, callId).catch((error) => {
+      logCallDebug('ring-timeout-failed', {
+        callId,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    });
+  }, delayMs);
+
+  callExpiryTimers.set(callId, timer);
+}
+
+async function expireUnansweredCall(req: Request, callId: string) {
+  const cutoff = new Date(Date.now() - CALL_RING_TIMEOUT_MS);
+  const call = await prisma.call.findFirst({
+    include: {
+      conversation: {
+        include: {
+          members: {
+            select: { userId: true },
+          },
+        },
+      },
+      participants: {
+        select: {
+          direction: true,
+          joinedAt: true,
+          leftAt: true,
+          userId: true,
+        },
+      },
+    },
+    where: {
+      endedAt: null,
+      id: callId,
+      participants: {
+        none: {
+          direction: 'INCOMING',
+          joinedAt: { not: null },
+        },
+      },
+      startedAt: { lte: cutoff },
+    },
+  });
+
+  if (!call) {
+    return false;
+  }
+
+  const endedAt = new Date();
+  const update = await prisma.call.updateMany({
+    data: { endedAt },
+    where: {
+      endedAt: null,
+      id: call.id,
+      participants: {
+        none: {
+          direction: 'INCOMING',
+          joinedAt: { not: null },
+        },
+      },
+    },
+  });
+
+  if (update.count === 0) {
+    return false;
+  }
+
+  clearUnansweredCallExpiry(call.id);
+  await prisma.callParticipant.updateMany({
+    data: { leftAt: endedAt },
+    where: {
+      callId: call.id,
+      joinedAt: { not: null },
+      leftAt: null,
+    },
+  });
+  const callerId = call.participants.find((participant) => participant.direction === 'OUTGOING')?.userId;
+
+  if (!callerId) {
+    return true;
+  }
+
+  const endedParticipants = call.participants.map((participant) => ({
+    ...participant,
+    leftAt: participant.joinedAt && !participant.leftAt ? endedAt : participant.leftAt,
+  }));
+  const callMessage = await createOrUpdateCallMessage({
+    callId: call.id,
+    conversationId: call.conversationId,
+    endedAt,
+    mode: call.mode,
+    participants: endedParticipants,
+    senderId: callerId,
+    startedAt: call.startedAt,
+  });
+  const linkedCallMessages = await updateLinkedCallMessages({
+    callId: call.id,
+    endedAt,
+    excludeMessageIds: [callMessage.id],
+    mode: call.mode,
+    participants: endedParticipants,
+    startedAt: call.startedAt,
+  });
+  await updateConversationPreviewFromMessage(call.conversationId, callMessage);
+  const memberRooms = getCallUserRooms(call);
+  const isGroupCall = call.conversation.type === 'GROUP' || call.participants.length > 2;
+
+  req.app.get('io')?.to(memberRooms).emit('call:ended', {
+    callId: call.id,
+    callStatus: 'MISSED',
+    conversationId: call.conversationId,
+  });
+  req.app.get('io')?.to(call.conversationId).to(memberRooms).emit('message:new', serializeMessage(callMessage));
+  req.app.get('io')?.to(memberRooms).emit('conversation:updated', { conversationId: call.conversationId });
+  linkedCallMessages.forEach((message) => {
+    const rooms = getUniqueUserRooms(message.conversation.members);
+
+    req.app.get('io')?.to(message.conversationId).to(rooms).emit('message:new', serializeMessage(message));
+    req.app.get('io')?.to(rooms).emit('conversation:updated', { conversationId: message.conversationId });
+  });
+  void sendCallEndedPushToUsers({
+    callId: call.id,
+    callStatus: 'MISSED',
+    conversationId: call.conversationId,
+    isGroupCall,
+    mode: call.mode,
+    title: 'MeetVap',
+    userIds: getUniqueUserIds([...call.conversation.members, ...call.participants]),
+  });
+  logCallDebug('ring-timeout-ended', {
+    callId: call.id,
+    conversationId: call.conversationId,
+  });
+  return true;
 }
 
 function emitCallRinging(req: Request, call: {
@@ -1501,6 +1677,8 @@ async function createOrUpdateCallMessage(input: {
   conversationId: string;
   endedById?: string;
   endedAt?: Date | null;
+  linkedInviteeId?: string;
+  linkedInviterId?: string;
   messageKey?: string;
   mode: 'VOICE' | 'VIDEO';
   participants?: Array<{ direction: string; joinedAt: Date | null; userId: string }>;
@@ -1515,7 +1693,12 @@ async function createOrUpdateCallMessage(input: {
     return prisma.message.update({
       data: {
         body,
-        metadata: { ...metadata, deleteKey: existingDeleteKey },
+        metadata: {
+          ...metadata,
+          deleteKey: existingDeleteKey,
+          ...(input.linkedInviteeId ? { linkedInviteeId: input.linkedInviteeId } : {}),
+          ...(input.linkedInviterId ? { linkedInviterId: input.linkedInviterId } : {}),
+        },
         ...(shouldShowDuration ? { status: 'READ' as const } : {}),
       },
       include: {
@@ -1541,7 +1724,11 @@ async function createOrUpdateCallMessage(input: {
         body,
         conversationId: input.conversationId,
         kind: 'CALL',
-        metadata,
+        metadata: {
+          ...metadata,
+          ...(input.linkedInviteeId ? { linkedInviteeId: input.linkedInviteeId } : {}),
+          ...(input.linkedInviterId ? { linkedInviterId: input.linkedInviterId } : {}),
+        },
         senderId: input.senderId,
         ...(shouldShowDuration ? { status: 'READ' as const } : {}),
       },
@@ -1593,13 +1780,40 @@ async function updateLinkedCallMessages(input: {
       },
     },
   });
-  const { body, metadata, shouldShowDuration } = getCallMessageContent(input);
-
   return Promise.all(existingMessages.map(async (message) => {
+    const messageMetadata = getRecordMetadata(message.metadata);
+    const linkedInviteeId = typeof messageMetadata.linkedInviteeId === 'string'
+      ? messageMetadata.linkedInviteeId
+      : undefined;
+    const linkedInviterId = typeof messageMetadata.linkedInviterId === 'string'
+      ? messageMetadata.linkedInviterId
+      : undefined;
+    const linkedParticipants = linkedInviteeId && linkedInviterId
+      ? [
+          {
+            direction: 'OUTGOING',
+            joinedAt: input.startedAt,
+            userId: linkedInviterId,
+          },
+          {
+            direction: 'INCOMING',
+            joinedAt: input.participants?.find((participant) => participant.userId === linkedInviteeId)?.joinedAt ?? null,
+            userId: linkedInviteeId,
+          },
+        ]
+      : input.participants;
+    const { body, metadata, shouldShowDuration } = getCallMessageContent({
+      ...input,
+      participants: linkedParticipants,
+    });
     const updated = await prisma.message.update({
       data: {
         body,
-        metadata: { ...metadata, deleteKey: getMessageDeleteKey(message.metadata) },
+        metadata: {
+          ...messageMetadata,
+          ...metadata,
+          deleteKey: getMessageDeleteKey(message.metadata),
+        },
         ...(shouldShowDuration ? { status: 'READ' as const } : {}),
       },
       include: {
@@ -1700,6 +1914,12 @@ function getMessageDeleteKey(metadata: unknown) {
     /^[A-Za-z0-9]{16}$/.test(metadata.deleteKey)
     ? metadata.deleteKey
     : createMessageDeleteKey();
+}
+
+function getRecordMetadata(metadata: unknown): Record<string, unknown> {
+  return metadata && typeof metadata === 'object' && !Array.isArray(metadata)
+    ? metadata as Record<string, unknown>
+    : {};
 }
 
 async function markCallMessageReadByUser(req: Request, callId: string, conversationId: string, readerId: string) {

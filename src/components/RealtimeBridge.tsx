@@ -74,6 +74,11 @@ export function RealtimeBridge() {
           isRefreshScheduledRef.current = false;
           const shouldRefreshAgain = isRefreshQueuedRef.current;
           isRefreshQueuedRef.current = false;
+
+          if (getVisibleChatRoomConversationId()) {
+            return;
+          }
+
           lastConversationRefreshAtRef.current = Date.now();
           const {
             conversations,

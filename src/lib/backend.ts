@@ -301,7 +301,7 @@ export async function getMe(serverUrl: string) {
 }
 
 export async function getCatalogConfig(serverUrl: string) {
-  return apiRequest<{ catalogUrl: string | null }>('/users/me/catalog', {
+  return apiRequest<{ appDomains?: string[]; catalogUrl: string | null }>('/users/me/catalog', {
     method: 'GET',
     serverUrl,
   });
@@ -796,15 +796,88 @@ function isVisibleConversation(conversation: Conversation) {
 }
 
 export async function listMessages(serverUrl: string, conversationId: string, after?: string) {
-  const query = after ? `?after=${encodeURIComponent(after)}` : '';
-  const response = await apiRequest<{ messages: BackendMessage[]; readThrough?: string | null }>(`/conversations/${conversationId}/messages${query}`, {
-    method: 'GET',
-    serverUrl,
+  return listMessagePages(serverUrl, conversationId, {
+    after,
+    paginate: !!after,
   });
+}
+
+export async function listPendingMessages(
+  serverUrl: string,
+  conversationId: string,
+  onPage?: (messages: Message[]) => Promise<void>,
+) {
+  return listMessagePages(serverUrl, conversationId, {
+    onPage,
+    paginate: true,
+    pendingContent: true,
+  });
+}
+
+async function listMessagePages(
+  serverUrl: string,
+  conversationId: string,
+  options: {
+    after?: string;
+    onPage?: (messages: Message[]) => Promise<void>;
+    paginate: boolean;
+    pendingContent?: boolean;
+  },
+) {
+  const messages: Message[] = [];
+  let cursor: { cursorAfter: string; cursorAfterId: string } | null = null;
+  let readThrough: string | null = null;
+
+  do {
+    const params = new URLSearchParams();
+
+    if (options.after) {
+      params.set('after', options.after);
+    }
+    if (options.pendingContent) {
+      params.set('pendingContent', 'true');
+    }
+    if (cursor) {
+      params.set('cursorAfter', cursor.cursorAfter);
+      params.set('cursorAfterId', cursor.cursorAfterId);
+    }
+
+    const query = params.size > 0 ? `?${params.toString()}` : '';
+    const response = await apiRequest<{
+      hasMore?: boolean;
+      messages: BackendMessage[];
+      nextCursor?: { cursorAfter: string; cursorAfterId: string } | null;
+      readThrough?: string | null;
+    }>(`/conversations/${conversationId}/messages${query}`, {
+      method: 'GET',
+      serverUrl,
+    });
+
+    const pageMessages = response.messages.map((message) => mapMessage(message, serverUrl));
+
+    messages.push(...pageMessages);
+    await options.onPage?.(pageMessages);
+    readThrough = response.readThrough ?? readThrough;
+
+    if (!options.paginate || response.hasMore !== true || !response.nextCursor) {
+      cursor = null;
+      break;
+    }
+
+    if (
+      cursor?.cursorAfter === response.nextCursor.cursorAfter &&
+      cursor.cursorAfterId === response.nextCursor.cursorAfterId
+    ) {
+      cursor = null;
+      break;
+    }
+
+    cursor = response.nextCursor;
+  } while (cursor);
 
   return {
-    messages: response.messages.map((message) => mapMessage(message, serverUrl)),
-    readThrough: response.readThrough ?? null,
+    messages,
+    readThrough,
   };
 }
 
