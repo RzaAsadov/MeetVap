@@ -5,7 +5,7 @@ import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { LinearGradient } from 'expo-linear-gradient';
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, FlatList, InteractionManager, Modal, Platform, Pressable, Share, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, FlatList, Modal, Platform, Pressable, Share, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { Avatar } from '../components/Avatar';
 import { HelpWebViewModal } from '../components/HelpWebViewModal';
@@ -17,6 +17,7 @@ import { getActiveMeetingSession, setActiveMeetingSession } from '../lib/activeM
 import { buildReportReason, getReportContextNotice } from '../lib/reporting';
 import { buildSharedContactMessage } from '../lib/shareLinks';
 import { CONVERSATION_LIST_STALE_MS, isServerSideConversationFilter, type ConversationListFilter } from '../lib/conversationList';
+import { noteHighPriorityUiActivity, scheduleAfterForegroundIdle } from '../lib/foregroundWorkScheduler';
 import { getStoredFavoriteConversationIds, setStoredFavoriteConversationIds } from '../lib/storage';
 import { CONVERSATION_MUTE_OPTIONS, isConversationMuted } from '../lib/conversationMute';
 import { hasPremiumAccess } from '../lib/subscriptionAccess';
@@ -86,7 +87,7 @@ export function ChatsScreen() {
   const language = useAppStore((state) => state.language);
   const subscriptionStatus = useAppStore((state) => state.subscriptionStatus);
   const serverUrl = useAppStore((state) => state.serverUrl);
-  const statusGroups = useAppStore((state) => state.statusGroups);
+  const unviewedStatusAuthorIdsFromStore = useAppStore((state) => state.unviewedStatusAuthorIds);
   const user = useAppStore((state) => state.user);
   const addUserToContacts = useAppStore((state) => state.addUserToContacts);
   const blockUserById = useAppStore((state) => state.blockUserById);
@@ -98,7 +99,7 @@ export function ChatsScreen() {
   const loadConversations = useAppStore((state) => state.loadConversations);
   const loadMoreConversations = useAppStore((state) => state.loadMoreConversations);
   const loadMessages = useAppStore((state) => state.loadMessages);
-  const loadStatuses = useAppStore((state) => state.loadStatuses);
+  const refreshStatusSummary = useAppStore((state) => state.refreshStatusSummary);
   const markAllConversationsReadNow = useAppStore((state) => state.markAllConversationsReadNow);
   const reportTarget = useAppStore((state) => state.reportTarget);
   const revokeGroupAdmin = useAppStore((state) => state.revokeGroupAdmin);
@@ -135,11 +136,10 @@ export function ChatsScreen() {
     () => getChatSubscriptionDetails(subscriptionStatus, language, canUsePremiumFeatures),
     [canUsePremiumFeatures, language, subscriptionStatus],
   );
-  const unviewedStatusAuthorIds = useMemo(() => new Set(
-    statusGroups
-      .filter((group) => group.hasUnviewed && group.author.id !== user?.id)
-      .map((group) => group.author.id),
-  ), [statusGroups, user?.id]);
+  const unviewedStatusAuthorIds = useMemo(
+    () => new Set(unviewedStatusAuthorIdsFromStore.filter((authorId) => authorId !== user?.id)),
+    [unviewedStatusAuthorIdsFromStore, user?.id],
+  );
   const unviewedStatusAuthorKey = useMemo(
     () => [...unviewedStatusAuthorIds].sort().join(','),
     [unviewedStatusAuthorIds],
@@ -148,37 +148,38 @@ export function ChatsScreen() {
   useFocusEffect(
     useCallback(() => {
       hasLoadedFocusedConversationsRef.current = true;
-      let timeout: ReturnType<typeof setTimeout> | null = null;
       let isActive = true;
-      const interaction = InteractionManager.runAfterInteractions(() => {
-        timeout = setTimeout(() => {
+      const cancelScheduledRefresh = scheduleAfterForegroundIdle(() => {
+        if (!isActive) {
+          return;
+        }
+
+        const { conversationsFilter: currentFilter, conversationsLastFetchedAt: lastFetchedAt } = useAppStore.getState();
+        void (async () => {
+          if (Date.now() - lastFetchedAt >= CONVERSATION_LIST_STALE_MS) {
+            await loadConversations(debouncedSearchRef.current, currentFilter);
+          }
+
           if (!isActive) {
             return;
           }
 
-          const { conversationsFilter: currentFilter, conversationsLastFetchedAt: lastFetchedAt } = useAppStore.getState();
-          void (async () => {
-            if (Date.now() - lastFetchedAt >= CONVERSATION_LIST_STALE_MS) {
-              await loadConversations(debouncedSearchRef.current, currentFilter);
-            }
-
-            if (isActive) {
-              reconcileLoadedConversationsInBackground();
-            }
-          })();
-          void loadBlockedUsers();
-          void loadStatuses();
-        }, 450);
+          reconcileLoadedConversationsInBackground();
+          await Promise.allSettled([
+            loadBlockedUsers(),
+            refreshStatusSummary(),
+          ]);
+        })();
+      }, {
+        delayMs: 450,
+        shouldRun: () => isActive,
       });
 
       return () => {
         isActive = false;
-        interaction.cancel();
-        if (timeout) {
-          clearTimeout(timeout);
-        }
+        cancelScheduledRefresh();
       };
-    }, [loadBlockedUsers, loadConversations, loadStatuses]),
+    }, [loadBlockedUsers, loadConversations, refreshStatusSummary]),
   );
 
   useLayoutEffect(() => {
@@ -709,7 +710,10 @@ export function ChatsScreen() {
           <TextInput
             autoCapitalize="none"
             autoCorrect={false}
-            onChangeText={setSearch}
+            onChangeText={(value) => {
+              noteHighPriorityUiActivity(700);
+              setSearch(value);
+            }}
             placeholder={t('search')}
             placeholderTextColor={colors.mutedText}
             style={styles.searchInput}
@@ -767,6 +771,7 @@ export function ChatsScreen() {
         ) : null}
         onEndReached={loadNextConversationPage}
         onEndReachedThreshold={0.45}
+        onScrollBeginDrag={() => noteHighPriorityUiActivity(900)}
         renderItem={renderConversationRow}
         refreshing={isRefreshingConversations}
         onRefresh={refreshConversations}
@@ -778,6 +783,16 @@ export function ChatsScreen() {
       <Modal animationType="fade" transparent visible={isHeaderMenuVisible} onRequestClose={closeHeaderMenu}>
         <Pressable onPress={closeHeaderMenu} style={styles.headerMenuBackdrop}>
           <Pressable style={styles.headerMenuCard}>
+            <MenuAction
+              icon="share-social-outline"
+              label={t('shareMyContact')}
+              onPress={() => runHeaderMenuAction(() => setShareMyContactModalVisible(true))}
+            />
+            <MenuAction
+              icon="person-add-outline"
+              label={t('addContact')}
+              onPress={() => runHeaderMenuAction(() => navigation.navigate('AddContact'))}
+            />
             <MenuAction
               icon="people-outline"
               label={t('createGroup')}

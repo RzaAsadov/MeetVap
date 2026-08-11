@@ -27,6 +27,7 @@ import { HoldVoiceRecorderButton } from './ChatRoomVoiceRecorder';
 import { formatVoiceComposerEffectLabel, getMessageFileName, getMessageMimeType, isShareableMediaMessage, isViewableImageMessage } from './lib/ChatMediaHelpers';
 import { getDisappearingSecondsAfterView, getMessagePreview, getPinnedMessageTitle, getReplySenderName } from './lib/ChatMessagePreview';
 import { openMessageUrl } from '../lib/messageLinks';
+import { noteHighPriorityUiActivity } from '../lib/foregroundWorkScheduler';
 import { getChatListItemRenderKey, getGroupCallLimit, type ChatListItem } from './lib/ChatMiscHelpers';
 import { useChatRoomController } from './ChatRoomController';
 
@@ -647,6 +648,7 @@ export function ChatRoomScreen({ navigation, route }: Props) {
   }
 
   function beginUserHistoryScroll() {
+    noteHighPriorityUiActivity(800);
     if (userScrollHistoryResetTimeoutRef.current) {
       clearTimeout(userScrollHistoryResetTimeoutRef.current);
       userScrollHistoryResetTimeoutRef.current = null;

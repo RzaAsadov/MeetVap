@@ -88,9 +88,13 @@ services:
   admin:
     image: ${MEETVAP_ADMIN_IMAGE:-ghcr.io/rzaasadov/meetvap-admin}:${MEETVAP_VERSION:-latest}
     restart: unless-stopped
+    environment:
+      LIVEKIT_SERVERS_CONFIG_PATH: /app/livekit-servers.json
+      SERVER_EVENTS_INTERNAL_SECRET: ${SERVER_EVENTS_INTERNAL_SECRET}
     volumes:
       - ./generated/admin-config.json:/app/admin/config.json:ro
       - ./generated/config.json:/app/config.json:ro
+      - ./generated/livekit-servers.json:/app/livekit-servers.json:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -115,15 +119,10 @@ services:
       - "3478:3478/udp"
       - "5349:5349/tcp"
       - "7881:7881/tcp"
-      - "50000-60000:50000-60000/udp"
+      - "7882:7882/udp"
     depends_on:
       redis:
         condition: service_healthy
-    healthcheck:
-      test: ["CMD", "/livekit-server", "--version"]
-      interval: 30s
-      timeout: 5s
-      retries: 5
     networks: [backend, proxy]
     logging: *default-logging
 

@@ -53,6 +53,14 @@ class CallNative: NSObject {
     resolve(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String)
   }
 
+  @objc(getAppBuildNumber:rejecter:)
+  func getAppBuildNumber(
+    _ resolve: @escaping RCTPromiseResolveBlock,
+    rejecter reject: @escaping RCTPromiseRejectBlock
+  ) {
+    resolve(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String)
+  }
+
   @objc(setQuickReplyCredentials:authToken:)
   func setQuickReplyCredentials(_ serverUrl: String, authToken: String) {
     CallNativeQuickReplyCredentials.shared.save(serverUrl: serverUrl, authToken: authToken)
@@ -206,6 +214,40 @@ class CallNative: NSObject {
         }
 
         resolve(attestationObject?.base64EncodedString())
+      }
+    } else {
+      resolve(nil)
+    }
+  }
+
+  @objc(generateAppAttestAssertion:challenge:resolver:rejecter:)
+  func generateAppAttestAssertion(
+    _ keyId: String,
+    challenge: String,
+    resolver resolve: @escaping RCTPromiseResolveBlock,
+    rejecter reject: @escaping RCTPromiseRejectBlock
+  ) {
+    if #available(iOS 14.0, *) {
+      let service = DCAppAttestService.shared
+
+      guard service.isSupported else {
+        resolve(nil)
+        return
+      }
+
+      guard let challengeData = CallNative.base64UrlDecode(challenge) else {
+        reject("app_attest_invalid_challenge", "Invalid App Attest challenge", nil)
+        return
+      }
+
+      let clientDataHash = Data(SHA256.hash(data: challengeData))
+      service.generateAssertion(keyId, clientDataHash: clientDataHash) { assertionObject, error in
+        if let error = error {
+          reject("app_attest_assertion_failed", error.localizedDescription, error)
+          return
+        }
+
+        resolve(assertionObject?.base64EncodedString())
       }
     } else {
       resolve(nil)

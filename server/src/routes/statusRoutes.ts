@@ -53,15 +53,12 @@ statusRoutes.use(requireAuth);
 statusRoutes.get('/summary', async (req, res, next) => {
   try {
     const currentUser = getAuthedUser(req);
-    const visibleStatuses = await findVisibleStatuses(currentUser.id);
-    const hasUnviewed = visibleStatuses.some((status) => (
-      status.authorId !== currentUser.id &&
-      !status.views.some((view) => view.viewerId === currentUser.id)
-    ));
+    const summary = await findVisibleStatusSummary(currentUser.id);
 
     res.json({
-      count: visibleStatuses.filter((status) => status.authorId !== currentUser.id).length,
-      hasUnviewed,
+      count: summary.count,
+      hasUnviewed: summary.unviewedAuthorIds.length > 0,
+      unviewedAuthorIds: summary.unviewedAuthorIds,
     });
   } catch (error) {
     next(error);
@@ -266,6 +263,46 @@ const statusInclude = {
     },
   },
 } satisfies Prisma.StatusUpdateInclude;
+
+async function findVisibleStatusSummary(currentUserId: string) {
+  const now = new Date();
+  const contactIds = await getContactIds(currentUserId);
+
+  if (contactIds.length === 0) {
+    return { count: 0, unviewedAuthorIds: [] as string[] };
+  }
+
+  const statuses = await prisma.statusUpdate.findMany({
+    select: {
+      authorId: true,
+      views: {
+        select: { viewerId: true },
+        where: { viewerId: currentUserId },
+      },
+    },
+    where: {
+      authorId: { in: contactIds },
+      deletedAt: null,
+      expiresAt: { gt: now },
+      OR: [
+        { audience: StatusAudience.CONTACTS },
+        {
+          audience: StatusAudience.ONLY_SHARE_WITH,
+          onlyUserIds: { has: currentUserId },
+        },
+        {
+          audience: StatusAudience.CONTACTS_EXCEPT,
+          NOT: { exceptUserIds: { has: currentUserId } },
+        },
+      ],
+    },
+  });
+  const unviewedAuthorIds = Array.from(new Set(
+    statuses.filter((status) => status.views.length === 0).map((status) => status.authorId),
+  ));
+
+  return { count: statuses.length, unviewedAuthorIds };
+}
 
 async function findVisibleStatuses(currentUserId: string) {
   const now = new Date();

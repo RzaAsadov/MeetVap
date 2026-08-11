@@ -3,9 +3,11 @@ import crypto from 'crypto';
 import { NextFunction, Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 
+import { assertRequestAttestationAccess } from './attestationAccess';
 import { getRequestMessageClient, recordUserClientActivity } from './clientActivity';
 import { recordSessionClientMetadata } from './clientCompatibility';
 import { config } from './config';
+import { assertRequestDeviceAllowed } from './deviceAccess';
 import { HttpError } from './httpError';
 import { prisma } from './prisma';
 import { cacheDelete, cacheGetJson, cacheSetJson } from './redisCache';
@@ -17,6 +19,7 @@ const ADMIN_BLOCK_CACHE_TTL_SECONDS = 60;
 
 export function toAuthUser(user: AuthUser): AuthUser {
   return {
+    authVersion: user.authVersion ?? 0,
     avatarUrl: user.avatarUrl,
     displayName: user.displayName,
     hideFromSearch: user.hideFromSearch,
@@ -44,6 +47,7 @@ export function signAccessToken(user: AuthUser) {
   return jwt.sign(
     {
       username: user.username,
+      authVersion: user.authVersion ?? 0,
     },
     config.JWT_SECRET,
     {
@@ -58,6 +62,7 @@ export function signWebAccessToken(user: AuthUser) {
     {
       scope: 'web',
       username: user.username,
+      authVersion: user.authVersion ?? 0,
     },
     config.JWT_SECRET,
     {
@@ -77,6 +82,20 @@ export async function requireAuth(req: Request, _res: Response, next: NextFuncti
 
     const token = authHeader.slice('Bearer '.length);
     const payload = jwt.verify(token, config.JWT_SECRET) as JwtPayload;
+    await assertRequestDeviceAllowed(req);
+    const authState = await getUserAuthState(payload.sub);
+
+    if (!authState.exists) {
+      throw new HttpError(401, 'User not found');
+    }
+
+    if (authState.blocked) {
+      throw new HttpError(403, 'This account is blocked', { code: 'ACCOUNT_BLOCKED' });
+    }
+
+    if ((payload.authVersion ?? 0) !== authState.authVersion) {
+      throw new HttpError(401, 'Session revoked', { code: 'SESSION_REVOKED' });
+    }
     const messageClient = getRequestMessageClient(req, payload);
     const tokenHash = hashToken(token);
     const authCacheKey = `auth:${tokenHash}`;
@@ -94,6 +113,7 @@ export async function requireAuth(req: Request, _res: Response, next: NextFuncti
       void recordUserClientActivity(cachedUser.id, messageClient);
       req.messageClient = messageClient;
       req.user = cachedUser;
+      await assertRequestAttestationAccess(req, cachedUser.id, tokenHash);
       next();
       return;
     }
@@ -116,6 +136,7 @@ export async function requireAuth(req: Request, _res: Response, next: NextFuncti
     const user = await prisma.user.findUnique({
       select: {
         avatarUrl: true,
+        authVersion: true,
         displayName: true,
         hideFromSearch: true,
         hideNickname: true,
@@ -133,10 +154,6 @@ export async function requireAuth(req: Request, _res: Response, next: NextFuncti
       throw new HttpError(401, 'User not found');
     }
 
-    if (await isAdminBlocked(user.id)) {
-      throw new HttpError(403, 'This account is blocked');
-    }
-
     await cacheSetJson(authCacheKey, { user: serializeCachedAuthUser(user) }, getAuthCacheTtlSeconds(payload));
     await recordSessionClientMetadata(
       req,
@@ -147,6 +164,7 @@ export async function requireAuth(req: Request, _res: Response, next: NextFuncti
     void recordUserClientActivity(user.id, messageClient);
     req.messageClient = messageClient;
     req.user = user;
+    await assertRequestAttestationAccess(req, user.id, tokenHash);
     next();
   } catch (error) {
     next(error instanceof HttpError ? error : new HttpError(401, 'Invalid token'));
@@ -166,26 +184,55 @@ export function getAuthedUser(req: Request) {
 }
 
 export async function isAdminBlocked(userId: string) {
-  const cacheKey = `admin-blocked:${userId}`;
-  const cached = await cacheGetJson<{ blocked: boolean }>(cacheKey);
+  return (await getUserAuthState(userId)).blocked;
+}
+
+export async function getUserAuthState(userId: string) {
+  const cacheKey = `user-auth-state:${userId}`;
+  const cached = await cacheGetJson<UserAuthState>(cacheKey);
 
   if (cached) {
-    return cached.blocked;
+    return cached;
   }
 
-  const rows = await prisma.$queryRaw<Array<{ userId: string }>>`
-    select "userId" from "AdminBlockedUser" where "userId" = ${userId} limit 1
-  `;
+  const user = await prisma.user.findUnique({
+    select: {
+      adminBlock: { select: { userId: true } },
+      authVersion: true,
+      id: true,
+    },
+    where: { id: userId },
+  });
+  const state: UserAuthState = {
+    authVersion: user?.authVersion ?? 0,
+    blocked: !!user?.adminBlock,
+    exists: !!user,
+  };
 
-  const blocked = rows.length > 0;
-
-  await cacheSetJson(cacheKey, { blocked }, ADMIN_BLOCK_CACHE_TTL_SECONDS);
-  return blocked;
+  await cacheSetJson(cacheKey, state, ADMIN_BLOCK_CACHE_TTL_SECONDS);
+  return state;
 }
 
-export async function invalidateUserAuthCache(userId: string) {
-  await cacheDelete(`admin-blocked:${userId}`);
+export async function cacheUserAuthState(userId: string, state: UserAuthState) {
+  await Promise.all([
+    cacheSetJson(`user-auth-state:${userId}`, state, ADMIN_BLOCK_CACHE_TTL_SECONDS),
+    cacheSetJson(`admin-blocked:${userId}`, { blocked: state.blocked }, ADMIN_BLOCK_CACHE_TTL_SECONDS),
+  ]);
 }
+
+export async function invalidateUserAuthCache(userId: string, tokenHashes: string[] = []) {
+  await cacheDelete(
+    `admin-blocked:${userId}`,
+    `user-auth-state:${userId}`,
+    ...tokenHashes.map((tokenHash) => `auth:${tokenHash}`),
+  );
+}
+
+type UserAuthState = {
+  authVersion: number;
+  blocked: boolean;
+  exists: boolean;
+};
 
 type CachedAuthUser = Omit<AuthUser, 'lastSeenAt'> & {
   lastSeenAt?: string | null;

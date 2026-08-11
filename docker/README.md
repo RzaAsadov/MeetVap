@@ -14,7 +14,7 @@ generated `runtime-config.js` supplies the installation-specific API domain.
 - `https://WEB_DOMAIN` serves the `/web` build.
 - `https://MEET_DOMAIN` serves the `/meet` build.
 - `https://SERVER_DOMAIN` proxies the API and Socket.IO server.
-- `https://SERVER_DOMAIN/admin/` proxies the admin panel.
+- `https://ADMIN_DOMAIN` proxies the admin panel.
 - `wss://SERVER_DOMAIN/rtc` proxies LiveKit signaling.
 
 Nginx is the only container that binds host ports 80 and 443. LiveKit also
@@ -25,7 +25,7 @@ publishes the media and TURN ports required by WebRTC.
 Install Docker Engine with the Compose plugin. No Node.js, PostgreSQL, Redis,
 or application source checkout is required. Before installation:
 
-1. Point the web, meet, and server domain DNS records to the Docker host.
+1. Point the web, meet, server, and admin domain DNS records to the Docker host.
 2. Make sure ports 80 and 443 are not occupied by another web server.
 3. Open these firewall ports:
 
@@ -35,7 +35,7 @@ or application source checkout is required. Before installation:
 3478/udp
 5349/tcp
 7881/tcp
-50000-60000/udp
+7882/udp
 ```
 
 Do not proxy the server domain through a CDN that cannot pass LiveKit
@@ -49,10 +49,11 @@ cd docker-deployment-repository
 ./install.sh
 ```
 
-The installer asks for the web, meet, and child-server domains, the main server
-hostname, the child relay key created by the main server administrator, and the
-desired local admin username and password. PostgreSQL, JWT, admin-session,
-internal-service, and LiveKit secrets are generated automatically.
+The installer asks for the web, meet, child-server, and separate admin domains,
+the main server hostname, the child relay key created by the main server
+administrator, and the desired local admin username and password. PostgreSQL,
+JWT, admin-session, internal-service, and LiveKit secrets are generated
+automatically.
 The main server defaults to `https://mm.meetvap.com` when the installer prompt
 is left empty.
 
@@ -72,7 +73,7 @@ ghcr.io/rzaasadov/meetvap-nginx
 These packages must be public for anonymous installation. For private packages,
 run `docker login ghcr.io` before `install.sh`.
 
-The installer obtains one Let's Encrypt certificate containing all three
+The installer obtains one Let's Encrypt certificate containing all four
 domain names. Certbot renews it in a sidecar, and nginx reloads periodically to
 pick up renewed files.
 
@@ -86,10 +87,14 @@ Private files are written under `docker/generated/` and ignored by Git:
 - `livekit-servers.json`: public LiveKit URL and private health URL.
 - `nginx.conf`: domain-specific virtual hosts.
 - `runtime-config.js`: API hostname consumed by both browser applications.
-- `server-optional.env`: optional push and store credentials.
+- `server-optional.env`: App Attest identifiers and optional store credentials.
 
 The admin database URL uses the internal hostname `postgres`. Its
 `backendPublicUrl` is always `https://SERVER_DOMAIN`.
+Both the API and admin containers read `livekit-servers.json`. Clients receive
+the public `wss://SERVER_DOMAIN` URL, while server-side health checks use the
+private Docker address `http://livekit:7880` and do not depend on public DNS or
+nginx availability.
 
 If `config/config.json` exists, installation uses it as the operational config
 template. Otherwise `config/config.example.json` is used. A custom template
@@ -110,11 +115,18 @@ delivery. If purchases are verified on this child, put those optional billing
 credential files in `secrets/`, then update `generated/server-optional.env`.
 Paths inside the API container start with `/run/secrets/meetvap/`.
 
+The installer writes MeetVap's non-secret App Attest App ID prefix and iOS
+bundle identifier to this file. Keep `APPLE_APP_ATTEST_ALLOW_DEVELOPMENT=false`
+on production child servers. App Attest verification does not require an Apple
+private key.
+
 Example:
 
 ```env
 GOOGLE_SERVICE_ACCOUNT_PATH=/run/secrets/meetvap/google-service-account.json
-APPLE_BUNDLE_ID=com.meetvap.messenger
+APPLE_APP_ATTEST_APP_ID_PREFIX=4H68W59Z24
+APPLE_APP_ATTEST_ALLOW_DEVELOPMENT=false
+APPLE_BUNDLE_ID=com.meetvap.app
 APPLE_SHARED_SECRET=replace-with-store-shared-secret
 ```
 

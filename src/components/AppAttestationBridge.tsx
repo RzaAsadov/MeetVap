@@ -15,8 +15,25 @@ export function AppAttestationBridge({ enabled, serverUrl, userId }: Props) {
       return undefined;
     }
 
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
     const run = () => {
-      void runAppAttestation(serverUrl, userId);
+      void runAppAttestation(serverUrl, userId).then((result) => {
+        if (!result?.nextRunAfterSeconds) {
+          return;
+        }
+
+        if (retryTimer) {
+          clearTimeout(retryTimer);
+        }
+
+        retryTimer = setTimeout(() => {
+          retryTimer = null;
+          if (AppState.currentState === 'active') {
+            run();
+          }
+        }, Math.max(30, result.nextRunAfterSeconds) * 1000);
+      });
     };
 
     run();
@@ -28,6 +45,9 @@ export function AppAttestationBridge({ enabled, serverUrl, userId }: Props) {
     });
 
     return () => {
+      if (retryTimer) {
+        clearTimeout(retryTimer);
+      }
       subscription.remove();
     };
   }, [enabled, serverUrl, userId]);

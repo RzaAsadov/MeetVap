@@ -2,7 +2,7 @@
   "expo": {
     "name": "MeetVap",
     "slug": "meetvap",
-    "version": "17.0",
+    "version": "23.8",
     "icon": "./assets/icon.png",
     "orientation": "portrait",
     "scheme": "meetvap",
@@ -13,7 +13,7 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.meetvap.app",
-      "buildNumber": "4",
+      "buildNumber": "308",
       "associatedDomains": [
         "applinks:meetvap.com",
         "applinks:www.meetvap.com",

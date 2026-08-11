@@ -1,18 +1,20 @@
 import { Ionicons } from '@expo/vector-icons';
 import { AudioSession, LiveKitRoom, VideoTrack, isTrackReference, useConnectionState, useLocalParticipant, useParticipants, useRoomContext, useTracks } from '@livekit/react-native';
 import type { TrackReference } from '@livekit/react-native';
+import { ScreenCapturePickerView } from '@livekit/react-native-webrtc';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import * as Clipboard from 'expo-clipboard';
 import { getRecordingPermissionsAsync, requestRecordingPermissionsAsync } from 'expo-audio';
 import * as ImagePicker from 'expo-image-picker';
 import { ConnectionQuality, ConnectionState, RoomEvent, Track, VideoPreset, VideoPresets, VideoQuality } from 'livekit-client';
-import type { LocalVideoTrack, RemoteTrackPublication } from 'livekit-client';
+import type { LocalVideoTrack, RemoteTrackPublication, ScreenShareCaptureOptions, TrackPublishOptions } from 'livekit-client';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Platform, Pressable, Share, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, findNodeHandle, NativeModules, Platform, Pressable, Share, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { getMeeting, joinMeeting, leaveMeeting, endMeeting, type MeetingInfo, type MeetingParticipantInfo } from '../lib/backend';
 import { setActiveMeetingSession } from '../lib/activeMeetingSession';
+import { beginAppLockForegroundOperation } from '../lib/appLockAccess';
 import { ensureRemoteAudioPublicationSubscribed, ensureRemoteVideoPublicationSubscribed, recoverRemoteVideoPublicationIfDecoderStalled } from '../lib/liveKitRemoteSubscription';
 import { useAppStore } from '../store/useAppStore';
 import { colors } from '../theme/colors';
@@ -47,6 +49,16 @@ const MEETING_ROOM_OPTIONS = {
     videoSimulcastLayers: [VideoPresets.h90, new VideoPreset(320, 180, 130_000, 12)],
   },
 };
+const MEETING_SCREEN_SHARE_CAPTURE_OPTIONS: ScreenShareCaptureOptions = {
+  audio: false,
+  resolution: { frameRate: 15, height: 720, width: 1280 },
+};
+const MEETING_SCREEN_SHARE_PUBLISH_OPTIONS: TrackPublishOptions = {
+  degradationPreference: 'maintain-resolution',
+  simulcast: false,
+  source: Track.Source.ScreenShare,
+  videoEncoding: VideoPresets.h720.encoding,
+};
 
 const meetingColors = {
   background: '#07111f',
@@ -76,6 +88,7 @@ export function MeetingRoomScreen({ navigation, route }: Props) {
   const [isJoining, setJoining] = useState(false);
   const [isMicOn, setMicOn] = useState(false);
   const [isCameraOn, setCameraOn] = useState(false);
+  const [isScreenSharing, setScreenSharing] = useState(false);
   const hasAutoJoinedRef = useRef(false);
   const isHost = participant?.role === 'HOST';
 
@@ -189,6 +202,7 @@ export function MeetingRoomScreen({ navigation, route }: Props) {
     setParticipant(null);
     setMicOn(false);
     setCameraOn(false);
+    setScreenSharing(false);
     setActiveMeetingSession(null);
 
     if (serverUrl && currentParticipantId) {
@@ -308,7 +322,7 @@ export function MeetingRoomScreen({ navigation, route }: Props) {
       video={false}
     >
       <MeetingAudioSession />
-      <MeetingMediaController isCameraOn={isCameraOn && meeting.mode === 'video'} isMicOn={isMicOn} />
+      <MeetingMediaController isCameraOn={isCameraOn && !isScreenSharing && meeting.mode === 'video'} isMicOn={isMicOn} />
       <MeetingRemoteTrackSubscriber mode={meeting.mode} />
       <View style={[styles.room, { paddingBottom: insets.bottom + spacing.md, paddingTop: insets.top + spacing.md }]}>
         <View style={styles.roomHeader}>
@@ -331,9 +345,20 @@ export function MeetingRoomScreen({ navigation, route }: Props) {
             <Ionicons color={colors.white} name={isMicOn ? 'mic' : 'mic-off'} size={23} />
           </Pressable>
           {meeting.mode === 'video' ? (
-            <Pressable onPress={() => setCameraOn((current) => !current)} style={[styles.controlButton, isCameraOn && styles.controlButtonActive]}>
+            <Pressable
+              disabled={isScreenSharing}
+              onPress={() => setCameraOn((current) => !current)}
+              style={[styles.controlButton, isCameraOn && styles.controlButtonActive, isScreenSharing && styles.controlButtonDisabled]}
+            >
               <Ionicons color={colors.white} name={isCameraOn ? 'videocam' : 'videocam-off'} size={23} />
             </Pressable>
+          ) : null}
+          {meeting.mode === 'video' ? (
+            <MeetingScreenShareControl
+              isCameraOn={isCameraOn}
+              onCameraOnChange={setCameraOn}
+              onScreenSharingChange={setScreenSharing}
+            />
           ) : null}
           {isHost ? (
             <Pressable onPress={() => void end()} style={[styles.controlButton, styles.endButtonStrong]}>
@@ -450,6 +475,165 @@ function MeetingMediaController({ isCameraOn, isMicOn }: { isCameraOn: boolean; 
   return null;
 }
 
+function MeetingScreenShareControl({
+  isCameraOn,
+  onCameraOnChange,
+  onScreenSharingChange,
+}: {
+  isCameraOn: boolean;
+  onCameraOnChange: (value: boolean) => void;
+  onScreenSharingChange: (value: boolean) => void;
+}) {
+  const room = useRoomContext();
+  const { localParticipant } = useLocalParticipant();
+  const screenCapturePickerRef = useRef(null);
+  const endLockDeferralRef = useRef<(() => void) | null>(null);
+  const restoreCameraRef = useRef(false);
+  const [isScreenSharing, setScreenSharing] = useState(false);
+  const [isStarting, setStarting] = useState(false);
+
+  const setScreenSharingState = useCallback((value: boolean) => {
+    setScreenSharing(value);
+    onScreenSharingChange(value);
+  }, [onScreenSharingChange]);
+
+  const endLockDeferral = useCallback(() => {
+    const endDeferral = endLockDeferralRef.current;
+
+    endLockDeferralRef.current = null;
+    endDeferral?.();
+  }, []);
+
+  const restoreCameraAfterScreenShare = useCallback(() => {
+    if (!restoreCameraRef.current) {
+      return;
+    }
+
+    restoreCameraRef.current = false;
+    onCameraOnChange(true);
+  }, [onCameraOnChange]);
+
+  useEffect(() => {
+    const updateState = () => {
+      const publication = localParticipant.getTrackPublication(Track.Source.ScreenShare);
+      const active = !!publication?.track &&
+        publication.isMuted !== true &&
+        publication.track.mediaStreamTrack.readyState === 'live';
+
+      setScreenSharingState(active);
+    };
+    const handleLocalTrackUnpublished = (publication: { source?: Track.Source }) => {
+      updateState();
+      if (publication.source === Track.Source.ScreenShare) {
+        endLockDeferral();
+        restoreCameraAfterScreenShare();
+      }
+    };
+
+    updateState();
+    room
+      .on(RoomEvent.LocalTrackPublished, updateState)
+      .on(RoomEvent.LocalTrackUnpublished, handleLocalTrackUnpublished)
+      .on(RoomEvent.TrackMuted, updateState)
+      .on(RoomEvent.TrackUnmuted, updateState);
+
+    return () => {
+      room
+        .off(RoomEvent.LocalTrackPublished, updateState)
+        .off(RoomEvent.LocalTrackUnpublished, handleLocalTrackUnpublished)
+        .off(RoomEvent.TrackMuted, updateState)
+        .off(RoomEvent.TrackUnmuted, updateState);
+    };
+  }, [endLockDeferral, localParticipant, restoreCameraAfterScreenShare, room, setScreenSharingState]);
+
+  useEffect(() => () => {
+    endLockDeferral();
+    onScreenSharingChange(false);
+  }, [endLockDeferral, onScreenSharingChange]);
+
+  async function showIosScreenCapturePicker() {
+    if (Platform.OS !== 'ios') {
+      return;
+    }
+
+    const reactTag = findNodeHandle(screenCapturePickerRef.current);
+
+    if (!reactTag || !NativeModules.ScreenCapturePickerViewManager?.show) {
+      throw new Error(t('screenSharingUnavailable'));
+    }
+
+    await NativeModules.ScreenCapturePickerViewManager.show(reactTag);
+  }
+
+  async function toggleScreenShare() {
+    if (isStarting) {
+      return;
+    }
+
+    setStarting(true);
+
+    if (isScreenSharing) {
+      try {
+        await localParticipant.setScreenShareEnabled(false);
+        setScreenSharingState(false);
+        restoreCameraAfterScreenShare();
+      } catch (error) {
+        Alert.alert(t('shareScreen'), error instanceof Error ? error.message : t('pleaseTryAgain'));
+      } finally {
+        endLockDeferral();
+        setStarting(false);
+      }
+      return;
+    }
+
+    endLockDeferralRef.current = beginAppLockForegroundOperation();
+    restoreCameraRef.current = isCameraOn;
+
+    try {
+      if (isCameraOn) {
+        onCameraOnChange(false);
+        await localParticipant.setCameraEnabled(false);
+      }
+
+      await showIosScreenCapturePicker();
+      await localParticipant.setScreenShareEnabled(
+        true,
+        MEETING_SCREEN_SHARE_CAPTURE_OPTIONS,
+        MEETING_SCREEN_SHARE_PUBLISH_OPTIONS,
+      );
+      setScreenSharingState(true);
+    } catch (error) {
+      endLockDeferral();
+      setScreenSharingState(false);
+      restoreCameraAfterScreenShare();
+      Alert.alert(t('shareScreen'), error instanceof Error ? error.message : t('pleaseTryAgain'));
+    } finally {
+      setStarting(false);
+    }
+  }
+
+  return (
+    <>
+      {Platform.OS === 'ios' ? (
+        <View pointerEvents="none" style={styles.hiddenScreenCapturePicker}>
+          <ScreenCapturePickerView ref={screenCapturePickerRef} />
+        </View>
+      ) : null}
+      <Pressable
+        disabled={isStarting}
+        onPress={() => void toggleScreenShare()}
+        style={[styles.controlButton, isScreenSharing && styles.controlButtonActive, isStarting && styles.controlButtonDisabled]}
+      >
+        {isStarting ? (
+          <ActivityIndicator color={colors.white} />
+        ) : (
+          <Ionicons color={colors.white} name={isScreenSharing ? 'stop-circle' : 'phone-portrait-outline'} size={23} />
+        )}
+      </Pressable>
+    </>
+  );
+}
+
 function MeetingRemoteTrackSubscriber({ mode }: { mode: 'voice' | 'video' }) {
   const { localParticipant } = useLocalParticipant();
   const room = useRoomContext();
@@ -511,6 +695,14 @@ function MeetingRemoteTrackSubscriber({ mode }: { mode: 'voice' | 'video' }) {
               useGroupVideoLimits,
             },
           );
+          ensureRemoteVideoPublicationSubscribed(
+            participant.getTrackPublication(Track.Source.ScreenShare) as RemoteTrackPublication | undefined,
+            {
+              isStartup: Date.now() - startupStartedAtRef.current < 2_000,
+              networkProfile,
+              useGroupVideoLimits: false,
+            },
+          );
         }
       });
 
@@ -530,6 +722,9 @@ function MeetingRemoteTrackSubscriber({ mode }: { mode: 'voice' | 'video' }) {
       room.remoteParticipants.forEach((participant) => {
         void recoverRemoteVideoPublicationIfDecoderStalled(
           participant.getTrackPublication(Track.Source.Camera) as RemoteTrackPublication | undefined,
+        );
+        void recoverRemoteVideoPublicationIfDecoderStalled(
+          participant.getTrackPublication(Track.Source.ScreenShare) as RemoteTrackPublication | undefined,
         );
       });
     }, 2_000);
@@ -559,7 +754,10 @@ function MeetingRemoteTrackSubscriber({ mode }: { mode: 'voice' | 'video' }) {
 function MeetingTiles({ mode }: { mode: 'voice' | 'video' }) {
   const participants = useParticipants();
   const { localParticipant } = useLocalParticipant();
-  const tracks = useTracks([{ source: Track.Source.Camera, withPlaceholder: true }], { onlySubscribed: false });
+  const tracks = useTracks([
+    { source: Track.Source.Camera, withPlaceholder: true },
+    { source: Track.Source.ScreenShare, withPlaceholder: false },
+  ], { onlySubscribed: false });
   const trackRefs = tracks.filter(isTrackReference);
   const activeSinceRef = useRef(new Map<string, number>());
   const [promotedSpeakerIds, setPromotedSpeakerIds] = useState<Set<string>>(() => new Set());
@@ -600,9 +798,19 @@ function MeetingTiles({ mode }: { mode: 'voice' | 'video' }) {
   }, [promotedSpeakerIds, remoteParticipants]);
 
   const visibleParticipants = useMemo(() => (
-    remoteParticipants.length > 6
-      ? [...remoteParticipants]
-        .sort((left, right) => {
+    [...remoteParticipants]
+      .sort((left, right) => {
+          const leftPresenting = hasMeetingScreenShare(left) ? 0 : 1;
+          const rightPresenting = hasMeetingScreenShare(right) ? 0 : 1;
+
+          if (leftPresenting !== rightPresenting) {
+            return leftPresenting - rightPresenting;
+          }
+
+          if (remoteParticipants.length <= 6) {
+            return 0;
+          }
+
           const leftPromoted = promotedSpeakerIds.has(left.identity) ? 0 : 1;
           const rightPromoted = promotedSpeakerIds.has(right.identity) ? 0 : 1;
 
@@ -612,25 +820,23 @@ function MeetingTiles({ mode }: { mode: 'voice' | 'video' }) {
 
           return (left.name || left.identity).localeCompare(right.name || right.identity);
         })
-        .slice(0, 6)
-      : remoteParticipants.length > 0
-        ? remoteParticipants.slice(0, 6)
-        : [localParticipant]
-  ), [localParticipant, promotedSpeakerIds, remoteParticipants]);
-  const localTrackRef = trackRefs.find((trackRef) => trackRef.participant.identity === localParticipant.identity);
+      .slice(0, 6)
+  ), [promotedSpeakerIds, remoteParticipants]);
+  const participantsToRender = visibleParticipants.length > 0 ? visibleParticipants : [localParticipant];
+  const localTrackRef = getMeetingTrackRef(localParticipant, trackRefs, true);
   const showLocalOverlay = mode === 'video' && remoteParticipants.length > 0;
   const remoteTileCount = remoteParticipants.length;
 
   return (
     <View style={styles.tileGrid}>
-      {visibleParticipants.map((participant, index) => (
+      {participantsToRender.map((participant, index) => (
         <MeetingTile
           key={participant.identity}
           mode={mode}
           name={participant.name || participant.identity}
           speaking={participant.isSpeaking}
           style={getMeetingTileStyle(remoteTileCount, index)}
-          trackRef={trackRefs.find((trackRef) => trackRef.participant.identity === participant.identity)}
+          trackRef={getMeetingTrackRef(participant, trackRefs)}
         />
       ))}
       {showLocalOverlay ? (
@@ -644,11 +850,12 @@ function MeetingTiles({ mode }: { mode: 'voice' | 'video' }) {
 
 function MeetingTile({ compact = false, mode, name, speaking, style, trackRef }: { compact?: boolean; mode: 'voice' | 'video'; name: string; speaking: boolean; style?: object; trackRef?: TrackReference }) {
   const hasVideo = mode === 'video' && trackRef?.publication?.isMuted !== true && !!trackRef?.publication?.track;
+  const isScreenShare = trackRef?.publication?.source === Track.Source.ScreenShare || trackRef?.source === Track.Source.ScreenShare;
 
   return (
     <View style={[styles.tile, style, compact && styles.tileCompact, speaking && styles.tileSpeaking]}>
       {hasVideo ? (
-        <VideoTrack mirror={false} objectFit="cover" style={styles.videoTrack} trackRef={trackRef} />
+        <VideoTrack mirror={false} objectFit={isScreenShare ? 'contain' : 'cover'} style={styles.videoTrack} trackRef={trackRef} />
       ) : (
         <View style={[styles.avatarCircle, compact && styles.avatarCircleCompact]}>
           <Text style={[styles.avatarText, compact && styles.avatarTextCompact]}>{name.slice(0, 1).toUpperCase()}</Text>
@@ -657,6 +864,41 @@ function MeetingTile({ compact = false, mode, name, speaking, style, trackRef }:
       <Text numberOfLines={1} style={styles.tileName}>{name}</Text>
     </View>
   );
+}
+
+function getMeetingTrackRef(participant: ReturnType<typeof useParticipants>[number], trackRefs: TrackReference[], preferCamera = false) {
+  const sources = preferCamera
+    ? [Track.Source.Camera]
+    : [Track.Source.ScreenShare, Track.Source.Camera];
+
+  for (const source of sources) {
+    const trackRef = trackRefs.find((item) => (
+      item.participant.identity === participant.identity &&
+      item.publication?.source === source &&
+      !!item.publication?.track &&
+      item.publication.isMuted !== true
+    ));
+
+    if (trackRef) {
+      return trackRef;
+    }
+
+    const publication = participant.getTrackPublication(source);
+
+    if (publication?.track && publication.isMuted !== true) {
+      return { participant, publication, source } as TrackReference;
+    }
+  }
+
+  return undefined;
+}
+
+function hasMeetingScreenShare(participant: ReturnType<typeof useParticipants>[number]) {
+  const publication = participant.getTrackPublication(Track.Source.ScreenShare);
+
+  return !!publication?.track &&
+    publication.isMuted !== true &&
+    publication.track.mediaStreamTrack.readyState === 'live';
 }
 
 function getMeetingTileStyle(remoteTileCount: number, index: number) {
@@ -728,6 +970,9 @@ let styles = StyleSheet.create({
   controlButtonActive: {
     backgroundColor: meetingColors.primary,
   },
+  controlButtonDisabled: {
+    opacity: 0.5,
+  },
   controls: {
     alignItems: 'center',
     flexDirection: 'row',
@@ -751,6 +996,12 @@ let styles = StyleSheet.create({
     height: 44,
     justifyContent: 'center',
     width: 44,
+  },
+  hiddenScreenCapturePicker: {
+    height: 1,
+    opacity: 0,
+    position: 'absolute',
+    width: 1,
   },
   localPreviewTile: {
     bottom: spacing.md,

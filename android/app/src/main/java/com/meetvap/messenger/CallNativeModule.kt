@@ -86,6 +86,22 @@ class CallNativeModule(private val reactContext: ReactApplicationContext) : Reac
   }
 
   @ReactMethod
+  fun getAppBuildNumber(promise: Promise) {
+    try {
+      val packageInfo = reactContext.packageManager.getPackageInfo(reactContext.packageName, 0)
+      val buildNumber = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+        packageInfo.longVersionCode
+      } else {
+        @Suppress("DEPRECATION")
+        packageInfo.versionCode.toLong()
+      }
+      promise.resolve(buildNumber.toString())
+    } catch (error: Exception) {
+      promise.reject("app_build_number_failed", error)
+    }
+  }
+
+  @ReactMethod
   fun setQuickReplyCredentials(serverUrl: String, authToken: String) {
     QuickReplyCredentials.save(reactContext.applicationContext, serverUrl, authToken)
   }

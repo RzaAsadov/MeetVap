@@ -24,6 +24,10 @@ let remoteDiagnosticFlushTimer: ReturnType<typeof setTimeout> | null = null;
 let remoteDiagnosticFlushInFlight: Promise<void> | null = null;
 
 export function logMessageDeliveryDiagnostic(event: string, details: Record<string, unknown> = {}) {
+  if (!MESSAGE_DELIVERY_DIAGNOSTICS_ENABLED && !remoteMessageDiagnosticsEnabled) {
+    return;
+  }
+
   const entry: RemoteDiagnosticEntry = {
     at: new Date().toISOString(),
     details: sanitizeRemoteDiagnosticDetails(details),
@@ -98,6 +102,10 @@ export async function refreshRemoteMessageDeliveryDiagnostics() {
 
 export function isRemoteMessageDeliveryDiagnosticsEnabled() {
   return remoteMessageDiagnosticsEnabled;
+}
+
+export function shouldCollectMessageDeliveryDiagnostics() {
+  return MESSAGE_DELIVERY_DIAGNOSTICS_ENABLED || remoteMessageDiagnosticsEnabled;
 }
 
 export function isRemoteCallDiagnosticsEnabled() {

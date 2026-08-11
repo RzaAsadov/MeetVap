@@ -9,11 +9,17 @@
   },
   "attestation": {
     "androidRequiredBuild": 999999,
+    "bootstrapGraceMinutes": 15,
     "challengeTtlMinutes": 2,
     "iosRequiredBuild": 999999,
     "legacyAllowUntil": null,
     "mode": "observe",
-    "trustTtlHours": 24
+    "platforms": {
+      "android": "observe",
+      "ios": "observe"
+    },
+    "trustTtlHours": 24,
+    "unevaluatedRetryAfterSeconds": 300
   },
   "maintenance": {
     "cleanupIntervalMinutes": 15,

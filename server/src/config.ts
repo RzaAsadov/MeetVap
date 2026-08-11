@@ -74,6 +74,7 @@ function firstNonEmpty(...values: Array<string | undefined>) {
 const rawEnv = {
   ...process.env,
   APNS_BUNDLE_ID: firstNonEmpty(process.env.APNS_BUNDLE_ID, process.env.IOS_BUNDLE_ID),
+  APPLE_APP_ATTEST_APP_ID_PREFIX: firstNonEmpty(process.env.APPLE_APP_ATTEST_APP_ID_PREFIX, process.env.APNS_TEAM_ID),
   APPLE_BUNDLE_ID: firstNonEmpty(process.env.APPLE_BUNDLE_ID, process.env.IOS_BUNDLE_ID, process.env.APNS_BUNDLE_ID),
   LIVEKIT_API_KEY: firstNonEmpty(process.env.LIVEKIT_API_KEY, process.env.LIVEKIT_API, process.env.LIVEKIT_KEY),
   LIVEKIT_API_SECRET: firstNonEmpty(process.env.LIVEKIT_API_SECRET, process.env.LIVEKIT_SECRET),
@@ -91,6 +92,8 @@ const envSchema = z.object({
   APNS_KEY_PATH: optionalString,
   APNS_PRODUCTION: z.coerce.boolean().default(true),
   APNS_TEAM_ID: optionalString,
+  APPLE_APP_ATTEST_ALLOW_DEVELOPMENT: z.enum(['true', 'false']).default('false').transform((value) => value === 'true'),
+  APPLE_APP_ATTEST_APP_ID_PREFIX: optionalString,
   APPLE_BUNDLE_ID: optionalString,
   APPLE_SHARED_SECRET: optionalString,
   FIREBASE_SERVICE_ACCOUNT_PATH: optionalString,

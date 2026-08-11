@@ -4,6 +4,7 @@ import { z } from 'zod';
 
 import { getAuthedUser, hashPassword, isAdminBlocked, requireAuth, signAccessToken, toAuthUser, verifyPassword } from '../auth';
 import { getClientMetadataWriteData, getRequestClientMetadata, hashAccessToken } from '../clientCompatibility';
+import { assertRequestDeviceAllowed } from '../deviceAccess';
 import { HttpError } from '../httpError';
 import { operationalConfig } from '../operationalConfig';
 import { prisma } from '../prisma';
@@ -92,6 +93,7 @@ authRoutes.get('/username-availability', async (req, res, next) => {
 
 authRoutes.post('/register', async (req, res, next) => {
   try {
+    await assertRequestDeviceAllowed(req, { required: true });
     const input = registerSchema.parse(req.body);
     const existing = await prisma.user.findUnique({
       where: { username: input.username },
@@ -120,6 +122,7 @@ authRoutes.post('/register', async (req, res, next) => {
       },
       select: {
         avatarUrl: true,
+        authVersion: true,
         displayName: true,
         hideFromSearch: true,
         hideNickname: true,
@@ -171,6 +174,7 @@ authRoutes.post('/register', async (req, res, next) => {
 
 authRoutes.post('/login', async (req, res, next) => {
   try {
+    await assertRequestDeviceAllowed(req, { required: true });
     const input = loginSchema.parse(req.body);
     const user = await prisma.user.findUnique({
       where: { username: input.username },

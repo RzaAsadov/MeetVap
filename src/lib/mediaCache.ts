@@ -2,6 +2,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import * as VideoThumbnails from 'expo-video-thumbnails';
 
 import { getMediaDownloadRecord, listPendingMediaDownloads, removeMediaDownloadRecord, saveMediaDownloadRecord } from './messageStore';
+import { waitForForegroundIdle } from './foregroundWorkScheduler';
 
 const MAX_CONCURRENT_MEDIA_DOWNLOADS = 2;
 const CHUNK_SIZE_BYTES = 1024 * 1024;
@@ -17,6 +18,7 @@ type FileInfo = Awaited<ReturnType<typeof FileSystem.getInfoAsync>>;
 const activeDownloads = new Map<string, Promise<string | null>>();
 const activeDownloadTasks = new Map<string, DownloadTask>();
 const activeThumbnailRequests = new Map<string, Promise<string | null>>();
+const thumbnailQueue: (() => Promise<void>)[] = [];
 const rememberedThumbnailUris = new Map<string, string>();
 const downloadQueue: (() => void)[] = [];
 const progressListeners = new Set<(progress: MediaDownloadProgress) => void>();
@@ -25,6 +27,7 @@ const canceledMessageIds = new Set<string>();
 const pausedMessageIds = new Set<string>();
 const resumeRequestedMessageIds = new Set<string>();
 let activeDownloadCount = 0;
+let isThumbnailQueueRunning = false;
 
 export type MediaDownloadProgress = {
   downloadedBytes: number;
@@ -105,12 +108,49 @@ export async function getCachedVideoThumbnailUri(input: {
     return activeRequest;
   }
 
-  const request = generateCachedVideoThumbnail(input, cacheUri).finally(() => {
+  const request = enqueueVideoThumbnailGeneration(input, cacheUri).finally(() => {
     activeThumbnailRequests.delete(requestKey);
   });
   activeThumbnailRequests.set(requestKey, request);
 
   return request;
+}
+
+function enqueueVideoThumbnailGeneration(
+  input: Parameters<typeof generateCachedVideoThumbnail>[0],
+  cacheUri: string,
+) {
+  return new Promise<string | null>((resolve) => {
+    thumbnailQueue.push(async () => {
+      await new Promise((idleResolve) => setTimeout(idleResolve, 120));
+      await waitForForegroundIdle();
+
+      if (await isLocalMediaFileComplete(cacheUri)) {
+        rememberedThumbnailUris.set(getVideoThumbnailRequestKey(input), cacheUri);
+        resolve(cacheUri);
+        return;
+      }
+
+      resolve(await generateCachedVideoThumbnail(input, cacheUri).catch(() => null));
+    });
+    void runVideoThumbnailQueue();
+  });
+}
+
+async function runVideoThumbnailQueue() {
+  if (isThumbnailQueueRunning) {
+    return;
+  }
+
+  isThumbnailQueueRunning = true;
+  try {
+    while (thumbnailQueue.length > 0) {
+      const task = thumbnailQueue.shift();
+      await task?.();
+    }
+  } finally {
+    isThumbnailQueueRunning = false;
+  }
 }
 
 export function getRememberedCachedVideoThumbnailUri(input: {

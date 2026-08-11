@@ -4,6 +4,8 @@
 
 RCT_EXTERN_METHOD(getAppVersion:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
+RCT_EXTERN_METHOD(getAppBuildNumber:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
 RCT_EXTERN_METHOD(setQuickReplyCredentials:(NSString *)serverUrl
                   authToken:(NSString *)authToken)
 RCT_EXTERN_METHOD(clearQuickReplyCredentials)
@@ -28,6 +30,10 @@ RCT_EXTERN_METHOD(peekPendingIncomingCallUrl:(RCTPromiseResolveBlock)resolve
 RCT_EXTERN_METHOD(generateAppAttestKey:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
 RCT_EXTERN_METHOD(attestAppAttestKey:(NSString *)keyId
+                  challenge:(NSString *)challenge
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+RCT_EXTERN_METHOD(generateAppAttestAssertion:(NSString *)keyId
                   challenge:(NSString *)challenge
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)

@@ -386,9 +386,10 @@ fingerprints, and only the Google APIs required by the application.
 | `APNS_BUNDLE_ID`, `APNS_KEY_ID`, `APNS_KEY_PATH`, `APNS_TEAM_ID` | iOS push | APNs token-key configuration |
 | `APNS_PRODUCTION` | No | Selects APNs production mode; defaults to `true` |
 | `FIREBASE_SERVICE_ACCOUNT_PATH` | Android push | Path to Firebase Admin service-account JSON |
-| `GOOGLE_SERVICE_ACCOUNT_JSON` / `GOOGLE_SERVICE_ACCOUNT_PATH` | Google billing | Google service-account credentials |
-| `GOOGLE_PACKAGE_NAME` | Google billing | Android application package |
-| `APPLE_BUNDLE_ID`, `APPLE_SHARED_SECRET` | Apple billing | App Store subscription verification |
+| `GOOGLE_SERVICE_ACCOUNT_JSON` / `GOOGLE_SERVICE_ACCOUNT_PATH` | Google billing / Play Integrity | Google service-account credentials |
+| `GOOGLE_PACKAGE_NAME` | Google billing / Play Integrity | Android application package |
+| `APPLE_APP_ATTEST_APP_ID_PREFIX`, `APPLE_APP_ATTEST_ALLOW_DEVELOPMENT` | iOS App Attest | App ID prefix and whether development attestations are accepted |
+| `APPLE_BUNDLE_ID`, `APPLE_SHARED_SECRET` | Apple integrity / billing | iOS bundle identifier and App Store subscription verification secret |
 | `CATALOG_URL` | No | Legacy/default Catalog URL override; root policy is also supported |
 | `OBJECTIONABLE_CONTENT_TERMS` | No | Additional comma-separated moderation terms |
 | `SERVER_EVENTS_*` | Optional | Internal service-event identities and authorization |
@@ -398,6 +399,20 @@ See [`server/.env.example`](server/.env.example) for a safe starting point.
 ### Operational policy
 
 The root [`config.json`](config.json) controls app-version gates, store links, attestation rollout, retention, maintenance intervals, queue compatibility, trial duration, upload limits, web media cache limits, rate limits, and default Help/Catalog URLs. It contains policy, not credentials, and is validated when the backend starts.
+
+Attestation enforcement is configured per platform under `attestation.platforms`:
+
+| Setting | Purpose |
+| --- | --- |
+| `observe` | Collect and verify verdicts without restricting client access |
+| `soft` | Continue collecting rollout data without restricting access; use this immediately before enforcement |
+| `enforce` | Require a current trusted verdict after the bootstrap grace period |
+| `bootstrapGraceMinutes` | One-time window beginning on a session's first enforced access in which it can obtain its verdict |
+| `unevaluatedRetryAfterSeconds` | Retry delay returned when Google temporarily cannot evaluate an installation |
+| `trustTtlHours` | Lifetime of a trusted verdict; mobile renews before this expires |
+| `androidRequiredBuild` / `iosRequiredBuild` | Builds at or above this value are treated as attestation-capable |
+
+Keep iOS in `observe` until the App Attest-capable iOS build is deployed and trusted registration/assertion coverage is confirmed. For either platform, verify current-session coverage in `soft` mode, then change only that platform to `enforce` and restart the API. Attestation endpoints remain available while normal API and Socket.IO access is restricted, allowing a temporarily pending client to retry without losing its login session.
 
 ### Secrets and certificates
 

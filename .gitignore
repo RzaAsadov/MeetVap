@@ -162,6 +162,7 @@ crash-reports/
 **/serviceAccount*.json
 **/*-service-account.json
 **/firebase-adminsdk-*.json
+**/google-play-integrity*.json
 
 # Keep sanitized credential templates trackable
 !**/*.example.json

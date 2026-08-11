@@ -5,7 +5,9 @@ import type { VoiceEffectId } from '../types/voiceEffects';
 
 type CallNativeModule = {
   getAppVersion?: () => Promise<string | null>;
+  getAppBuildNumber?: () => Promise<string | null>;
   attestAppAttestKey?: (keyId: string, challenge: string) => Promise<string | null>;
+  generateAppAttestAssertion?: (keyId: string, challenge: string) => Promise<string | null>;
   generateAppAttestKey?: () => Promise<string | null>;
   processVoiceMessage?: (uri: string, effectId: string) => Promise<string>;
   requestPlayIntegrityToken?: (nonce: string) => Promise<string | null>;
@@ -119,6 +121,10 @@ export async function getNativeAppVersion() {
   return getCallNativeModule()?.getAppVersion?.().catch(() => null) ?? null;
 }
 
+export async function getNativeAppBuildNumber() {
+  return getCallNativeModule()?.getAppBuildNumber?.().catch(() => null) ?? null;
+}
+
 export async function requestNativePlayIntegrityToken(nonce: string) {
   if (Platform.OS !== 'android') {
     return null;
@@ -141,6 +147,14 @@ export async function attestNativeAppAttestKey(keyId: string, challenge: string)
   }
 
   return getCallNativeModule()?.attestAppAttestKey?.(keyId, challenge).catch(() => null) ?? null;
+}
+
+export async function generateNativeAppAttestAssertion(keyId: string, challenge: string) {
+  if (Platform.OS !== 'ios') {
+    return null;
+  }
+
+  return getCallNativeModule()?.generateAppAttestAssertion?.(keyId, challenge).catch(() => null) ?? null;
 }
 
 export function setNativeQuickReplyCredentials(serverUrl: string, authToken: string) {

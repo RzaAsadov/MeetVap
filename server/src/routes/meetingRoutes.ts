@@ -170,33 +170,16 @@ meetingRoutes.post('/:code/join', async (req, res, next) => {
     const guestId = authedUser ? null : input.guestId ?? `guest-${crypto.randomUUID()}`;
     const displayName = authedUser?.displayName || input.displayName || 'Guest';
     const role = authedUser?.id === meeting.creatorId ? 'HOST' : 'GUEST';
-    const participantIdentity = authedUser?.id ?? `guest:${guestId}`;
+    const participantId = crypto.randomUUID();
+    const participantIdentity = `meeting:${participantId}`;
     const now = new Date();
-
-    if (authedUser) {
-      await prisma.$executeRaw`
-        update "MeetingParticipant"
-        set "leftAt" = ${now}, "updatedAt" = ${now}
-        where "meetingId" = ${meeting.id}
-          and "userId" = ${authedUser.id}
-          and "leftAt" is null
-      `;
-    } else {
-      await prisma.$executeRaw`
-        update "MeetingParticipant"
-        set "leftAt" = ${now}, "updatedAt" = ${now}
-        where "meetingId" = ${meeting.id}
-          and "guestId" = ${guestId}
-          and "leftAt" is null
-      `;
-    }
 
     const [participant] = await prisma.$queryRaw<MeetingParticipantRow[]>`
       insert into "MeetingParticipant" (
         "id", "meetingId", "userId", "guestId", "displayName", "role", "joinedAt", "updatedAt"
       )
       values (
-        ${crypto.randomUUID()}, ${meeting.id}, ${authedUser?.id ?? null}, ${guestId}, ${displayName},
+        ${participantId}, ${meeting.id}, ${authedUser?.id ?? null}, ${guestId}, ${displayName},
         ${role}::"MeetingParticipantRole", ${now}, ${now}
       )
       returning *

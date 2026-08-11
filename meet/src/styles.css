@@ -59,6 +59,10 @@ button:disabled {
   }
 }
 
+.spin-icon {
+  animation: spin 0.8s linear infinite;
+}
+
 .landing {
   align-items: center;
   background:
@@ -197,6 +201,38 @@ button:disabled {
   padding: 0;
 }
 
+.meeting-error {
+  align-items: center;
+  background: #7f1d1d;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 10px;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.34);
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  left: 50%;
+  max-width: min(520px, calc(100% - 32px));
+  padding: 10px 12px 10px 16px;
+  position: fixed;
+  top: 82px;
+  transform: translateX(-50%);
+  width: max-content;
+  z-index: 20;
+}
+
+.meeting-error span {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.meeting-error button {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  min-height: 32px;
+  min-width: 32px;
+  padding: 0;
+}
+
 .participant-grid {
   display: grid;
   gap: 10px;
@@ -221,6 +257,34 @@ button:disabled {
   grid-template-rows: repeat(3, minmax(0, 1fr));
 }
 
+.participant-grid.presentation-layout {
+  grid-template-columns: minmax(0, 1fr) minmax(180px, 240px);
+  grid-template-rows: minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.participant-grid.presentation-layout-solo {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.presentation-layout > .tile.screen-sharing {
+  min-height: 0;
+}
+
+.presentation-strip {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.presentation-strip .tile {
+  flex: 0 0 150px;
+  min-height: 150px;
+}
+
 .tile {
   align-items: center;
   background: #101d31;
@@ -240,6 +304,10 @@ button:disabled {
 
 .tile.local {
   border-color: rgba(255, 255, 255, 0.16);
+}
+
+.tile.screen-sharing {
+  background: #050a12;
 }
 
 .tile video {
@@ -364,6 +432,27 @@ button:disabled {
 
   .participant-grid {
     padding: 10px;
+  }
+
+  .participant-grid.presentation-layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) auto;
+  }
+
+  .participant-grid.presentation-layout-solo {
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  .presentation-strip {
+    flex-direction: row;
+    max-height: 120px;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+
+  .presentation-strip .tile {
+    flex: 0 0 150px;
+    min-height: 100px;
   }
 
   .tile {

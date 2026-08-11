@@ -636,6 +636,43 @@ dialog.admin-modal::backdrop {
   overscroll-behavior: contain;
 }
 
+.danger-note {
+  background: rgba(231, 76, 60, 0.12);
+  border: 1px solid rgba(231, 76, 60, 0.42);
+  border-radius: 8px;
+  color: #ffb5ad;
+  line-height: 1.5;
+  margin: 0;
+  padding: 12px;
+}
+
+.suspension-device-list {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  max-height: 260px;
+  overflow: auto;
+}
+
+.suspension-device-choice {
+  align-items: center;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: auto minmax(0, 1fr);
+  padding: 11px 12px;
+}
+
+.suspension-device-choice + .suspension-device-choice {
+  border-top: 1px solid var(--line);
+}
+
+.suspension-device-choice small {
+  color: var(--muted);
+  display: block;
+  margin-top: 3px;
+  overflow-wrap: anywhere;
+}
+
 .admin-tabs {
   display: grid;
   gap: 12px;

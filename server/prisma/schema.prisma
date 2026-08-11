@@ -116,6 +116,7 @@ model User {
   premiumTrialStartedAt DateTime @default(now())
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
+  authVersion  Int      @default(0)
 
   memberships      ConversationMember[]
   conversationDeletions ConversationDeletion[]
@@ -139,6 +140,7 @@ model User {
   webPairingSessions WebPairingSession[]
   attestations     DeviceAttestation[]
   attestationChallenges AttestationChallenge[]
+  appAttestKeys    AppAttestKey[]
   createdMedia     MediaFile[]
   callParticipants CallParticipant[]
   createdMeetings   Meeting[] @relation("CreatedMeetings")
@@ -149,6 +151,7 @@ model User {
   reportsMade      Report[]          @relation("ReportsMade")
   reportedByUsers  Report[]          @relation("ReportedUsers")
   adminBlock       AdminBlockedUser?
+  sourceDeviceBlocks AdminDeviceBlock[]
   subscriptionEntitlements SubscriptionEntitlement[]
   redeemCodeUses   RedeemCodeUse[]
   messageStats     UserMessageStats?
@@ -199,16 +202,20 @@ model Session {
   appVersion String?
   appBuildNumber Int?
   capabilities String[] @default([])
+  installationId String?
+  attestationGraceStartedAt DateTime?
   createdAt DateTime @default(now())
   expiresAt DateTime
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
   attestations DeviceAttestation[]
   attestationChallenges AttestationChallenge[]
+  appAttestKeys AppAttestKey[]
 
   @@index([userId])
   @@index([tokenHash])
   @@index([userId, appBuildNumber])
+  @@index([installationId])
   @@index([expiresAt])
 }
 
@@ -239,6 +246,9 @@ model AttestationChallenge {
   provider  String
   challengeHash String
   clientDataHash String?
+  challengeValue String?
+  purpose String?
+  deviceKeyId String?
   createdAt DateTime @default(now())
   expiresAt DateTime
   consumedAt DateTime?
@@ -249,6 +259,31 @@ model AttestationChallenge {
   @@index([userId])
   @@index([sessionId])
   @@index([expiresAt])
+}
+
+model AppAttestKey {
+  id              String   @id @default(cuid())
+  keyId           String   @unique
+  userId          String
+  sessionId       String?
+  installationId  String?
+  publicKeyPem    String
+  receiptBase64   String
+  environment     String
+  signCount       Int      @default(0)
+  appVersion      String?
+  appBuildNumber  Int?
+  lastAssertedAt  DateTime?
+  revokedAt       DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  session Session? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+
+  @@index([userId, revokedAt])
+  @@index([sessionId])
+  @@index([installationId])
 }
 
 model DeviceAttestation {
@@ -289,6 +324,7 @@ model DevicePushToken {
   appVersion String?
   appBuildNumber Int?
   capabilities String[] @default([])
+  installationId String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -296,6 +332,7 @@ model DevicePushToken {
 
   @@index([userId])
   @@index([userId, appBuildNumber])
+  @@index([installationId])
 }
 
 model Conversation {
@@ -902,9 +939,30 @@ model Report {
 model AdminBlockedUser {
   userId    String   @id
   reason    String?
+  createdByAdminUsername String?
   createdAt DateTime @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model AdminDeviceBlock {
+  id                     String    @id @default(cuid())
+  sourceUserId           String?
+  identifierType         String
+  identifierHash         String
+  label                  String?
+  platform               String?
+  reason                 String?
+  createdByAdminUsername String?
+  createdAt              DateTime  @default(now())
+  revokedAt              DateTime?
+  revokedByAdminUsername String?
+
+  sourceUser User? @relation(fields: [sourceUserId], references: [id], onDelete: SetNull)
+
+  @@unique([identifierType, identifierHash])
+  @@index([sourceUserId, revokedAt])
+  @@index([identifierHash, revokedAt])
 }
 
 model SubscriptionEntitlement {

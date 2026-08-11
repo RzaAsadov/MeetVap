@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type MutableRefObject } from 'react';
 import { Dimensions, Keyboard, KeyboardEvent, Platform } from 'react-native';
 
+import { noteHighPriorityUiActivity } from '../lib/foregroundWorkScheduler';
+
 type ChatKeyboardDiagnostic = (event: string, details?: Record<string, unknown>) => void;
 
 type ScheduleTailScroll = (options?: { reason?: string; settle?: boolean }) => void;
@@ -115,6 +117,8 @@ export function useChatKeyboardLift({
         return;
       }
 
+      noteHighPriorityUiActivity(900);
+
       if (Platform.OS === 'ios') {
         const nextLift = getKeyboardLift(event);
         const didChange = setMeasuredKeyboardLift(nextLift);
@@ -146,6 +150,8 @@ export function useChatKeyboardLift({
       if (isCaptionComposerVisible) {
         return;
       }
+
+      noteHighPriorityUiActivity(500);
 
       keyboardRawLiftRef.current = 0;
       const didChange = setMeasuredKeyboardLift(0);

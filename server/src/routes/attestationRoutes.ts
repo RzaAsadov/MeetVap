@@ -4,11 +4,14 @@ import { Request, Router } from 'express';
 import { z } from 'zod';
 import { Prisma } from '@prisma/client';
 
+import { verifyAppleAssertion, verifyAppleAttestation } from '../appleAppAttest';
+import { invalidateAttestationAccess } from '../attestationAccess';
 import { getAuthedUser } from '../auth';
 import { getRequestClientMetadata, hashAccessToken } from '../clientCompatibility';
 import { config } from '../config';
 import { HttpError } from '../httpError';
-import { operationalConfig } from '../operationalConfig';
+import { assertDeviceIdentifierAllowed } from '../deviceAccess';
+import { getAttestationMode, operationalConfig } from '../operationalConfig';
 import { prisma } from '../prisma';
 
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
@@ -17,7 +20,9 @@ const VALID_PLATFORM_VALUES = ['android', 'ios'] as const;
 const VALID_PROVIDER_VALUES = ['play-integrity', 'app-attest'] as const;
 
 const challengeInputSchema = z.object({
+  keyId: z.string().min(40).max(128).optional(),
   platform: z.enum(VALID_PLATFORM_VALUES),
+  purpose: z.enum(['assertion', 'registration']).optional(),
   provider: z.enum(VALID_PROVIDER_VALUES).optional(),
 });
 
@@ -27,9 +32,15 @@ const androidPlayIntegrityInputSchema = z.object({
 });
 
 const iosAppAttestInputSchema = z.object({
-  attestationObject: z.string().min(20),
+  attestationObject: z.string().min(20).max(200_000),
   challengeId: z.string().min(1),
-  keyId: z.string().min(10),
+  keyId: z.string().min(40).max(128),
+});
+
+const iosAppAttestAssertionInputSchema = z.object({
+  assertionObject: z.string().min(20).max(100_000),
+  challengeId: z.string().min(1),
+  keyId: z.string().min(40).max(128),
 });
 
 type GoogleServiceAccount = {
@@ -65,6 +76,29 @@ attestationRoutes.post('/challenge', async (req, res, next) => {
     const currentUser = getAuthedUser(req);
     const input = challengeInputSchema.parse(req.body);
     const provider = input.provider ?? (input.platform === 'android' ? 'play-integrity' : 'app-attest');
+    const purpose = input.platform === 'ios' ? input.purpose ?? 'registration' : null;
+
+    if (input.platform === 'ios' && purpose === 'assertion') {
+      if (!input.keyId) {
+        throw new HttpError(400, 'App Attest assertion requires a key identifier');
+      }
+
+      const registeredKey = await prisma.appAttestKey.findFirst({
+        select: { id: true },
+        where: {
+          keyId: input.keyId,
+          revokedAt: null,
+          userId: currentUser.id,
+        },
+      });
+
+      if (!registeredKey) {
+        throw new HttpError(409, 'App Attest key is not registered', {
+          code: 'APP_ATTEST_KEY_NOT_REGISTERED',
+        });
+      }
+    }
+
     const challenge = base64UrlEncode(crypto.randomBytes(32));
     const session = await getCurrentSession(req, currentUser.id);
     const expiresAt = new Date(Date.now() + operationalConfig.attestation.challengeTtlMinutes * 60_000);
@@ -73,8 +107,11 @@ attestationRoutes.post('/challenge', async (req, res, next) => {
       data: {
         challengeHash: hashChallenge(challenge),
         clientDataHash: hashBase64UrlChallengeBytes(challenge),
+        challengeValue: challenge,
+        deviceKeyId: input.keyId ?? null,
         expiresAt,
         platform: input.platform,
+        purpose,
         provider,
         sessionId: session?.id ?? null,
         userId: currentUser.id,
@@ -85,8 +122,10 @@ attestationRoutes.post('/challenge', async (req, res, next) => {
       challenge,
       challengeId: row.id,
       expiresAt: expiresAt.toISOString(),
-      mode: operationalConfig.attestation.mode,
+      mode: getAttestationMode(input.platform),
+      purpose,
       provider,
+      retryAfterSeconds: operationalConfig.attestation.unevaluatedRetryAfterSeconds,
     });
   } catch (error) {
     next(error);
@@ -106,10 +145,10 @@ attestationRoutes.post('/android/play-integrity', async (req, res, next) => {
         failureReason: 'google_play_integrity_not_configured',
         platform: 'android',
         provider: 'play-integrity',
-        status: operationalConfig.attestation.mode === 'enforce' ? 'FAILED' : 'PENDING',
+        status: getAttestationMode('android') === 'enforce' ? 'FAILED' : 'PENDING',
         userId: currentUser.id,
         verdict: {
-          mode: operationalConfig.attestation.mode,
+          mode: getAttestationMode('android'),
           reason: 'Google Play Integrity service account or package name is not configured',
         },
       });
@@ -119,8 +158,16 @@ attestationRoutes.post('/android/play-integrity', async (req, res, next) => {
     }
 
     const verdict = await decodePlayIntegrityToken(input.token);
-    const evaluation = evaluatePlayIntegrityVerdict(verdict, challenge.challenge);
+    const evaluation = evaluatePlayIntegrityVerdict(
+      verdict,
+      challenge.challengeHash,
+      challenge.clientDataHash,
+    );
+    const verifiedBuildNumber = evaluation.status === 'TRUSTED'
+      ? getPlayIntegrityBuildNumber(verdict)
+      : undefined;
     const attestation = await recordAttestation(req, {
+      appBuildNumber: verifiedBuildNumber,
       challengeId: input.challengeId,
       failureReason: evaluation.status === 'TRUSTED' ? null : evaluation.reason,
       platform: 'android',
@@ -133,6 +180,20 @@ attestationRoutes.post('/android/play-integrity', async (req, res, next) => {
         evaluation,
       },
     });
+
+    if (evaluation.reason === 'app_integrity_unevaluated') {
+      const retryAfterSeconds = operationalConfig.attestation.unevaluatedRetryAfterSeconds;
+      res.setHeader('Retry-After', String(retryAfterSeconds));
+      res.status(503).json({
+        code: 'ATTESTATION_RETRY_REQUIRED',
+        error: 'Google Play could not evaluate app integrity yet',
+        ok: false,
+        retryAfterSeconds,
+        retryable: true,
+        status: attestation.status,
+      });
+      return;
+    }
 
     res.json({
       ok: true,
@@ -147,20 +208,192 @@ attestationRoutes.post('/ios/app-attest/register', async (req, res, next) => {
   try {
     const currentUser = getAuthedUser(req);
     const input = iosAppAttestInputSchema.parse(req.body);
-    await consumeChallenge(req, currentUser.id, input.challengeId, 'ios', 'app-attest');
+    const appleConfig = getAppleAppAttestConfig();
+    await assertDeviceIdentifierAllowed('APP_ATTEST_KEY', input.keyId);
+    const challenge = await consumeChallenge(
+      req,
+      currentUser.id,
+      input.challengeId,
+      'ios',
+      'app-attest',
+      'registration',
+      input.keyId,
+    );
+    const session = await getCurrentSession(req, currentUser.id);
+    const metadata = getRequestClientMetadata(req);
+    const existingKey = await prisma.appAttestKey.findUnique({
+      where: { keyId: input.keyId },
+    });
+
+    if (existingKey && (existingKey.userId !== currentUser.id || existingKey.revokedAt)) {
+      throw new HttpError(409, 'App Attest key cannot be registered', {
+        code: 'APP_ATTEST_KEY_CONFLICT',
+      });
+    }
+
+    let verified: Awaited<ReturnType<typeof verifyAppleAttestation>>;
+
+    try {
+      verified = await verifyAppleAttestation({
+        ...appleConfig,
+        attestationObject: input.attestationObject,
+        challenge: requireChallengeValue(challenge.challengeValue),
+        keyId: input.keyId,
+      });
+    } catch (error) {
+      const failureReason = getAppleVerificationFailureReason(error);
+      await recordAttestation(req, {
+        challengeId: input.challengeId,
+        deviceKeyId: input.keyId,
+        failureReason,
+        platform: 'ios',
+        provider: 'app-attest',
+        status: 'UNTRUSTED',
+        userId: currentUser.id,
+        verdict: { evaluation: failureReason },
+      });
+      throw new HttpError(422, 'Apple App Attest verification failed', {
+        code: 'APP_ATTEST_VERIFICATION_FAILED',
+      });
+    }
+
+    await prisma.appAttestKey.upsert({
+      create: {
+        appBuildNumber: verified.appBuildNumber,
+        appVersion: metadata.appVersion ?? null,
+        environment: verified.environment,
+        installationId: metadata.installationId ?? session?.installationId ?? null,
+        keyId: input.keyId,
+        publicKeyPem: verified.publicKeyPem,
+        receiptBase64: verified.receiptBase64,
+        sessionId: session?.id ?? null,
+        signCount: 0,
+        userId: currentUser.id,
+      },
+      update: {
+        appBuildNumber: verified.appBuildNumber,
+        appVersion: metadata.appVersion ?? existingKey?.appVersion ?? null,
+        environment: verified.environment,
+        installationId: metadata.installationId ?? session?.installationId ?? existingKey?.installationId ?? null,
+        publicKeyPem: verified.publicKeyPem,
+        receiptBase64: verified.receiptBase64,
+        sessionId: session?.id ?? null,
+        signCount: 0,
+      },
+      where: { keyId: input.keyId },
+    });
 
     const attestation = await recordAttestation(req, {
+      appBuildNumber: verified.appBuildNumber,
       challengeId: input.challengeId,
       deviceKeyId: input.keyId,
-      failureReason: 'ios_app_attest_server_verification_pending',
       platform: 'ios',
       provider: 'app-attest',
-      status: 'PENDING',
+      status: 'TRUSTED',
       userId: currentUser.id,
       verdict: {
-        attestationObjectLength: input.attestationObject.length,
-        mode: operationalConfig.attestation.mode,
-        reason: 'App Attest artifact received; strict Apple attestation verification is intentionally not enforced during staged rollout.',
+        bundleIdentifier: appleConfig.bundleIdentifier,
+        environment: verified.environment,
+        validationCategory: verified.validationCategory,
+      },
+    });
+
+    res.json({ ok: true, status: attestation.status });
+  } catch (error) {
+    next(error);
+  }
+});
+
+attestationRoutes.post('/ios/app-attest/assert', async (req, res, next) => {
+  try {
+    const currentUser = getAuthedUser(req);
+    const input = iosAppAttestAssertionInputSchema.parse(req.body);
+    const appleConfig = getAppleAppAttestConfig();
+    await assertDeviceIdentifierAllowed('APP_ATTEST_KEY', input.keyId);
+    const registeredKey = await prisma.appAttestKey.findFirst({
+      where: {
+        keyId: input.keyId,
+        revokedAt: null,
+        userId: currentUser.id,
+      },
+    });
+
+    if (!registeredKey) {
+      throw new HttpError(409, 'App Attest key is not registered', {
+        code: 'APP_ATTEST_KEY_NOT_REGISTERED',
+      });
+    }
+
+    const challenge = await consumeChallenge(
+      req,
+      currentUser.id,
+      input.challengeId,
+      'ios',
+      'app-attest',
+      'assertion',
+      input.keyId,
+    );
+    let verified: Awaited<ReturnType<typeof verifyAppleAssertion>>;
+
+    try {
+      verified = await verifyAppleAssertion({
+        ...appleConfig,
+        assertionObject: input.assertionObject,
+        challenge: requireChallengeValue(challenge.challengeValue),
+        publicKeyPem: registeredKey.publicKeyPem,
+        signCount: registeredKey.signCount,
+      });
+    } catch (error) {
+      const failureReason = getAppleVerificationFailureReason(error);
+      await recordAttestation(req, {
+        appBuildNumber: registeredKey.appBuildNumber ?? undefined,
+        challengeId: input.challengeId,
+        deviceKeyId: input.keyId,
+        failureReason,
+        platform: 'ios',
+        provider: 'app-attest',
+        status: 'UNTRUSTED',
+        userId: currentUser.id,
+        verdict: { evaluation: failureReason },
+      });
+      throw new HttpError(422, 'Apple App Attest assertion failed', {
+        code: 'APP_ATTEST_ASSERTION_FAILED',
+      });
+    }
+
+    const session = await getCurrentSession(req, currentUser.id);
+    const metadata = getRequestClientMetadata(req);
+    const counterUpdate = await prisma.appAttestKey.updateMany({
+      data: {
+        installationId: metadata.installationId ?? session?.installationId ?? registeredKey.installationId,
+        lastAssertedAt: new Date(),
+        sessionId: session?.id ?? null,
+        signCount: verified.signCount,
+      },
+      where: {
+        id: registeredKey.id,
+        revokedAt: null,
+        signCount: registeredKey.signCount,
+      },
+    });
+
+    if (counterUpdate.count !== 1) {
+      throw new HttpError(409, 'App Attest assertion counter was already used', {
+        code: 'APP_ATTEST_ASSERTION_REPLAYED',
+      });
+    }
+
+    const attestation = await recordAttestation(req, {
+      appBuildNumber: registeredKey.appBuildNumber ?? undefined,
+      challengeId: input.challengeId,
+      deviceKeyId: input.keyId,
+      platform: 'ios',
+      provider: 'app-attest',
+      status: 'TRUSTED',
+      userId: currentUser.id,
+      verdict: {
+        environment: registeredKey.environment,
+        signCount: verified.signCount,
       },
     });
 
@@ -192,7 +425,9 @@ attestationRoutes.get('/status', async (req, res, next) => {
             status: latest.status,
           }
         : null,
-      mode: operationalConfig.attestation.mode,
+      mode: latest?.platform === 'android' || latest?.platform === 'ios'
+        ? getAttestationMode(latest.platform)
+        : operationalConfig.attestation.mode,
     });
   } catch (error) {
     next(error);
@@ -205,6 +440,8 @@ async function consumeChallenge(
   challengeId: string,
   platform: typeof VALID_PLATFORM_VALUES[number],
   provider: typeof VALID_PROVIDER_VALUES[number],
+  purpose?: 'assertion' | 'registration',
+  deviceKeyId?: string,
 ) {
   const challenge = await prisma.attestationChallenge.findFirst({
     where: {
@@ -227,18 +464,62 @@ async function consumeChallenge(
     throw new HttpError(400, 'Attestation challenge belongs to a different session');
   }
 
+  if (purpose && challenge.purpose !== purpose) {
+    throw new HttpError(400, 'Attestation challenge has an invalid purpose');
+  }
+
+  if (purpose === 'assertion' && !challenge.deviceKeyId) {
+    throw new HttpError(400, 'App Attest assertion challenge is not bound to a key');
+  }
+
+  if (deviceKeyId && challenge.deviceKeyId && challenge.deviceKeyId !== deviceKeyId) {
+    throw new HttpError(400, 'Attestation challenge belongs to a different key');
+  }
+
   await prisma.attestationChallenge.update({
     data: { consumedAt: new Date() },
     where: { id: challenge.id },
   });
 
+  return challenge;
+}
+
+function getAppleAppAttestConfig() {
+  if (!config.APPLE_APP_ATTEST_APP_ID_PREFIX || !config.APPLE_BUNDLE_ID) {
+    throw new HttpError(503, 'Apple App Attest verification is not configured', {
+      code: 'ATTESTATION_RETRY_REQUIRED',
+      retryAfterSeconds: operationalConfig.attestation.unevaluatedRetryAfterSeconds,
+    });
+  }
+
   return {
-    ...challenge,
-    challenge: challenge.challengeHash,
+    allowDevelopmentEnvironment: config.APPLE_APP_ATTEST_ALLOW_DEVELOPMENT,
+    appIdPrefix: config.APPLE_APP_ATTEST_APP_ID_PREFIX,
+    bundleIdentifier: config.APPLE_BUNDLE_ID,
   };
 }
 
+function requireChallengeValue(value?: string | null) {
+  if (!value) {
+    throw new HttpError(400, 'Attestation challenge cannot be verified');
+  }
+
+  return value;
+}
+
+function getAppleVerificationFailureReason(error: unknown) {
+  const message = error instanceof Error ? error.message : 'verification_failed';
+  const normalized = message
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 120);
+
+  return `ios_app_attest_${normalized || 'verification_failed'}`;
+}
+
 async function recordAttestation(req: Request, input: {
+  appBuildNumber?: number;
   challengeId: string;
   deviceKeyId?: string | null;
   failureReason?: string | null;
@@ -252,10 +533,10 @@ async function recordAttestation(req: Request, input: {
   const metadata = getRequestClientMetadata(req);
   const expiresAt = new Date(Date.now() + operationalConfig.attestation.trustTtlHours * 60 * 60_000);
 
-  return prisma.deviceAttestation.create({
+  const attestation = await prisma.deviceAttestation.create({
     data: {
-      appBuildNumber: metadata.appBuildNumber ?? null,
-      appVersion: metadata.appVersion ?? null,
+      appBuildNumber: input.appBuildNumber ?? metadata.appBuildNumber ?? session?.appBuildNumber ?? null,
+      appVersion: metadata.appVersion ?? session?.appVersion ?? null,
       challengeId: input.challengeId,
       deviceKeyId: input.deviceKeyId ?? null,
       expiresAt,
@@ -268,6 +549,28 @@ async function recordAttestation(req: Request, input: {
       verdict: input.verdict,
     },
   });
+
+  if (session && input.appBuildNumber) {
+    await prisma.$transaction([
+      prisma.session.update({
+        data: { appBuildNumber: input.appBuildNumber },
+        where: { id: session.id },
+      }),
+      ...(session.installationId
+        ? [prisma.devicePushToken.updateMany({
+            data: { appBuildNumber: input.appBuildNumber },
+            where: {
+              installationId: session.installationId,
+              userId: input.userId,
+            },
+          })]
+        : []),
+    ]);
+  }
+
+  await invalidateAttestationAccess(session?.tokenHash);
+
+  return attestation;
 }
 
 async function getCurrentSession(req: Request, userId: string) {
@@ -318,7 +621,11 @@ async function decodePlayIntegrityToken(integrityToken: string) {
   return parsed.tokenPayloadExternal;
 }
 
-function evaluatePlayIntegrityVerdict(verdict: PlayIntegrityResponse, challengeHash: string) {
+function evaluatePlayIntegrityVerdict(
+  verdict: PlayIntegrityResponse,
+  challengeHash: string,
+  clientDataHash?: string | null,
+) {
   const requestNonce = verdict.requestDetails?.nonce;
   const packageName = verdict.appIntegrity?.packageName;
   const appVerdict = verdict.appIntegrity?.appRecognitionVerdict;
@@ -326,16 +633,20 @@ function evaluatePlayIntegrityVerdict(verdict: PlayIntegrityResponse, challengeH
   const hasDeviceIntegrity = deviceVerdicts.includes('MEETS_DEVICE_INTEGRITY') ||
     deviceVerdicts.includes('MEETS_STRONG_INTEGRITY');
 
-  if (!requestNonce || hashChallenge(requestNonce) !== challengeHash) {
+  if (!requestNonce || !doesPlayIntegrityNonceMatch(requestNonce, challengeHash, clientDataHash)) {
     return { reason: 'nonce_mismatch', status: 'UNTRUSTED' };
   }
 
-  if (packageName !== config.GOOGLE_PACKAGE_NAME) {
-    return { reason: 'package_name_mismatch', status: 'UNTRUSTED' };
+  if (appVerdict === 'UNEVALUATED' || !appVerdict) {
+    return { reason: 'app_integrity_unevaluated', status: 'UNTRUSTED' };
   }
 
   if (appVerdict !== 'PLAY_RECOGNIZED') {
     return { reason: 'app_not_play_recognized', status: 'UNTRUSTED' };
+  }
+
+  if (packageName !== config.GOOGLE_PACKAGE_NAME) {
+    return { reason: 'package_name_mismatch', status: 'UNTRUSTED' };
   }
 
   if (!hasDeviceIntegrity) {
@@ -343,6 +654,35 @@ function evaluatePlayIntegrityVerdict(verdict: PlayIntegrityResponse, challengeH
   }
 
   return { reason: null, status: 'TRUSTED' };
+}
+
+function doesPlayIntegrityNonceMatch(
+  requestNonce: string,
+  challengeHash: string,
+  clientDataHash?: string | null,
+) {
+  // Google returns classic-request nonces as padded Base64, while the client
+  // submits an unpadded Base64URL value. Compare the decoded challenge bytes;
+  // retain the encoded-string comparison for records created by older servers.
+  if (hashChallenge(requestNonce) === challengeHash) {
+    return true;
+  }
+
+  if (!clientDataHash) {
+    return false;
+  }
+
+  try {
+    return crypto.createHash('sha256').update(base64UrlDecode(requestNonce)).digest('hex') === clientDataHash;
+  } catch {
+    return false;
+  }
+}
+
+function getPlayIntegrityBuildNumber(verdict: PlayIntegrityResponse) {
+  const buildNumber = Number(verdict.appIntegrity?.versionCode);
+
+  return Number.isSafeInteger(buildNumber) && buildNumber > 0 ? buildNumber : undefined;
 }
 
 async function getGoogleAccessToken(scope: string) {

@@ -3,7 +3,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import { acknowledgeMessageDeletions, acknowledgeMessageEdits, listConversations, listMessageDeletions, listMessageEdits, listMessages, markMessagesDelivered } from './backend';
 import type { MessageEdit } from './backend';
 import { logMessageDeliveryDiagnostic } from './messageDeliveryDiagnostics';
-import { getAuthToken, getDeletedConversationAfter, getServerUrl, getStoredDecoyOffline, getStoredMessages, getStoredRecentMessages, getStoredUser, removeStoredMessageRecords, setStoredConversations, upsertStoredMessages } from './storage';
+import { getAuthToken, getDeletedConversationAfter, getServerUrl, getStoredDecoyOffline, getStoredMessages, getStoredRecentMessages, getStoredUser, removeStoredMessageRecords, upsertStoredConversations, upsertStoredMessages } from './storage';
 import type { AuthUser, Message } from '../types/domain';
 
 type PrefetchState = {
@@ -133,7 +133,7 @@ async function runConversationMessagePrefetch(conversationId: string) {
       edits.map((edit) => edit.messageId).filter((id): id is string => !!id),
       edits.map((edit) => edit.messageKey).filter((key): key is string => !!key),
     ).catch(() => undefined),
-    listConversations(serverUrl).then((response) => setStoredConversations(response.conversations)).catch(() => undefined),
+    listConversations(serverUrl).then((response) => upsertStoredConversations(response.conversations)).catch(() => undefined),
   ]);
   logMessageDeliveryDiagnostic('background-prefetch-acked-delivery', {
     conversationId,

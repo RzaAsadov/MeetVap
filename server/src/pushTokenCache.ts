@@ -19,7 +19,18 @@ export async function getCachedPushTokensForUsers(userIds: string[], includeUser
     return [];
   }
 
-  const cacheKey = `push-tokens:${includeUserId ? 'with-user' : 'basic'}:${uniqueUserIds.join(',')}`;
+  const blockedUsers = await prisma.adminBlockedUser.findMany({
+    select: { userId: true },
+    where: { userId: { in: uniqueUserIds } },
+  });
+  const blockedUserIds = new Set(blockedUsers.map((item) => item.userId));
+  const eligibleUserIds = uniqueUserIds.filter((userId) => !blockedUserIds.has(userId));
+
+  if (eligibleUserIds.length === 0) {
+    return [];
+  }
+
+  const cacheKey = `push-tokens:${includeUserId ? 'with-user' : 'basic'}:${eligibleUserIds.join(',')}`;
   const cached = await cacheGetJson<CachedPushToken[]>(cacheKey);
 
   if (cached) {
@@ -35,7 +46,7 @@ export async function getCachedPushTokensForUsers(userIds: string[], includeUser
       token: true,
       ...(includeUserId ? { userId: true } : {}),
     },
-    where: { userId: { in: uniqueUserIds } },
+    where: { userId: { in: eligibleUserIds } },
   });
 
   await cacheSetJson(cacheKey, tokens, PUSH_TOKEN_CACHE_TTL_SECONDS);

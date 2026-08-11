@@ -23,6 +23,7 @@ import { beginAppLockForegroundOperation } from '../lib/appLockAccess';
 import { getConversationScreenshotPrivacy, isUploadCanceledError, listPinnedMessages, mapMessage, uploadMediaFile, type PinnedMessage } from '../lib/backend';
 import { isConversationMuted } from '../lib/conversationMute';
 import { clearActiveForegroundChatConversationId, setActiveForegroundChatConversationId } from '../lib/foregroundChatActivity';
+import { noteHighPriorityUiActivity } from '../lib/foregroundWorkScheduler';
 import { logMessageDeliveryDiagnostic } from '../lib/messageDeliveryDiagnostics';
 import { dismissMessageNotificationsForConversation } from '../lib/messageNotifications';
 import { takePendingShareDraft } from '../lib/pendingShareDraft';
@@ -187,6 +188,7 @@ export function useChatRoomController({ navigation, route }: Props) {
   useFocusEffect(
     useCallback(() => {
       const conversationId = route.params.conversationId;
+      noteHighPriorityUiActivity(900);
       setActiveForegroundChatConversationId(conversationId);
 
       return () => {
@@ -240,6 +242,7 @@ export function useChatRoomController({ navigation, route }: Props) {
     setHasDraft((current) => current === nextHasDraft ? current : nextHasDraft);
   }, []);
   const handleDraftChange = useCallback((nextDraft: string) => {
+    noteHighPriorityUiActivity(750);
     const pendingClearedDraft = pendingNativeDraftClearRef.current;
 
     if (pendingClearedDraft !== null) {
@@ -860,6 +863,7 @@ export function useChatRoomController({ navigation, route }: Props) {
   }, [conversation?.preventScreenshots, isSystemChat, otherUser?.id, route.params.conversationId, route.params.isGroup, serverUrl]);
 
   const confirmStartCall = useCallback(async (mode: 'voice' | 'video', voiceEffectId?: VoiceEffectId) => {
+    noteHighPriorityUiActivity(1400);
     const startedAt = Date.now();
     logUiPerformanceDiagnostic('call-confirm-start', {
       conversationId: route.params.conversationId,

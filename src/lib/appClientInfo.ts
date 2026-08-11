@@ -1,15 +1,19 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import Constants from 'expo-constants';
 import { Platform } from 'react-native';
+
+import { getNativeAppBuildNumber, getNativeAppVersion } from '../native/CallNative';
 
 const MAX_HEADER_VALUE_LENGTH = 64;
 const CLIENT_CAPABILITIES = ['livekit-pool', 'app-attestation'];
 const INSTALLATION_ID_STORAGE_KEY = 'meetvap.clientInstallationId.v1';
 let cachedInstallationId: string | null = null;
 let installationIdRequest: Promise<string> | null = null;
+let cachedNativeAppVersion: string | null = null;
+let cachedNativeBuildNumber: string | null = null;
+let hasInitializedNativeMetadata = false;
 
 export async function initializeClientInstallationId() {
-  if (cachedInstallationId) {
+  if (cachedInstallationId && hasInitializedNativeMetadata) {
     return cachedInstallationId;
   }
 
@@ -18,18 +22,30 @@ export async function initializeClientInstallationId() {
   }
 
   installationIdRequest = (async () => {
+    const nativeMetadataPromise = Promise.all([
+      getNativeAppVersion(),
+      getNativeAppBuildNumber(),
+    ]).then(([appVersion, buildNumber]) => {
+      cachedNativeAppVersion = normalizeHeaderValue(appVersion) ?? null;
+      cachedNativeBuildNumber = normalizeBuildNumber(buildNumber) ?? null;
+      hasInitializedNativeMetadata = true;
+    });
     const storedInstallationId = normalizeInstallationId(
       await AsyncStorage.getItem(INSTALLATION_ID_STORAGE_KEY).catch(() => null),
     );
 
     if (storedInstallationId) {
       cachedInstallationId = storedInstallationId;
+      await nativeMetadataPromise;
       return storedInstallationId;
     }
 
     const installationId = createInstallationId();
     cachedInstallationId = installationId;
-    await AsyncStorage.setItem(INSTALLATION_ID_STORAGE_KEY, installationId).catch(() => undefined);
+    await Promise.all([
+      AsyncStorage.setItem(INSTALLATION_ID_STORAGE_KEY, installationId).catch(() => undefined),
+      nativeMetadataPromise,
+    ]);
     return installationId;
   })().finally(() => {
     installationIdRequest = null;
@@ -43,8 +59,8 @@ export function getClientRequestHeaders() {
     'X-MeetVap-Capabilities': CLIENT_CAPABILITIES.join(','),
     'X-MeetVap-Platform': Platform.OS,
   };
-  const appVersion = normalizeHeaderValue(Constants.nativeApplicationVersion ?? Constants.expoConfig?.version);
-  const buildNumber = normalizeBuildNumber(Constants.nativeBuildVersion);
+  const appVersion = cachedNativeAppVersion;
+  const buildNumber = cachedNativeBuildNumber;
 
   if (appVersion) {
     headers['X-MeetVap-App-Version'] = appVersion;

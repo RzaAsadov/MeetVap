@@ -3,11 +3,17 @@
   "appdomains": [],
   "attestation": {
     "androidRequiredBuild": 999999,
+    "bootstrapGraceMinutes": 15,
     "challengeTtlMinutes": 2,
     "iosRequiredBuild": 999999,
     "legacyAllowUntil": "2026-09-01T00:00:00.000Z",
     "mode": "observe",
-    "trustTtlHours": 24
+    "platforms": {
+      "android": "observe",
+      "ios": "observe"
+    },
+    "trustTtlHours": 24,
+    "unevaluatedRetryAfterSeconds": 300
   },
   "catalog": {
     "url": "https://catalog.meetvap.com/index.php"

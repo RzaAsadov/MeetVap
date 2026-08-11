@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Camera, CameraOff, Copy, Download, LogOut, Mic, MicOff, PhoneOff, Users, Video } from 'lucide-react';
+import { Camera, CameraOff, Copy, Download, LoaderCircle, LogOut, Mic, MicOff, PhoneOff, ScreenShare, Users, Video, X } from 'lucide-react';
 import { ConnectionQuality, Participant, Room, RoomEvent, Track, VideoPreset, VideoPresets, VideoQuality } from 'livekit-client';
-import type { LocalVideoTrack, RemoteTrackPublication, TrackPublishOptions, VideoCaptureOptions } from 'livekit-client';
+import type { LocalVideoTrack, RemoteTrackPublication, ScreenShareCaptureOptions, TrackPublishOptions, VideoCaptureOptions } from 'livekit-client';
 
 import './styles.css';
 import { getRuntimeApiUrl } from './runtimeConfig';
@@ -22,6 +22,20 @@ const MEETING_VIDEO_PUBLISH_OPTIONS: TrackPublishOptions = {
   source: Track.Source.Camera,
   videoEncoding: { maxBitrate: 360_000, maxFramerate: 15 },
   videoSimulcastLayers: [VideoPresets.h90, new VideoPreset(320, 180, 130_000, 12)],
+};
+const MEETING_SCREEN_SHARE_CAPTURE_OPTIONS: ScreenShareCaptureOptions = {
+  audio: false,
+  resolution: { frameRate: 15, height: 720, width: 1280 },
+  selfBrowserSurface: 'include',
+  surfaceSwitching: 'include',
+  systemAudio: 'exclude',
+  video: true,
+};
+const MEETING_SCREEN_SHARE_PUBLISH_OPTIONS: TrackPublishOptions = {
+  degradationPreference: 'maintain-resolution',
+  simulcast: false,
+  source: Track.Source.ScreenShare,
+  videoEncoding: VideoPresets.h720.encoding,
 };
 type MeetingNetworkProfile = 'normal' | 'degraded' | 'critical';
 
@@ -74,6 +88,8 @@ function App() {
   const [room, setRoom] = useState<Room | null>(null);
   const [isMicOn, setMicOn] = useState(false);
   const [isCameraOn, setCameraOn] = useState(false);
+  const [isScreenSharing, setScreenSharing] = useState(false);
+  const [isStartingScreenShare, setStartingScreenShare] = useState(false);
   const [isJoining, setJoining] = useState(false);
   const [remainingSeconds, setRemainingSeconds] = useState(0);
   const [renderVersion, setRenderVersion] = useState(0);
@@ -84,6 +100,7 @@ function App() {
   const activeSpeakerSinceRef = useRef(new Map<string, number>());
   const networkRecoveryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const roomStartupAtRef = useRef(0);
+  const screenShareRestoreCameraRef = useRef(false);
   const token = localStorage.getItem(WEB_TOKEN_KEY);
   const isHost = !!participant && participant.role === 'HOST';
 
@@ -179,8 +196,12 @@ function App() {
     room
       .on(RoomEvent.TrackSubscribed, bump)
       .on(RoomEvent.TrackUnsubscribed, bump)
+      .on(RoomEvent.TrackPublished, bump)
+      .on(RoomEvent.TrackUnpublished, bump)
       .on(RoomEvent.TrackMuted, bump)
       .on(RoomEvent.TrackUnmuted, bump)
+      .on(RoomEvent.LocalTrackPublished, bump)
+      .on(RoomEvent.LocalTrackUnpublished, bump)
       .on(RoomEvent.ParticipantConnected, bump)
       .on(RoomEvent.ParticipantDisconnected, bump)
       .on(RoomEvent.ActiveSpeakersChanged, handleActiveSpeakers);
@@ -208,13 +229,53 @@ function App() {
       room
         .off(RoomEvent.TrackSubscribed, bump)
         .off(RoomEvent.TrackUnsubscribed, bump)
+        .off(RoomEvent.TrackPublished, bump)
+        .off(RoomEvent.TrackUnpublished, bump)
         .off(RoomEvent.TrackMuted, bump)
         .off(RoomEvent.TrackUnmuted, bump)
+        .off(RoomEvent.LocalTrackPublished, bump)
+        .off(RoomEvent.LocalTrackUnpublished, bump)
         .off(RoomEvent.ParticipantConnected, bump)
         .off(RoomEvent.ParticipantDisconnected, bump)
         .off(RoomEvent.ActiveSpeakersChanged, handleActiveSpeakers);
     };
   }, [room, visibleSpeakerIds]);
+
+  useEffect(() => {
+    if (!room || meeting?.mode !== 'video') {
+      setScreenSharing(false);
+      setStartingScreenShare(false);
+      screenShareRestoreCameraRef.current = false;
+      return undefined;
+    }
+
+    const handleLocalTrackPublished = (publication: { source?: Track.Source }) => {
+      if (publication.source === Track.Source.ScreenShare) {
+        setScreenSharing(true);
+        setStartingScreenShare(false);
+      }
+    };
+    const handleLocalTrackUnpublished = (publication: { source?: Track.Source }) => {
+      if (publication.source !== Track.Source.ScreenShare) {
+        return;
+      }
+
+      setScreenSharing(false);
+      void restoreCameraAfterScreenShare(room).catch((restoreError) => {
+        setError(restoreError instanceof Error ? restoreError.message : 'Could not restore your camera.');
+      });
+    };
+    const screenSharePublication = room.localParticipant.getTrackPublication(Track.Source.ScreenShare);
+
+    setScreenSharing(hasUsableVideoPublication(screenSharePublication));
+    room.on(RoomEvent.LocalTrackPublished, handleLocalTrackPublished);
+    room.on(RoomEvent.LocalTrackUnpublished, handleLocalTrackUnpublished);
+
+    return () => {
+      room.off(RoomEvent.LocalTrackPublished, handleLocalTrackPublished);
+      room.off(RoomEvent.LocalTrackUnpublished, handleLocalTrackUnpublished);
+    };
+  }, [meeting?.mode, room]);
 
   useEffect(() => {
     if (!room || !audioHostRef.current) {
@@ -292,15 +353,22 @@ function App() {
         : getMeetingVideoQuality(networkProfile);
 
       room.remoteParticipants.forEach((remoteParticipant) => {
-        const publication = remoteParticipant.getTrackPublication(Track.Source.Camera) as RemoteTrackPublication | undefined;
-        if (!publication || publication.isMuted) {
-          return;
+        const cameraPublication = remoteParticipant.getTrackPublication(Track.Source.Camera) as RemoteTrackPublication | undefined;
+        const screenSharePublication = remoteParticipant.getTrackPublication(Track.Source.ScreenShare) as RemoteTrackPublication | undefined;
+
+        if (cameraPublication && !cameraPublication.isMuted) {
+          cameraPublication.setEnabled(true);
+          cameraPublication.setVideoQuality(remoteQuality);
+          if (!cameraPublication.isDesired) {
+            cameraPublication.setSubscribed(true);
+          }
         }
 
-        publication.setEnabled(true);
-        publication.setVideoQuality(remoteQuality);
-        if (!publication.isDesired) {
-          publication.setSubscribed(true);
+        if (screenSharePublication && !screenSharePublication.isMuted) {
+          screenSharePublication.setEnabled(true);
+          if (!screenSharePublication.isDesired) {
+            screenSharePublication.setSubscribed(true);
+          }
         }
       });
 
@@ -333,8 +401,18 @@ function App() {
 
     const maxTiles = window.matchMedia('(max-width: 760px)').matches ? 6 : 20;
     const remotes = Array.from(room.remoteParticipants.values());
-    const orderedRemotes = remotes.length > 6
-      ? remotes.sort((left, right) => {
+    const orderedRemotes = remotes.sort((left, right) => {
+        const leftPresenting = hasActiveScreenShare(left) ? 0 : 1;
+        const rightPresenting = hasActiveScreenShare(right) ? 0 : 1;
+
+        if (leftPresenting !== rightPresenting) {
+          return leftPresenting - rightPresenting;
+        }
+
+        if (remotes.length <= 6) {
+          return 0;
+        }
+
         const leftPromoted = visibleSpeakerIds.has(left.identity) ? 0 : 1;
         const rightPromoted = visibleSpeakerIds.has(right.identity) ? 0 : 1;
 
@@ -343,8 +421,7 @@ function App() {
         }
 
         return (left.name || left.identity).localeCompare(right.name || right.identity);
-      })
-      : remotes;
+      });
 
     return orderedRemotes.slice(0, maxTiles);
   }, [renderVersion, room, visibleSpeakerIds]);
@@ -404,6 +481,9 @@ function App() {
       setRoom(nextRoom);
       setMicOn(false);
       setCameraOn(false);
+      setScreenSharing(false);
+      setStartingScreenShare(false);
+      screenShareRestoreCameraRef.current = false;
     } catch (joinError) {
       setError(joinError instanceof Error ? joinError.message : 'Could not join meeting.');
     } finally {
@@ -421,6 +501,9 @@ function App() {
     setParticipant(null);
     setMicOn(false);
     setCameraOn(false);
+    setScreenSharing(false);
+    setStartingScreenShare(false);
+    screenShareRestoreCameraRef.current = false;
     if (sendLeave && currentMeeting && currentParticipant) {
       await fetch(`${API_URL}/meetings/${encodeURIComponent(currentMeeting.code)}/leave`, {
         body: JSON.stringify({
@@ -458,7 +541,7 @@ function App() {
   }
 
   async function toggleCamera() {
-    if (!room) {
+    if (!room || isScreenSharing || isStartingScreenShare) {
       return;
     }
 
@@ -473,6 +556,90 @@ function App() {
     cameraTrack?.setPublishingQuality(getMeetingVideoQuality(networkProfile));
     setCameraOn(next);
     setRenderVersion((current) => current + 1);
+  }
+
+  async function publishMeetingCamera(currentRoom: Room) {
+    await currentRoom.localParticipant.setCameraEnabled(
+      true,
+      MEETING_VIDEO_CAPTURE_OPTIONS,
+      MEETING_VIDEO_PUBLISH_OPTIONS,
+    );
+    const cameraTrack = currentRoom.localParticipant.getTrackPublication(Track.Source.Camera)?.track as LocalVideoTrack | undefined;
+
+    cameraTrack?.setPublishingQuality(getMeetingVideoQuality(networkProfile));
+    setCameraOn(true);
+    setRenderVersion((current) => current + 1);
+  }
+
+  function isLocalCameraEnabled(currentRoom: Room) {
+    return hasUsableVideoPublication(currentRoom.localParticipant.getTrackPublication(Track.Source.Camera));
+  }
+
+  async function restoreCameraAfterScreenShare(currentRoom: Room) {
+    setScreenSharing(false);
+    setStartingScreenShare(false);
+
+    if (!screenShareRestoreCameraRef.current) {
+      return;
+    }
+
+    screenShareRestoreCameraRef.current = false;
+    await publishMeetingCamera(currentRoom);
+  }
+
+  async function startScreenShare() {
+    if (!room || meeting?.mode !== 'video' || isStartingScreenShare || isScreenSharing) {
+      return;
+    }
+
+    if (!navigator.mediaDevices?.getDisplayMedia) {
+      setError('Screen sharing is not supported by this browser.');
+      return;
+    }
+
+    setError(null);
+    setStartingScreenShare(true);
+    const shouldRestoreCamera = isLocalCameraEnabled(room);
+    screenShareRestoreCameraRef.current = shouldRestoreCamera;
+
+    try {
+      if (shouldRestoreCamera) {
+        await room.localParticipant.setCameraEnabled(false);
+        setCameraOn(false);
+      }
+
+      await room.localParticipant.setScreenShareEnabled(
+        true,
+        MEETING_SCREEN_SHARE_CAPTURE_OPTIONS,
+        MEETING_SCREEN_SHARE_PUBLISH_OPTIONS,
+      );
+      setScreenSharing(true);
+      setRenderVersion((current) => current + 1);
+    } catch (shareError) {
+      screenShareRestoreCameraRef.current = false;
+      if (shouldRestoreCamera) {
+        await publishMeetingCamera(room).catch(() => undefined);
+      }
+      setError(shareError instanceof Error ? shareError.message : 'Could not start screen sharing.');
+    } finally {
+      setStartingScreenShare(false);
+    }
+  }
+
+  async function stopScreenShare() {
+    if (!room) {
+      setScreenSharing(false);
+      setStartingScreenShare(false);
+      return;
+    }
+
+    try {
+      await room.localParticipant.setScreenShareEnabled(false);
+      await restoreCameraAfterScreenShare(room);
+      setRenderVersion((current) => current + 1);
+    } catch (shareError) {
+      setError(shareError instanceof Error ? shareError.message : 'Could not stop screen sharing.');
+    }
   }
 
   if (error && !meeting) {
@@ -523,6 +690,15 @@ function App() {
     );
   }
 
+  const remotePresenter = visibleParticipants.find(hasActiveScreenShare);
+  const isPresentationActive = isScreenSharing || !!remotePresenter;
+  const secondaryParticipants = remotePresenter
+    ? visibleParticipants.filter((remoteParticipant) => remoteParticipant.identity !== remotePresenter.identity)
+    : visibleParticipants;
+  const presentationClassName = secondaryParticipants.length > 0
+    ? 'participant-grid presentation-layout'
+    : 'participant-grid presentation-layout presentation-layout-solo';
+
   return (
     <main className="meeting-screen">
       <header className="meeting-header">
@@ -534,14 +710,35 @@ function App() {
           <Copy size={18} />
         </button>
       </header>
-      <section className={`participant-grid participant-grid-${getGridClassName(visibleParticipants.length)}`}>
-        {visibleParticipants.map((remoteParticipant) => (
-          <ParticipantTile key={remoteParticipant.identity} participant={remoteParticipant} />
-        ))}
-        {visibleParticipants.length === 0 ? <LocalTile enabled={isCameraOn} participant={room.localParticipant} /> : null}
-        {visibleParticipants.length > 0 ? (
+      {error ? (
+        <div className="meeting-error" role="alert">
+          <span>{error}</span>
+          <button aria-label="Dismiss" onClick={() => setError(null)}><X size={16} /></button>
+        </div>
+      ) : null}
+      <section className={isPresentationActive ? presentationClassName : `participant-grid participant-grid-${getGridClassName(visibleParticipants.length)}`}>
+        {isScreenSharing ? (
+          <LocalTile cameraEnabled={false} participant={room.localParticipant} screenSharing />
+        ) : remotePresenter ? (
+          <ParticipantTile participant={remotePresenter} />
+        ) : (
+          visibleParticipants.map((remoteParticipant) => (
+            <ParticipantTile key={remoteParticipant.identity} participant={remoteParticipant} />
+          ))
+        )}
+        {isPresentationActive && secondaryParticipants.length > 0 ? (
+          <div className="presentation-strip">
+            {secondaryParticipants.map((remoteParticipant) => (
+              <ParticipantTile key={remoteParticipant.identity} participant={remoteParticipant} preferCamera />
+            ))}
+          </div>
+        ) : null}
+        {!isPresentationActive && visibleParticipants.length === 0 ? (
+          <LocalTile cameraEnabled={isCameraOn} participant={room.localParticipant} screenSharing={false} />
+        ) : null}
+        {!isScreenSharing && visibleParticipants.length > 0 ? (
           <div className="local-overlay">
-            <LocalTile enabled={isCameraOn} participant={room.localParticipant} />
+            <LocalTile cameraEnabled={isCameraOn} participant={room.localParticipant} screenSharing={false} />
           </div>
         ) : null}
       </section>
@@ -555,9 +752,19 @@ function App() {
           <span>{isMicOn ? 'Mute' : 'Unmute'}</span>
         </button>
         {meeting.mode === 'video' ? (
-          <button className={isCameraOn ? 'active' : ''} onClick={() => void toggleCamera()}>
+          <button className={isCameraOn ? 'active' : ''} disabled={isScreenSharing || isStartingScreenShare} onClick={() => void toggleCamera()}>
             {isCameraOn ? <Camera size={20} /> : <CameraOff size={20} />}
             <span>{isCameraOn ? 'Camera off' : 'Camera on'}</span>
+          </button>
+        ) : null}
+        {meeting.mode === 'video' ? (
+          <button
+            className={isScreenSharing ? 'active' : ''}
+            disabled={isStartingScreenShare}
+            onClick={() => void (isScreenSharing ? stopScreenShare() : startScreenShare())}
+          >
+            {isStartingScreenShare ? <LoaderCircle className="spin-icon" size={20} /> : <ScreenShare size={20} />}
+            <span>{isStartingScreenShare ? 'Starting...' : isScreenSharing ? 'Stop sharing' : 'Share screen'}</span>
           </button>
         ) : null}
         <button className="danger" onClick={() => void leaveMeeting()}>
@@ -576,55 +783,80 @@ function App() {
   );
 }
 
-function ParticipantTile({ participant }: { participant: Participant }) {
+function ParticipantTile({ participant, preferCamera = false }: { participant: Participant; preferCamera?: boolean }) {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const cameraTrack = participant.getTrackPublication(Track.Source.Camera)?.track;
-  const isCameraEnabled = !!cameraTrack && !participant.getTrackPublication(Track.Source.Camera)?.isMuted;
+  const screenSharePublication = participant.getTrackPublication(Track.Source.ScreenShare);
+  const cameraPublication = participant.getTrackPublication(Track.Source.Camera);
+  const isScreenSharing = !preferCamera && hasUsableVideoPublication(screenSharePublication);
+  const selectedPublication = isScreenSharing ? screenSharePublication : cameraPublication;
+  const videoTrack = selectedPublication?.track;
+  const isVideoEnabled = hasUsableVideoPublication(selectedPublication);
 
   useEffect(() => {
-    if (!videoRef.current || cameraTrack?.kind !== Track.Kind.Video) {
+    if (!videoRef.current || videoTrack?.kind !== Track.Kind.Video) {
       return undefined;
     }
 
-    cameraTrack.attach(videoRef.current);
+    videoTrack.attach(videoRef.current);
     return () => {
       if (videoRef.current) {
-        cameraTrack.detach(videoRef.current);
+        videoTrack.detach(videoRef.current);
       }
     };
-  }, [cameraTrack]);
+  }, [videoTrack]);
 
   return (
-    <div className={`tile ${participant.isSpeaking ? 'speaking' : ''}`}>
-      {isCameraEnabled ? <video ref={videoRef} autoPlay playsInline /> : <Avatar name={participant.name || participant.identity} />}
-      <span>{participant.name || participant.identity}</span>
+    <div className={`tile ${participant.isSpeaking ? 'speaking' : ''} ${isScreenSharing ? 'screen-sharing' : ''}`}>
+      {isVideoEnabled ? <video ref={videoRef} autoPlay playsInline /> : <Avatar name={participant.name || participant.identity} />}
+      <span>{participant.name || participant.identity}{isScreenSharing ? ' · Presenting' : ''}</span>
     </div>
   );
 }
 
-function LocalTile({ enabled, participant }: { enabled: boolean; participant: Participant }) {
+function LocalTile({
+  cameraEnabled,
+  participant,
+  screenSharing,
+}: {
+  cameraEnabled: boolean;
+  participant: Participant;
+  screenSharing: boolean;
+}) {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const cameraTrack = participant.getTrackPublication(Track.Source.Camera)?.track;
+  const selectedPublication = participant.getTrackPublication(screenSharing ? Track.Source.ScreenShare : Track.Source.Camera);
+  const videoTrack = selectedPublication?.track;
+  const isVideoEnabled = screenSharing ? hasUsableVideoPublication(selectedPublication) : cameraEnabled;
 
   useEffect(() => {
-    if (!enabled || !videoRef.current || cameraTrack?.kind !== Track.Kind.Video) {
+    if (!isVideoEnabled || !videoRef.current || videoTrack?.kind !== Track.Kind.Video) {
       return undefined;
     }
 
-    cameraTrack.attach(videoRef.current);
+    videoTrack.attach(videoRef.current);
     return () => {
       if (videoRef.current) {
-        cameraTrack.detach(videoRef.current);
+        videoTrack.detach(videoRef.current);
       }
     };
-  }, [cameraTrack, enabled]);
+  }, [isVideoEnabled, videoTrack]);
 
   return (
-    <div className="tile local">
-      {enabled ? <video ref={videoRef} autoPlay muted playsInline /> : <Avatar name="You" />}
-      <span>You</span>
+    <div className={`tile local ${screenSharing ? 'screen-sharing' : ''}`}>
+      {isVideoEnabled ? <video ref={videoRef} autoPlay muted playsInline /> : <Avatar name="You" />}
+      <span>You{screenSharing ? ' · Presenting' : ''}</span>
     </div>
   );
+}
+
+function hasUsableVideoPublication(publication: ReturnType<Participant['getTrackPublication']>) {
+  return !!publication?.track &&
+    !publication.isMuted &&
+    publication.track.kind === Track.Kind.Video &&
+    publication.track.mediaStreamTrack.readyState !== 'ended';
+}
+
+function hasActiveScreenShare(participant: Participant) {
+  return hasUsableVideoPublication(participant.getTrackPublication(Track.Source.ScreenShare));
 }
 
 function Avatar({ name }: { name: string }) {

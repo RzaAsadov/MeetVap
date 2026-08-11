@@ -3,6 +3,8 @@ import { Request } from 'express';
 
 import { operationalConfig } from './operationalConfig';
 import { prisma } from './prisma';
+import { normalizeInstallationId } from './clientActivity';
+import { cacheDelete } from './redisCache';
 
 const APP_VERSION_HEADER = 'x-meetvap-app-version';
 const BUILD_NUMBER_HEADER = 'x-meetvap-build-number';
@@ -24,6 +26,7 @@ type ClientMetadata = {
   appVersion?: string;
   capabilities?: string[];
   platform?: string;
+  installationId?: string;
 };
 
 type ClientRow = {
@@ -38,12 +41,14 @@ export function getRequestClientMetadata(req: Request, fallbackPlatform?: string
   const appBuildNumber = normalizeBuildNumber(req.get(BUILD_NUMBER_HEADER));
   const capabilities = normalizeCapabilities(req.get(CAPABILITIES_HEADER));
   const platform = normalizeHeaderValue(req.get(PLATFORM_HEADER)) ?? normalizeHeaderValue(fallbackPlatform);
+  const installationId = normalizeInstallationId(req.get('x-meetvap-installation-id')) ?? undefined;
 
   return {
     ...(appBuildNumber ? { appBuildNumber } : {}),
     ...(appVersion ? { appVersion } : {}),
     capabilities,
     ...(platform ? { platform } : {}),
+    ...(installationId ? { installationId } : {}),
   };
 }
 
@@ -51,7 +56,8 @@ export function hasClientMetadata(input: ClientMetadata) {
   return input.appBuildNumber !== undefined ||
     input.appVersion !== undefined ||
     input.capabilities !== undefined ||
-    input.platform !== undefined;
+    input.platform !== undefined ||
+    input.installationId !== undefined;
 }
 
 export function hasClientCapability(input: ClientMetadata, capability: string) {
@@ -94,6 +100,7 @@ export async function recordSessionClientMetadata(
 
   if (result.count > 0) {
     rememberSessionMetadataWrite(tokenHash, signature);
+    await cacheDelete(`attestation-access:${tokenHash}`);
     return;
   }
 
@@ -108,6 +115,7 @@ export async function recordSessionClientMetadata(
     },
   });
   rememberSessionMetadataWrite(tokenHash, signature);
+  await cacheDelete(`attestation-access:${tokenHash}`);
 }
 
 function rememberSessionMetadataWrite(tokenHash: string, signature: string) {
@@ -139,6 +147,7 @@ export function getClientMetadataWriteData(metadata: ClientMetadata) {
     ...(metadata.appVersion !== undefined ? { appVersion: metadata.appVersion } : {}),
     ...(metadata.capabilities !== undefined ? { capabilities: metadata.capabilities } : {}),
     ...(metadata.platform !== undefined ? { platform: metadata.platform } : {}),
+    ...(metadata.installationId !== undefined ? { installationId: metadata.installationId } : {}),
   };
 }
 

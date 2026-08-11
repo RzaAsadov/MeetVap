@@ -1899,11 +1899,14 @@ function App() {
     const parsed = text ? JSON.parse(text) : null;
 
     if (!response.ok) {
+      if (parsed?.code === 'ACCOUNT_BLOCKED' || parsed?.code === 'DEVICE_BLOCKED' || parsed?.code === 'SESSION_REVOKED') {
+        logout();
+      }
       throw new Error(parsed?.error || text || `Request failed: ${response.status}`);
     }
 
     return parsed as T;
-  }, [token]);
+  }, [logout, token]);
 
   const apiRequest = useCallback(async <T,>(path: string, options: RequestInit = {}) => {
     const response = await fetch(`${API_URL}${path}`, {
@@ -2873,6 +2876,7 @@ function App() {
       setCallMaximized(false);
     });
     socket.on('web:logged-out', logout);
+    socket.on('account:suspended', logout);
 
     return () => {
       socket.disconnect();

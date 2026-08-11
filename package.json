@@ -9,6 +9,7 @@
     "ios": "expo run:ios",
     "web": "expo start --web",
     "postinstall": "node scripts/patch-react-native-iap.cjs && node scripts/patch-expo-task-manager.cjs",
+    "check:versions": "node scripts/check-native-version-sync.cjs",
     "typecheck": "tsc --noEmit",
     "lint": "eslint App.tsx src --ext .ts,.tsx"
   },

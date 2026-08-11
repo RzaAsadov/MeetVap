@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { Prisma } from '@prisma/client';
 import type { Server } from 'socket.io';
+import { RoomServiceClient } from 'livekit-server-sdk';
 import { z } from 'zod';
 
 import { config } from './config';
@@ -69,6 +70,47 @@ export function getConfiguredLiveKitServers() {
 
 export function getLiveKitServerById(serverId: string) {
   return liveKitServers.find((server) => server.id === serverId) ?? null;
+}
+
+export async function removeUserFromLiveKitRooms(userId: string) {
+  const calls = await prisma.call.findMany({
+    select: { livekitRoom: true, livekitServerId: true },
+    where: {
+      startedAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
+      livekitRoom: { not: null },
+      participants: { some: { userId } },
+    },
+  });
+  let removed = 0;
+
+  await Promise.all(calls.map(async (call) => {
+    const liveKitServer = call.livekitServerId ? getLiveKitServerById(call.livekitServerId) : null;
+
+    if (!liveKitServer || !call.livekitRoom) {
+      return;
+    }
+
+    const serviceUrl = liveKitServer.url.replace(/^wss:/, 'https:').replace(/^ws:/, 'http:');
+    const roomService = new RoomServiceClient(serviceUrl, liveKitServer.apiKey, liveKitServer.apiSecret);
+
+    try {
+      await roomService.removeParticipant(call.livekitRoom, userId);
+      removed += 1;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+
+      if (!/not found|does not exist/i.test(message)) {
+        console.warn('Could not remove suspended user from LiveKit room', {
+          livekitServerId: call.livekitServerId,
+          message,
+          room: call.livekitRoom,
+          userId,
+        });
+      }
+    }
+  }));
+
+  return removed;
 }
 
 export function getLiveKitHealthSnapshot() {

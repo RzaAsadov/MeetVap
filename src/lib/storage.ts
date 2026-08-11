@@ -4,7 +4,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 
 import { CallLog, Conversation, Message, SubscriptionStatus } from '../types/domain';
 import { removePartialMediaDownloadsForMessages } from './mediaCache';
-import { ensureMessageDatabaseReady, getLatestMessagesByConversationIdsFromDatabase, getMessagesByIdsFromDatabase, getMessagesFromDatabase, getOlderMessagesFromDatabase, getRecentMessagesFromDatabase, removeAllMediaDownloadRecords, removeAllMessagesFromDatabase, removeMessageRecordsFromDatabase, removeMessagesFromDatabase, saveMessagesToDatabase, upsertMessagesToDatabase } from './messageStore';
+import { ensureMessageDatabaseReady, getConversationsFromDatabase, getLatestMessagesByConversationIdsFromDatabase, getMessagesByIdsFromDatabase, getMessagesFromDatabase, getOlderMessagesFromDatabase, getRecentMessagesFromDatabase, removeAllConversationRecordsFromDatabase, removeAllMediaDownloadRecords, removeAllMessagesFromDatabase, removeConversationRecordsFromDatabase, removeMessageRecordsFromDatabase, removeMessagesFromDatabase, replaceConversationsInDatabase, saveMessagesToDatabase, upsertConversationsInDatabase, upsertMessagesToDatabase } from './messageStore';
 
 const SERVER_URL_KEY = 'messenger.serverUrl';
 const AUTH_TOKEN_KEY = 'messenger.authToken';
@@ -164,12 +164,38 @@ export async function removeStoredMessages(conversationId: string) {
 }
 
 export async function getStoredConversations() {
+  const databaseConversations = await getConversationsFromDatabase().catch(() => []);
+
+  if (databaseConversations.length > 0) {
+    return databaseConversations;
+  }
+
   const raw = await AsyncStorage.getItem(CONVERSATIONS_KEY);
-  return raw ? (JSON.parse(raw) as Conversation[]) : [];
+  const legacyConversations = raw ? (JSON.parse(raw) as Conversation[]) : [];
+
+  if (legacyConversations.length > 0) {
+    try {
+      await replaceConversationsInDatabase(legacyConversations);
+      await AsyncStorage.removeItem(CONVERSATIONS_KEY);
+    } catch {
+      // Keep the legacy snapshot available if the one-time migration fails.
+    }
+  }
+
+  return legacyConversations;
 }
 
 export async function setStoredConversations(conversations: Conversation[]) {
-  await AsyncStorage.setItem(CONVERSATIONS_KEY, JSON.stringify(dedupeStoredConversations(conversations)));
+  await replaceConversationsInDatabase(dedupeStoredConversations(conversations));
+  await AsyncStorage.removeItem(CONVERSATIONS_KEY);
+}
+
+export async function upsertStoredConversations(conversations: Conversation[]) {
+  await upsertConversationsInDatabase(dedupeStoredConversations(conversations));
+}
+
+export async function removeStoredConversationRecords(conversationIds: string[]) {
+  await removeConversationRecordsFromDatabase(conversationIds);
 }
 
 function dedupeStoredConversations(conversations: Conversation[]) {
@@ -177,7 +203,10 @@ function dedupeStoredConversations(conversations: Conversation[]) {
 }
 
 export async function clearStoredConversations() {
-  await AsyncStorage.removeItem(CONVERSATIONS_KEY);
+  await Promise.all([
+    removeAllConversationRecordsFromDatabase(),
+    AsyncStorage.removeItem(CONVERSATIONS_KEY),
+  ]);
 }
 
 export async function getDeletedConversationAfter(conversationId: string) {
@@ -472,6 +501,7 @@ export async function eraseLocalChatData() {
   ));
 
   await Promise.allSettled([
+    removeAllConversationRecordsFromDatabase(),
     removeAllMessagesFromDatabase(),
     removeAllMediaDownloadRecords(),
     chatKeys.length > 0 ? AsyncStorage.multiRemove(chatKeys) : Promise.resolve(),

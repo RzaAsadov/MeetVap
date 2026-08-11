@@ -16,6 +16,7 @@ import { showNativeAndroidIncomingCall, suppressNativeIncomingCallKitCall } from
 import { setRealtimeSocket } from '../lib/realtimeSocket';
 import { maskSocketOutgoing } from '../lib/socketMask';
 import { getAuthToken } from '../lib/storage';
+import { notifyAuthSuspension } from '../lib/authSuspensionEvents';
 import { getMobileCallAnswerClientId } from '../lib/callAnswerClient';
 import { dismissMessageNotificationsForConversation, showForegroundMessageNotification } from '../lib/messageNotifications';
 import { logMessageDeliveryDiagnostic } from '../lib/messageDeliveryDiagnostics';
@@ -156,6 +157,9 @@ export function RealtimeBridge() {
         emitAppState(socket);
         refreshConversations();
       });
+      socket.on('account:suspended', (payload?: { reason?: string }) => {
+        notifyAuthSuspension({ code: 'ACCOUNT_BLOCKED', message: payload?.reason });
+      });
 
       socket.on('message:new', (message) => {
         const mappedMessage = mapMessage(message, serverUrl);
@@ -201,7 +205,7 @@ export function RealtimeBridge() {
 
       socket.on('status:updated', () => {
         void loadStatuses().catch(() => {
-          void refreshStatusSummary().catch(() => undefined);
+          void refreshStatusSummary({ force: true }).catch(() => undefined);
         });
       });
 
@@ -512,7 +516,7 @@ export function RealtimeBridge() {
       appStateSubscription.remove();
       networkSubscription();
     };
-  }, [applyMessageEdit, applyMessageReaction, loadConversations, loadStatuses, markCallMessageReadByCallId, markConversationMessagesDelivered, markConversationMessagesRead, navigation, receiveMessage, removeChatLocally, removeMessage, serverUrl, updateCurrentUser, updateUserPresence, user?.id]);
+  }, [applyMessageEdit, applyMessageReaction, loadConversations, loadStatuses, markCallMessageReadByCallId, markConversationMessagesDelivered, markConversationMessagesRead, navigation, receiveMessage, refreshStatusSummary, removeChatLocally, removeMessage, serverUrl, updateCurrentUser, updateUserPresence, user?.id]);
 
   return null;
 }

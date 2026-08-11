@@ -41,11 +41,13 @@ async function performOperationalCleanup() {
   const orphanMedia = await cleanupOrphanMedia();
   const partialUploads = await cleanupPartialUploads();
   const pushRelayJobs = await cleanupPushRelayJobs();
+  const attestationChallenges = await cleanupAttestationChallenges();
   const sessions = await cleanupExpiredSessions();
   const staleCalls = await cleanupStaleCalls();
   pruneRateLimitBuckets();
 
   const result = {
+    attestationChallenges,
     durationMs: Date.now() - startedAt,
     expiredMessages,
     messageStatusUpdates,
@@ -59,6 +61,20 @@ async function performOperationalCleanup() {
   };
   console.log('Operational cleanup completed', result);
   return result;
+}
+
+async function cleanupAttestationChallenges() {
+  const cutoff = new Date(Date.now() - DAY_MS);
+  const result = await prisma.attestationChallenge.deleteMany({
+    where: {
+      OR: [
+        { consumedAt: { lte: cutoff } },
+        { expiresAt: { lte: cutoff } },
+      ],
+    },
+  });
+
+  return result.count;
 }
 
 type OperationalCleanupResult = Awaited<ReturnType<typeof performOperationalCleanup>>;

@@ -206,7 +206,9 @@ export type AttestationChallengeResponse = {
   challengeId: string;
   expiresAt: string;
   mode: 'observe' | 'soft' | 'enforce';
+  purpose?: 'assertion' | 'registration' | null;
   provider: 'play-integrity' | 'app-attest';
+  retryAfterSeconds?: number;
 };
 
 export type AttestationSubmitResponse = {
@@ -349,7 +351,12 @@ export async function getSubscriptionStatus(serverUrl: string) {
 
 export async function createAttestationChallenge(
   serverUrl: string,
-  input: { platform: 'android' | 'ios'; provider: 'play-integrity' | 'app-attest' },
+  input: {
+    keyId?: string;
+    platform: 'android' | 'ios';
+    provider: 'play-integrity' | 'app-attest';
+    purpose?: 'assertion' | 'registration';
+  },
 ) {
   return apiRequest<AttestationChallengeResponse>('/attestation/challenge', {
     body: JSON.stringify(input),
@@ -372,6 +379,18 @@ export async function submitIosAppAttestRegistration(serverUrl: string, input: {
   keyId: string;
 }) {
   return apiRequest<AttestationSubmitResponse>('/attestation/ios/app-attest/register', {
+    body: JSON.stringify(input),
+    method: 'POST',
+    serverUrl,
+  });
+}
+
+export async function submitIosAppAttestAssertion(serverUrl: string, input: {
+  assertionObject: string;
+  challengeId: string;
+  keyId: string;
+}) {
+  return apiRequest<AttestationSubmitResponse>('/attestation/ios/app-attest/assert', {
     body: JSON.stringify(input),
     method: 'POST',
     serverUrl,
@@ -439,7 +458,7 @@ export async function listContacts(serverUrl: string) {
 }
 
 export async function getStatusSummary(serverUrl: string) {
-  return apiRequest<{ count: number; hasUnviewed: boolean }>('/statuses/summary', {
+  return apiRequest<{ count: number; hasUnviewed: boolean; unviewedAuthorIds?: string[] }>('/statuses/summary', {
     method: 'GET',
     serverUrl,
   });

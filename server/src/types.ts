@@ -1,6 +1,7 @@
 import { User } from '@prisma/client';
 
 export type AuthUser = Pick<User, 'id' | 'displayName' | 'username' | 'avatarUrl'> & Partial<Pick<User, 'hideFromSearch' | 'hideNickname' | 'lastSeenAt' | 'onlyContactsCanCall' | 'showLastSeen' | 'useGroupAliases'>> & {
+  authVersion?: number;
   hasPremiumAccess?: boolean;
   preventPeerScreenshots?: boolean;
   publicShareCode?: string | null;
@@ -11,6 +12,7 @@ export type JwtPayload = {
   scope?: 'web';
   sub: string;
   username: string;
+  authVersion?: number;
 };
 
 declare global {

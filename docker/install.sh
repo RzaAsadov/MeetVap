@@ -103,6 +103,13 @@ printf 'MeetVap Docker installation\n\n'
 WEB_DOMAIN="$(prompt_domain 'Web domain')"
 MEET_DOMAIN="$(prompt_domain 'Meet domain')"
 SERVER_DOMAIN="$(prompt_domain 'Server/API domain')"
+while true; do
+  ADMIN_DOMAIN="$(prompt_domain 'Admin domain')"
+  if [[ "$ADMIN_DOMAIN" != "$WEB_DOMAIN" && "$ADMIN_DOMAIN" != "$MEET_DOMAIN" && "$ADMIN_DOMAIN" != "$SERVER_DOMAIN" ]]; then
+    break
+  fi
+  printf 'The admin domain must be different from the web, meet, and server domains.\n' >&2
+done
 MAIN_SERVER_HOST="$(prompt_main_server_host)"
 
 while true; do
@@ -164,6 +171,7 @@ cat > .env <<EOF
 WEB_DOMAIN=$WEB_DOMAIN
 MEET_DOMAIN=$MEET_DOMAIN
 SERVER_DOMAIN=$SERVER_DOMAIN
+ADMIN_DOMAIN=$ADMIN_DOMAIN
 POSTGRES_DB=meetvap
 POSTGRES_USER=meetvap
 POSTGRES_PASSWORD=$POSTGRES_PASSWORD
@@ -197,7 +205,7 @@ sed \
 cat > generated/admin-config.json <<EOF
 {
   "port": 4300,
-  "basePath": "/admin",
+  "basePath": "",
   "databaseUrl": "postgresql://meetvap:$POSTGRES_PASSWORD@postgres:5432/meetvap",
   "admin": {
     "username": "$(json_escape "$ADMIN_USERNAME")",
@@ -234,6 +242,7 @@ sed \
   -e "s/__WEB_DOMAIN__/$WEB_DOMAIN/g" \
   -e "s/__MEET_DOMAIN__/$MEET_DOMAIN/g" \
   -e "s/__SERVER_DOMAIN__/$SERVER_DOMAIN/g" \
+  -e "s/__ADMIN_DOMAIN__/$ADMIN_DOMAIN/g" \
   nginx/nginx.conf.template > generated/nginx.conf
 
 cat > generated/server-optional.env <<'EOF'
@@ -242,7 +251,9 @@ cat > generated/server-optional.env <<'EOF'
 # Optional store-purchase verification credentials belong in docker/secrets.
 # GOOGLE_PACKAGE_NAME=com.meetvap.messenger
 # GOOGLE_SERVICE_ACCOUNT_PATH=/run/secrets/meetvap/google-service-account.json
-# APPLE_BUNDLE_ID=com.meetvap.messenger
+APPLE_APP_ATTEST_APP_ID_PREFIX=4H68W59Z24
+APPLE_APP_ATTEST_ALLOW_DEVELOPMENT=false
+APPLE_BUNDLE_ID=com.meetvap.app
 # APPLE_SHARED_SECRET=
 EOF
 
@@ -269,11 +280,11 @@ docker compose -f compose.yml up -d postgres redis
 printf '\nApplying database migrations...\n'
 docker compose -f compose.yml run --rm migration
 
-printf '\nObtaining TLS certificate for all three domains...\n'
+printf '\nObtaining TLS certificate for all four domains...\n'
 docker compose -f compose.yml --profile bootstrap run --rm --service-ports certbot-bootstrap \
   certonly --standalone --non-interactive --agree-tos --register-unsafely-without-email \
   --cert-name meetvap --keep-until-expiring \
-  -d "$WEB_DOMAIN" -d "$MEET_DOMAIN" -d "$SERVER_DOMAIN"
+  -d "$WEB_DOMAIN" -d "$MEET_DOMAIN" -d "$SERVER_DOMAIN" -d "$ADMIN_DOMAIN"
 
 printf '\nStarting MeetVap services...\n'
 docker compose -f compose.yml up -d server admin livekit nginx certbot-renew
@@ -298,5 +309,5 @@ printf '\nInstallation completed.\n'
 printf 'Web:   https://%s\n' "$WEB_DOMAIN"
 printf 'Meet:  https://%s\n' "$MEET_DOMAIN"
 printf 'API:   https://%s\n' "$SERVER_DOMAIN"
-printf 'Admin: https://%s/admin/\n' "$SERVER_DOMAIN"
+printf 'Admin: https://%s\n' "$ADMIN_DOMAIN"
 printf '\nRemember to whitelist this child server public IP for its domain in the main server admin panel.\n'

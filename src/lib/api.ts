@@ -2,6 +2,7 @@ import { getAuthToken } from './storage';
 import { t } from '../i18n';
 import { getClientRequestHeaders, initializeClientInstallationId } from './appClientInfo';
 import { MASK_HEADER, MASK_VERSION, maskPayload, unmaskPayload } from './payloadMask';
+import { notifyAuthSuspension } from './authSuspensionEvents';
 
 type RequestOptions = RequestInit & {
   maskBody?: boolean;
@@ -68,6 +69,9 @@ export async function apiRequest<T>(path: string, options: RequestOptions): Prom
     const retryAfterSeconds = parsedResponse && typeof parsedResponse === 'object' && 'retryAfterSeconds' in parsedResponse && typeof parsedResponse.retryAfterSeconds === 'number'
       ? parsedResponse.retryAfterSeconds
       : undefined;
+    if (responseCode === 'ACCOUNT_BLOCKED' || responseCode === 'DEVICE_BLOCKED' || responseCode === 'SESSION_REVOKED') {
+      notifyAuthSuspension({ code: responseCode, message: parsedError });
+    }
     throw new ApiError(
       (getLocalizedStructuredApiError(responseCode, retryAfterSeconds) ?? parsedError) || responseText || `Request failed with ${response.status}`,
       response.status,

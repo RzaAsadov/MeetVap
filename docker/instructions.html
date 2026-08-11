@@ -1,0 +1,549 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>MeetVap Docker Operations Guide</title>
+  <style>
+    :root {
+      --bg: #f4f6f8;
+      --surface: #ffffff;
+      --ink: #18202a;
+      --muted: #5c6875;
+      --line: #d9e0e7;
+      --blue: #1769e0;
+      --blue-soft: #eaf2ff;
+      --green: #16784a;
+      --green-soft: #e9f7f0;
+      --amber: #9a5a00;
+      --amber-soft: #fff5df;
+      --red: #b42318;
+      --red-soft: #fff0ee;
+      --code: #111820;
+      --code-ink: #e9eef5;
+      --radius: 8px;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 16px;
+      line-height: 1.65;
+      letter-spacing: 0;
+    }
+    button, input { font: inherit; letter-spacing: 0; }
+    a { color: var(--blue); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+    code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
+
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 64px;
+      padding: 10px 24px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.97);
+      backdrop-filter: blur(8px);
+    }
+    .brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
+    .brand-mark {
+      display: grid;
+      place-items: center;
+      width: 38px;
+      height: 38px;
+      flex: 0 0 auto;
+      border-radius: 7px;
+      background: var(--blue);
+      color: white;
+      font-weight: 900;
+    }
+    .brand-text { min-width: 0; }
+    .brand-title { display: block; font-size: 16px; font-weight: 850; line-height: 1.2; }
+    .brand-subtitle { display: block; color: var(--muted); font-size: 12px; line-height: 1.3; }
+    .language-switch {
+      display: inline-flex;
+      padding: 3px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #f7f9fb;
+    }
+    .language-switch button {
+      min-width: 46px;
+      border: 0;
+      border-radius: 5px;
+      padding: 6px 10px;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      font-weight: 800;
+    }
+    .language-switch button[aria-pressed="true"] { background: var(--surface); color: var(--blue); box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+
+    .layout { display: grid; grid-template-columns: 260px minmax(0, 920px); justify-content: center; gap: 40px; padding: 32px 24px 80px; }
+    .sidebar { position: sticky; top: 96px; align-self: start; max-height: calc(100vh - 120px); overflow: auto; }
+    .sidebar h2 { margin: 0 0 10px; color: var(--muted); font-size: 12px; text-transform: uppercase; }
+    .sidebar nav { display: grid; gap: 2px; }
+    .sidebar a { border-left: 3px solid transparent; padding: 7px 10px; color: #3d4854; font-size: 14px; text-decoration: none; }
+    .sidebar a:hover, .sidebar a.active { border-left-color: var(--blue); background: var(--blue-soft); color: #114d9f; }
+    main { min-width: 0; }
+    [data-document][hidden], [data-navigation][hidden] { display: none; }
+
+    .intro { padding: 8px 0 30px; border-bottom: 1px solid var(--line); }
+    .eyebrow { margin: 0 0 8px; color: var(--blue); font-size: 13px; font-weight: 850; text-transform: uppercase; }
+    h1 { margin: 0; max-width: 760px; font-size: 38px; line-height: 1.15; }
+    .lead { max-width: 760px; margin: 16px 0 0; color: var(--muted); font-size: 18px; }
+    .meta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+    .meta span { border: 1px solid var(--line); border-radius: 6px; padding: 4px 9px; background: var(--surface); color: #43505d; font-size: 13px; }
+
+    section { scroll-margin-top: 82px; padding: 36px 0; border-bottom: 1px solid var(--line); }
+    section:last-child { border-bottom: 0; }
+    h2 { margin: 0 0 16px; font-size: 27px; line-height: 1.25; }
+    h3 { margin: 28px 0 10px; font-size: 19px; line-height: 1.3; }
+    p { margin: 10px 0; }
+    ul, ol { padding-left: 24px; }
+    li + li { margin-top: 6px; }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 18px 0; }
+    .item { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); padding: 16px; }
+    .item strong { display: block; margin-bottom: 4px; }
+    .item p { margin: 0; color: var(--muted); font-size: 14px; }
+    .callout { margin: 18px 0; border-left: 4px solid var(--blue); border-radius: 0 var(--radius) var(--radius) 0; background: var(--blue-soft); padding: 14px 16px; }
+    .callout.warning { border-left-color: var(--amber); background: var(--amber-soft); }
+    .callout.danger { border-left-color: var(--red); background: var(--red-soft); }
+    .callout.success { border-left-color: var(--green); background: var(--green-soft); }
+    .callout strong { display: block; margin-bottom: 3px; }
+
+    .code-block { position: relative; margin: 14px 0 20px; }
+    pre { margin: 0; overflow: auto; border: 1px solid #26313d; border-radius: var(--radius); background: var(--code); color: var(--code-ink); padding: 18px; font-size: 13px; line-height: 1.65; }
+    .copy-button { position: absolute; top: 8px; right: 8px; border: 1px solid #465463; border-radius: 5px; padding: 5px 9px; background: #202b36; color: #e9eef5; cursor: pointer; font-size: 12px; font-weight: 750; }
+    .copy-button:hover { background: #2b3946; }
+    table { width: 100%; margin: 16px 0; border-collapse: collapse; background: var(--surface); font-size: 14px; }
+    th, td { border: 1px solid var(--line); padding: 10px 12px; text-align: left; vertical-align: top; }
+    th { background: #eef2f6; font-weight: 800; }
+    .checklist { list-style: none; padding: 0; }
+    .checklist li { position: relative; padding-left: 28px; }
+    .checklist li::before { content: "✓"; position: absolute; left: 2px; color: var(--green); font-weight: 900; }
+    .footer { padding-top: 30px; color: var(--muted); font-size: 13px; }
+
+    @media (max-width: 900px) {
+      .layout { grid-template-columns: 1fr; gap: 16px; padding: 20px 18px 60px; }
+      .sidebar { position: static; max-height: none; overflow: visible; }
+      .sidebar h2 { display: none; }
+      .sidebar nav { display: flex; overflow-x: auto; padding-bottom: 8px; }
+      .sidebar a { flex: 0 0 auto; border-left: 0; border-bottom: 2px solid transparent; white-space: nowrap; }
+      .sidebar a:hover, .sidebar a.active { border-left-color: transparent; border-bottom-color: var(--blue); }
+      h1 { font-size: 31px; }
+    }
+    @media (max-width: 620px) {
+      .topbar { padding: 9px 14px; }
+      .brand-subtitle { display: none; }
+      .grid { grid-template-columns: 1fr; }
+      h1 { font-size: 27px; }
+      h2 { font-size: 23px; }
+      table { display: block; overflow-x: auto; }
+    }
+    @media print {
+      .topbar, .sidebar, .copy-button { display: none !important; }
+      .layout { display: block; padding: 0; }
+      body { background: white; font-size: 12px; }
+      section { break-inside: avoid; }
+      pre { white-space: pre-wrap; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark">MV</div>
+      <div class="brand-text">
+        <span class="brand-title">MeetVap Docker</span>
+        <span class="brand-subtitle" data-ui-en="Deployment and operations guide" data-ui-ru="Руководство по развертыванию">Deployment and operations guide</span>
+      </div>
+    </div>
+    <div class="language-switch" role="group" aria-label="Language">
+      <button type="button" data-language-button="en" aria-pressed="true">EN</button>
+      <button type="button" data-language-button="ru" aria-pressed="false">RU</button>
+    </div>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar">
+      <div data-navigation="en">
+        <h2>Contents</h2>
+        <nav>
+          <a href="#en-overview">Overview</a><a href="#en-requirements">Requirements</a><a href="#en-network">DNS and ports</a>
+          <a href="#en-git-install">Git installation</a><a href="#en-local-install">Local installation</a><a href="#en-config">Configuration</a>
+          <a href="#en-update">Updates</a><a href="#en-backup">Backup and restore</a><a href="#en-operations">Operations</a>
+          <a href="#en-certificates">Certificates</a><a href="#en-calls">Call debugging</a><a href="#en-security">Security</a><a href="#en-reset">Reset</a>
+        </nav>
+      </div>
+      <div data-navigation="ru" hidden>
+        <h2>Содержание</h2>
+        <nav>
+          <a href="#ru-overview">Обзор</a><a href="#ru-requirements">Требования</a><a href="#ru-network">DNS и порты</a>
+          <a href="#ru-git-install">Установка через Git</a><a href="#ru-local-install">Локальная установка</a><a href="#ru-config">Конфигурация</a>
+          <a href="#ru-update">Обновления</a><a href="#ru-backup">Резервные копии</a><a href="#ru-operations">Эксплуатация</a>
+          <a href="#ru-certificates">Сертификаты</a><a href="#ru-calls">Диагностика звонков</a><a href="#ru-security">Безопасность</a><a href="#ru-reset">Сброс</a>
+        </nav>
+      </div>
+    </aside>
+
+    <main data-document="en">
+      <div class="intro">
+        <p class="eyebrow">Administrator runbook</p>
+        <h1>MeetVap Docker installation and operations</h1>
+        <p class="lead">A complete guide for deploying, updating, backing up, monitoring, and troubleshooting a standalone MeetVap child server.</p>
+        <div class="meta"><span>Git installation</span><span>Archive installation</span><span>Four domains</span><span>Automatic migrations</span></div>
+      </div>
+
+      <section id="en-overview">
+        <h2>Overview</h2>
+        <p>The bundle runs the API server, admin panel, web client, meeting client, LiveKit, PostgreSQL, Redis, nginx, and Certbot on one Docker host.</p>
+        <div class="grid">
+          <div class="item"><strong>Web</strong><p><code>https://WEB_DOMAIN</code>, served directly by nginx.</p></div>
+          <div class="item"><strong>Meet</strong><p><code>https://MEET_DOMAIN</code>, served directly by nginx.</p></div>
+          <div class="item"><strong>API and signaling</strong><p><code>https://SERVER_DOMAIN</code> and <code>wss://SERVER_DOMAIN/rtc</code>.</p></div>
+          <div class="item"><strong>Admin</strong><p><code>https://ADMIN_DOMAIN</code> on its own hostname.</p></div>
+        </div>
+        <p>PostgreSQL and Redis are private Docker services. Persistent named volumes keep database data, Redis state, uploads, certificates, and ACME files.</p>
+      </section>
+
+      <section id="en-requirements">
+        <h2>Requirements</h2>
+        <ul class="checklist">
+          <li>A Linux VPS with a public IPv4 address.</li><li>Recommended minimum: 2 CPU cores, 4 GB RAM, and sufficient upload storage.</li>
+          <li>Docker Engine and the Docker Compose plugin.</li><li>Four DNS hostnames pointing to the VPS.</li><li>Root or sudo access.</li>
+        </ul>
+        <h3>Install Docker</h3>
+        <p>For production, install Docker Engine and Compose from the <a href="https://docs.docker.com/engine/install/" target="_blank" rel="noreferrer">official Docker repository instructions</a>. A common quick installation on a clean VPS is:</p>
+        <div class="code-block"><pre><code>curl -fsSL https://get.docker.com -o get-docker.sh
+sudo sh get-docker.sh
+rm get-docker.sh
+sudo systemctl enable --now docker
+sudo usermod -aG docker "$USER"</code></pre></div>
+        <p>Log out and back in after changing group membership, then verify:</p>
+        <div class="code-block"><pre><code>docker --version
+docker compose version
+sudo systemctl is-enabled docker</code></pre></div>
+      </section>
+
+      <section id="en-network">
+        <h2>DNS and firewall</h2>
+        <p>Create four DNS <code>A</code> records pointing to the VPS public IP: web, meet, server/API, and admin. The server/API hostname must not be proxied through a CDN that cannot carry LiveKit WebSockets and WebRTC traffic.</p>
+        <table><thead><tr><th>Port</th><th>Protocol</th><th>Purpose</th></tr></thead><tbody>
+          <tr><td>80</td><td>TCP</td><td>Let's Encrypt validation and HTTPS redirect</td></tr><tr><td>443</td><td>TCP</td><td>HTTPS, API, web clients, admin, WebSocket signaling</td></tr>
+          <tr><td>3478</td><td>UDP</td><td>TURN UDP</td></tr><tr><td>5349</td><td>TCP</td><td>TURN TLS</td></tr><tr><td>7881</td><td>TCP</td><td>LiveKit TCP fallback</td></tr><tr><td>7882</td><td>UDP</td><td>Primary LiveKit media</td></tr>
+        </tbody></table>
+        <div class="code-block"><pre><code>sudo ufw allow 80/tcp
+sudo ufw allow 443/tcp
+sudo ufw allow 3478/udp
+sudo ufw allow 5349/tcp
+sudo ufw allow 7881/tcp
+sudo ufw allow 7882/udp
+sudo ufw reload</code></pre></div>
+        <div class="callout warning"><strong>Cloud firewall</strong>Open the same ports in GCP, AWS, or the VPS provider firewall. Use ingress rules targeting this VM. Port 4000, PostgreSQL, and Redis must not be public. The old UDP range 50000-60000 is not used by this configuration.</div>
+      </section>
+
+      <section id="en-git-install">
+        <h2>Option A: Git repository</h2>
+        <p>Use this path when you have access to the MeetVap Docker deployment repository. Required application images are downloaded automatically.</p>
+        <div class="code-block"><pre><code>git clone &lt;docker-deployment-repository&gt; meetvap-docker
+cd meetvap-docker
+./install.sh</code></pre></div>
+        <p>If you were given credentials for a private container registry, authenticate first:</p>
+        <div class="code-block"><pre><code>docker login ghcr.io</code></pre></div>
+        <p>The installer asks for four domains, main server host, child relay key, admin username, and a minimum 12-character admin password. It generates database, JWT, session, internal-event, and LiveKit secrets; starts PostgreSQL and Redis; applies all Prisma migrations; obtains one certificate for all four domains; and starts the services.</p>
+        <div class="callout"><strong>Before installation</strong>Create the child entry in the main server's Admin → Sub-domains section, copy its relay key, and whitelist the child VPS public origin IP.</div>
+      </section>
+
+      <section id="en-local-install">
+        <h2>Option B: supplied installation archive</h2>
+        <p>Use this path when you received a <code>meetvap-local-build.tar.gz</code> installation archive instead of repository access.</p>
+        <h3>Upload the archive</h3>
+        <div class="code-block"><pre><code>scp /path/to/meetvap-local-build.tar.gz user@your-vps:/tmp/</code></pre></div>
+        <h3>On the VPS</h3>
+        <div class="code-block"><pre><code>sudo mkdir -p /opt/meetvap-build
+sudo chown "$USER":"$USER" /opt/meetvap-build
+tar -xzf /tmp/meetvap-local-build.tar.gz -C /opt/meetvap-build
+cd /opt/meetvap-build/docker
+./install.sh --local-images</code></pre></div>
+        <p>The installer builds the supplied MeetVap package on the VPS. The nginx image includes the web and meet applications. Required third-party Docker images are downloaded automatically.</p>
+      </section>
+
+      <section id="en-config">
+        <h2>Configuration and generated files</h2>
+        <p>Private installation state is stored in <code>docker/.env</code>, <code>docker/generated/</code>, and <code>docker/secrets/</code>. Protect these paths and include them only in secure backups.</p>
+        <table><thead><tr><th>File</th><th>Purpose</th></tr></thead><tbody>
+          <tr><td><code>.env</code></td><td>Domains, generated secrets, image names, and selected version.</td></tr><tr><td><code>generated/config.json</code></td><td>Child role, main server relay, retention, limits, and policy.</td></tr>
+          <tr><td><code>generated/admin-config.json</code></td><td>Admin login, session secret, database URL, API URL.</td></tr><tr><td><code>generated/livekit-servers.json</code></td><td>Public client URL and private Docker health URL.</td></tr>
+          <tr><td><code>generated/livekit.yaml</code></td><td>LiveKit, Redis, TURN, ports, and TLS files.</td></tr><tr><td><code>generated/nginx.conf</code></td><td>Four HTTPS virtual hosts and proxy routing.</td></tr>
+          <tr><td><code>generated/runtime-config.js</code></td><td>API URL used by web and meet builds.</td></tr><tr><td><code>generated/server-optional.env</code></td><td>App Attest identifiers and optional store-purchase verification variables.</td></tr>
+        </tbody></table>
+        <div class="callout success"><strong>Correct LiveKit URL model</strong>Clients receive <code>wss://SERVER_DOMAIN</code>. API and admin health checks use <code>http://livekit:7880</code>. The private health URL is intentional and must not be changed to the public domain.</div>
+        <h3>Initial database</h3><p>The installer runs <code>prisma migrate deploy</code> before application startup. No SQL dump is required. Later updates apply only pending migrations.</p>
+      </section>
+
+      <section id="en-update">
+        <h2>Updating</h2>
+        <h3>Git repository installation</h3>
+        <div class="code-block"><pre><code>cd /path/to/meetvap-docker
+git pull
+./update.sh</code></pre></div>
+        <p>Set <code>MEETVAP_VERSION</code> in <code>.env</code> to an immutable release tag or use <code>latest</code>. The script pulls images, applies migrations, and replaces application containers without deleting named volumes.</p>
+        <h3>Archive installation</h3><p>Obtain the updated installation archive, transfer it, and extract it over the existing build directory. Do not delete <code>docker/.env</code>, <code>generated</code>, <code>secrets</code>, or <code>backups</code>.</p>
+        <div class="code-block"><pre><code># Administrator workstation
+scp /path/to/meetvap-local-build.tar.gz user@your-vps:/tmp/
+
+# VPS
+tar -xzf /tmp/meetvap-local-build.tar.gz -C /opt/meetvap-build
+cd /opt/meetvap-build/docker
+./update.sh</code></pre></div>
+        <p>The update script rebuilds the supplied application package, applies database migrations, and replaces the application containers.</p>
+      </section>
+
+      <section id="en-backup">
+        <h2>Backup and restore</h2>
+        <div class="code-block"><pre><code>cd /path/to/meetvap/docker
+./backup.sh
+ls -lah backups/</code></pre></div>
+        <p>A backup contains a PostgreSQL dump, uploaded files, <code>.env</code>, and generated runtime configuration. Copy the resulting directory to separate storage.</p>
+        <div class="code-block"><pre><code>./restore.sh backups/20260807T120000Z</code></pre></div>
+        <div class="callout danger"><strong>Restore replaces data</strong>The restore process replaces the current database and uploaded files. It requires typing <code>RESTORE</code>. Take a fresh backup first.</div>
+      </section>
+
+      <section id="en-operations">
+        <h2>Routine operations</h2>
+        <div class="code-block"><pre><code>cd /path/to/meetvap/docker
+docker compose ps
+docker compose logs --tail=200 server
+docker compose logs -f server admin livekit nginx
+docker compose restart server
+docker compose restart livekit
+docker compose up -d</code></pre></div>
+        <h3>Rebooting the VPS</h3><p>Core services use <code>restart: unless-stopped</code>. Do not run <code>docker compose down</code> before rebooting.</p>
+        <div class="code-block"><pre><code>sudo systemctl enable docker
+sudo reboot
+
+# After reconnecting
+cd /path/to/meetvap/docker
+docker compose ps
+docker compose logs --since=5m postgres redis server admin livekit nginx</code></pre></div>
+        <p>Reserve a static cloud IP. A normal reboot normally retains an ephemeral IP, but stopping and starting a VM can change it.</p>
+      </section>
+
+      <section id="en-certificates">
+        <h2>TLS certificates</h2>
+        <p>Certbot checks renewal every 12 hours. Nginx validates and reloads every 6 hours, so HTTPS adopts renewed files automatically.</p>
+        <div class="code-block"><pre><code>docker compose ps certbot-renew
+docker compose logs --tail=100 certbot-renew
+docker compose exec certbot-renew certbot renew --dry-run --webroot -w /var/www/certbot</code></pre></div>
+        <div class="callout warning"><strong>TURN certificate</strong>LiveKit reads the TURN TLS certificate when it starts. After an actual renewal, run <code>docker compose restart livekit</code>. Port 80 and all four DNS records must remain available for renewal.</div>
+      </section>
+
+      <section id="en-calls">
+        <h2>Call troubleshooting</h2>
+        <div class="code-block"><pre><code>docker compose ps livekit
+docker compose port livekit 7881
+sudo ss -lntup | grep -E ':(3478|5349|7881|7882)\b'
+docker compose exec -T server node -e \
+"fetch('http://livekit:7880').then(r=&gt;console.log(r.status)).catch(console.error)"</code></pre></div>
+        <p>For one controlled failed call, temporarily set <code>logging.level: debug</code> in <code>generated/livekit.yaml</code>, restart LiveKit, then collect:</p>
+        <div class="code-block"><pre><code>docker compose logs --since=1m -f server livekit nginx 2&gt;&amp;1 | tee /tmp/call-debug.log
+sudo tcpdump -ni any '(udp port 7882 or udp port 3478 or tcp port 5349 or tcp port 7881)'</code></pre></div>
+        <ul><li>Expect <code>issue-token-ready</code> for both users.</li><li>Expect both participants in the same room.</li><li>Expect bidirectional UDP 7882 or fallback/TURN traffic.</li><li>If config or certificates changed, restart LiveKit before deeper investigation.</li></ul>
+        <p>Return logging to <code>info</code> after testing.</p>
+      </section>
+
+      <section id="en-security">
+        <h2>Security and child-server behavior</h2>
+        <ul><li>This deployment is configured as <code>serverRole: child</code>.</li><li>The child stores device tokens but relays push requests to the main server.</li><li>Do not copy FCM or APNs provider credentials to the child.</li><li>Keep <code>.env</code>, generated files, relay keys, LiveKit credentials, and backups private.</li><li>Expose only the documented ports. Database, Redis, API port 4000, admin port 4300, and LiveKit port 7880 remain internal.</li></ul>
+        <p>The installer configures the non-secret App Attest identifiers in <code>generated/server-optional.env</code>. Keep development attestations disabled on production servers. Optional Google Play and Apple purchase-verification credentials can be mounted under <code>secrets/</code> and referenced from the same file.</p>
+      </section>
+
+      <section id="en-reset">
+        <h2>Stopping or resetting</h2>
+        <div class="code-block"><pre><code># Stop while preserving data
+docker compose stop
+
+# Start again
+docker compose up -d
+
+# Permanently remove this deployment and all its Docker volumes
+docker compose down --volumes --remove-orphans --rmi all
+rm -rf generated .env</code></pre></div>
+        <div class="callout danger"><strong>Permanent deletion</strong>The reset command deletes PostgreSQL, Redis state, uploads, and certificates stored in this deployment's named volumes. Back up first.</div>
+      </section>
+      <p class="footer">MeetVap Docker operations guide. Keep this file with the deployment bundle and update it when scripts or ports change.</p>
+    </main>
+
+    <main data-document="ru" hidden>
+      <div class="intro">
+        <p class="eyebrow">Руководство администратора</p>
+        <h1>Установка и эксплуатация MeetVap в Docker</h1>
+        <p class="lead">Полное руководство по развертыванию, обновлению, резервному копированию, мониторингу и диагностике дочернего сервера MeetVap.</p>
+        <div class="meta"><span>Установка через Git</span><span>Установка из архива</span><span>Четыре домена</span><span>Автоматические миграции</span></div>
+      </div>
+
+      <section id="ru-overview"><h2>Обзор</h2><p>Комплект запускает API, панель администратора, веб-клиент, клиент встреч, LiveKit, PostgreSQL, Redis, nginx и Certbot на одном Docker-хосте.</p>
+        <div class="grid"><div class="item"><strong>Web</strong><p><code>https://WEB_DOMAIN</code>, файлы отдает nginx.</p></div><div class="item"><strong>Meet</strong><p><code>https://MEET_DOMAIN</code>, файлы отдает nginx.</p></div><div class="item"><strong>API и сигнализация</strong><p><code>https://SERVER_DOMAIN</code> и <code>wss://SERVER_DOMAIN/rtc</code>.</p></div><div class="item"><strong>Admin</strong><p><code>https://ADMIN_DOMAIN</code> на отдельном домене.</p></div></div>
+        <p>PostgreSQL и Redis доступны только во внутренней Docker-сети. Именованные тома сохраняют базу, Redis, загрузки, сертификаты и ACME-данные.</p></section>
+
+      <section id="ru-requirements"><h2>Требования</h2><ul class="checklist"><li>Linux VPS с публичным IPv4.</li><li>Рекомендуемый минимум: 2 ядра, 4 ГБ RAM и достаточное место для загрузок.</li><li>Docker Engine и плагин Docker Compose.</li><li>Четыре DNS-имени, направленные на VPS.</li><li>Доступ root или sudo.</li></ul>
+        <h3>Установка Docker</h3><p>Для production установите Docker Engine и Compose по <a href="https://docs.docker.com/engine/install/" target="_blank" rel="noreferrer">официальной инструкции Docker</a>. Быстрая установка на чистом VPS:</p>
+        <div class="code-block"><pre><code>curl -fsSL https://get.docker.com -o get-docker.sh
+sudo sh get-docker.sh
+rm get-docker.sh
+sudo systemctl enable --now docker
+sudo usermod -aG docker "$USER"</code></pre></div><p>Выйдите и войдите снова, затем проверьте:</p><div class="code-block"><pre><code>docker --version
+docker compose version
+sudo systemctl is-enabled docker</code></pre></div></section>
+
+      <section id="ru-network"><h2>DNS и сетевой экран</h2><p>Создайте четыре DNS-записи <code>A</code>: web, meet, server/API и admin. Все должны указывать на публичный IP VPS. Домен API не должен проксироваться через CDN, который не поддерживает LiveKit WebSocket и WebRTC.</p>
+        <table><thead><tr><th>Порт</th><th>Протокол</th><th>Назначение</th></tr></thead><tbody><tr><td>80</td><td>TCP</td><td>Let's Encrypt и перенаправление на HTTPS</td></tr><tr><td>443</td><td>TCP</td><td>HTTPS, API, web, meet, admin и WebSocket</td></tr><tr><td>3478</td><td>UDP</td><td>TURN UDP</td></tr><tr><td>5349</td><td>TCP</td><td>TURN TLS</td></tr><tr><td>7881</td><td>TCP</td><td>Резервный TCP-канал LiveKit</td></tr><tr><td>7882</td><td>UDP</td><td>Основной медиатрафик LiveKit</td></tr></tbody></table>
+        <div class="code-block"><pre><code>sudo ufw allow 80/tcp
+sudo ufw allow 443/tcp
+sudo ufw allow 3478/udp
+sudo ufw allow 5349/tcp
+sudo ufw allow 7881/tcp
+sudo ufw allow 7882/udp
+sudo ufw reload</code></pre></div><div class="callout warning"><strong>Облачный firewall</strong>Откройте те же порты в GCP, AWS или панели VPS. Правила должны быть входящими и применяться к этой VM. Не открывайте порт 4000, PostgreSQL и Redis. Старый UDP-диапазон 50000-60000 не используется.</div></section>
+
+      <section id="ru-git-install"><h2>Вариант A: Git-репозиторий</h2><p>Используйте этот способ, если у вас есть доступ к Docker-репозиторию развертывания MeetVap. Необходимые образы приложений будут загружены автоматически.</p>
+        <div class="code-block"><pre><code>git clone &lt;docker-deployment-repository&gt; meetvap-docker
+cd meetvap-docker
+./install.sh</code></pre></div><p>Если вам выданы данные доступа к приватному реестру контейнеров, сначала выполните:</p><div class="code-block"><pre><code>docker login ghcr.io</code></pre></div>
+        <p>Установщик запросит четыре домена, адрес главного сервера, relay key дочернего сервера, логин администратора и пароль минимум из 12 символов. Он создаст секреты, запустит PostgreSQL и Redis, применит Prisma-миграции, получит общий TLS-сертификат для четырех доменов и запустит сервисы.</p>
+        <div class="callout"><strong>До установки</strong>Создайте запись дочернего сервера в Admin → Sub-domains главного сервера, скопируйте relay key и добавьте публичный IP дочернего VPS в белый список.</div></section>
+
+      <section id="ru-local-install"><h2>Вариант B: полученный установочный архив</h2><p>Используйте этот способ, если вместо доступа к репозиторию вы получили архив <code>meetvap-local-build.tar.gz</code>.</p><h3>Загрузка архива</h3>
+        <div class="code-block"><pre><code>scp /path/to/meetvap-local-build.tar.gz user@your-vps:/tmp/</code></pre></div><h3>На VPS</h3>
+        <div class="code-block"><pre><code>sudo mkdir -p /opt/meetvap-build
+sudo chown "$USER":"$USER" /opt/meetvap-build
+tar -xzf /tmp/meetvap-local-build.tar.gz -C /opt/meetvap-build
+cd /opt/meetvap-build/docker
+./install.sh --local-images</code></pre></div><p>Установщик соберет полученный пакет MeetVap на VPS. Образ nginx включает приложения web и meet. Необходимые сторонние Docker-образы будут загружены автоматически.</p></section>
+
+      <section id="ru-config"><h2>Конфигурация и создаваемые файлы</h2><p>Приватное состояние хранится в <code>docker/.env</code>, <code>docker/generated/</code> и <code>docker/secrets/</code>. Никогда не публикуйте эти пути.</p>
+        <table><thead><tr><th>Файл</th><th>Назначение</th></tr></thead><tbody><tr><td><code>.env</code></td><td>Домены, секреты, имена образов и версия.</td></tr><tr><td><code>generated/config.json</code></td><td>Роль child, relay главного сервера, retention, лимиты и политика.</td></tr><tr><td><code>generated/admin-config.json</code></td><td>Доступ администратора, сессии, БД и API URL.</td></tr><tr><td><code>generated/livekit-servers.json</code></td><td>Публичный URL клиента и внутренний health URL.</td></tr><tr><td><code>generated/livekit.yaml</code></td><td>LiveKit, Redis, TURN, порты и TLS.</td></tr><tr><td><code>generated/nginx.conf</code></td><td>Четыре HTTPS virtual host и маршрутизация.</td></tr><tr><td><code>generated/runtime-config.js</code></td><td>API URL для web и meet.</td></tr><tr><td><code>generated/server-optional.env</code></td><td>Идентификаторы App Attest и необязательные параметры проверки покупок.</td></tr></tbody></table>
+        <div class="callout success"><strong>Правильная схема LiveKit URL</strong>Клиенты получают <code>wss://SERVER_DOMAIN</code>. API и admin проверяют здоровье через <code>http://livekit:7880</code>. Этот внутренний URL правильный, его не следует заменять публичным доменом.</div><h3>Начальная база данных</h3><p>Установщик выполняет <code>prisma migrate deploy</code>. SQL dump для первой установки не нужен. При обновлениях применяются только новые миграции.</p></section>
+
+      <section id="ru-update"><h2>Обновление</h2><h3>Установка через Git/готовые образы</h3><div class="code-block"><pre><code>cd /path/to/meetvap-docker
+git pull
+./update.sh</code></pre></div><p>Укажите в <code>.env</code> неизменяемый тег <code>MEETVAP_VERSION</code> или <code>latest</code>. Скрипт загружает образы, применяет миграции и заменяет контейнеры, не удаляя тома.</p>
+        <h3>Установка из архива</h3><p>Получите обновленный установочный архив, передайте его и распакуйте поверх существующего каталога. Не удаляйте <code>docker/.env</code>, <code>generated</code>, <code>secrets</code> и <code>backups</code>.</p>
+        <div class="code-block"><pre><code># Компьютер администратора
+scp /path/to/meetvap-local-build.tar.gz user@your-vps:/tmp/
+
+# VPS
+tar -xzf /tmp/meetvap-local-build.tar.gz -C /opt/meetvap-build
+cd /opt/meetvap-build/docker
+./update.sh</code></pre></div><p>Скрипт обновления собирает полученный пакет, применяет миграции базы данных и заменяет контейнеры приложений.</p></section>
+
+      <section id="ru-backup"><h2>Резервное копирование и восстановление</h2><div class="code-block"><pre><code>cd /path/to/meetvap/docker
+./backup.sh
+ls -lah backups/</code></pre></div><p>Копия содержит дамп PostgreSQL, загруженные файлы, <code>.env</code> и runtime-конфигурацию. Скопируйте каталог на отдельный носитель.</p><div class="code-block"><pre><code>./restore.sh backups/20260807T120000Z</code></pre></div><div class="callout danger"><strong>Восстановление заменяет данные</strong>Текущая база и загрузки будут заменены. Скрипт требует ввести <code>RESTORE</code>. Сначала создайте свежую копию.</div></section>
+
+      <section id="ru-operations"><h2>Регулярные операции</h2><div class="code-block"><pre><code>cd /path/to/meetvap/docker
+docker compose ps
+docker compose logs --tail=200 server
+docker compose logs -f server admin livekit nginx
+docker compose restart server
+docker compose restart livekit
+docker compose up -d</code></pre></div><h3>Перезагрузка VPS</h3><p>Основные сервисы используют <code>restart: unless-stopped</code>. Не выполняйте <code>docker compose down</code> перед перезагрузкой.</p><div class="code-block"><pre><code>sudo systemctl enable docker
+sudo reboot
+
+# После повторного входа
+cd /path/to/meetvap/docker
+docker compose ps
+docker compose logs --since=5m postgres redis server admin livekit nginx</code></pre></div><p>Закрепите статический облачный IP. Обычная перезагрузка обычно сохраняет временный IP, но остановка и новый запуск VM могут его изменить.</p></section>
+
+      <section id="ru-certificates"><h2>TLS-сертификаты</h2><p>Certbot проверяет продление каждые 12 часов. Nginx проверяет конфигурацию и перезагружается каждые 6 часов, поэтому HTTPS автоматически подхватывает новые файлы.</p><div class="code-block"><pre><code>docker compose ps certbot-renew
+docker compose logs --tail=100 certbot-renew
+docker compose exec certbot-renew certbot renew --dry-run --webroot -w /var/www/certbot</code></pre></div><div class="callout warning"><strong>Сертификат TURN</strong>LiveKit читает TLS-сертификат TURN при запуске. После реального продления выполните <code>docker compose restart livekit</code>. Порт 80 и DNS всех четырех доменов должны оставаться доступными.</div></section>
+
+      <section id="ru-calls"><h2>Диагностика звонков</h2><div class="code-block"><pre><code>docker compose ps livekit
+docker compose port livekit 7881
+sudo ss -lntup | grep -E ':(3478|5349|7881|7882)\b'
+docker compose exec -T server node -e \
+"fetch('http://livekit:7880').then(r=&gt;console.log(r.status)).catch(console.error)"</code></pre></div><p>Для одного контролируемого сбоя временно установите <code>logging.level: debug</code> в <code>generated/livekit.yaml</code>, перезапустите LiveKit и соберите:</p><div class="code-block"><pre><code>docker compose logs --since=1m -f server livekit nginx 2&gt;&amp;1 | tee /tmp/call-debug.log
+sudo tcpdump -ni any '(udp port 7882 or udp port 3478 or tcp port 5349 or tcp port 7881)'</code></pre></div><ul><li>Должен появиться <code>issue-token-ready</code> для обоих пользователей.</li><li>Оба участника должны войти в одну комнату.</li><li>Должен идти двусторонний UDP 7882 либо fallback/TURN-трафик.</li><li>После изменения конфигурации или сертификата сначала перезапустите LiveKit.</li></ul><p>После проверки верните уровень <code>info</code>.</p></section>
+
+      <section id="ru-security"><h2>Безопасность и режим child</h2><ul><li>Развертывание использует <code>serverRole: child</code>.</li><li>Child хранит device tokens, но передает push-запросы главному серверу.</li><li>Не копируйте FCM и APNs provider credentials на child.</li><li>Храните <code>.env</code>, generated-файлы, relay keys, LiveKit credentials и backups приватно.</li><li>Открывайте только документированные порты. PostgreSQL, Redis, API 4000, admin 4300 и LiveKit 7880 остаются внутренними.</li></ul><p>Установщик записывает публичные идентификаторы App Attest в <code>generated/server-optional.env</code>. На production-серверах не включайте development attestations. Необязательные данные проверки покупок Google Play и Apple можно разместить в <code>secrets/</code> и указать в том же файле.</p></section>
+
+      <section id="ru-reset"><h2>Остановка и полный сброс</h2><div class="code-block"><pre><code># Остановка с сохранением данных
+docker compose stop
+
+# Повторный запуск
+docker compose up -d
+
+# Полное удаление развертывания и его Docker-томов
+docker compose down --volumes --remove-orphans --rmi all
+rm -rf generated .env</code></pre></div><div class="callout danger"><strong>Необратимое удаление</strong>Команда сброса удаляет PostgreSQL, Redis, загрузки и сертификаты в именованных томах. Сначала создайте резервную копию.</div></section>
+      <p class="footer">Руководство MeetVap Docker. Храните этот файл вместе с комплектом и обновляйте при изменении скриптов или портов.</p>
+    </main>
+  </div>
+
+  <script>
+    (() => {
+      const buttons = [...document.querySelectorAll('[data-language-button]')];
+      const documents = [...document.querySelectorAll('[data-document]')];
+      const navigations = [...document.querySelectorAll('[data-navigation]')];
+      const uiLabels = [...document.querySelectorAll('[data-ui-en]')];
+      let language = localStorage.getItem('meetvap-doc-language') || (navigator.language.toLowerCase().startsWith('ru') ? 'ru' : 'en');
+
+      function setLanguage(nextLanguage) {
+        language = nextLanguage === 'ru' ? 'ru' : 'en';
+        document.documentElement.lang = language;
+        document.title = language === 'ru' ? 'MeetVap Docker — руководство' : 'MeetVap Docker Operations Guide';
+        localStorage.setItem('meetvap-doc-language', language);
+        buttons.forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.languageButton === language)));
+        documents.forEach((documentNode) => { documentNode.hidden = documentNode.dataset.document !== language; });
+        navigations.forEach((navigation) => { navigation.hidden = navigation.dataset.navigation !== language; });
+        uiLabels.forEach((node) => { node.textContent = node.dataset[`ui${language === 'ru' ? 'Ru' : 'En'}`]; });
+        document.querySelectorAll('.copy-button').forEach((button) => { button.textContent = language === 'ru' ? 'Копировать' : 'Copy'; });
+      }
+
+      buttons.forEach((button) => button.addEventListener('click', () => setLanguage(button.dataset.languageButton)));
+      document.querySelectorAll('.code-block').forEach((block) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'copy-button';
+        button.addEventListener('click', async () => {
+          const value = block.querySelector('pre').innerText;
+          if (navigator.clipboard && window.isSecureContext) {
+            await navigator.clipboard.writeText(value);
+          } else {
+            const textarea = document.createElement('textarea');
+            textarea.value = value;
+            textarea.style.position = 'fixed';
+            textarea.style.opacity = '0';
+            document.body.appendChild(textarea);
+            textarea.select();
+            document.execCommand('copy');
+            textarea.remove();
+          }
+          button.textContent = language === 'ru' ? 'Скопировано' : 'Copied';
+          window.setTimeout(() => { button.textContent = language === 'ru' ? 'Копировать' : 'Copy'; }, 1200);
+        });
+        block.appendChild(button);
+      });
+
+      const observer = new IntersectionObserver((entries) => {
+        entries.forEach((entry) => {
+          if (!entry.isIntersecting) return;
+          document.querySelectorAll('.sidebar a').forEach((link) => link.classList.toggle('active', link.getAttribute('href') === `#${entry.target.id}`));
+        });
+      }, { rootMargin: '-20% 0px -70% 0px' });
+      document.querySelectorAll('section[id]').forEach((section) => observer.observe(section));
+      setLanguage(language);
+    })();
+  </script>
+</body>
+</html>

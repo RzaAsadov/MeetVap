@@ -2,9 +2,12 @@ import { Server } from 'http';
 import jwt from 'jsonwebtoken';
 import { Server as SocketServer } from 'socket.io';
 
+import { getSessionAttestationAccessDecision } from './attestationAccess';
 import { getSocketMessageClientIdentity, recordUserClientActivity } from './clientActivity';
+import { getUserAuthState } from './auth';
 import { config } from './config';
 import { hashAccessToken } from './clientCompatibility';
+import { assertDeviceIdentifierAllowed } from './deviceAccess';
 import { MASK_SOCKET_ARGS_KEY, MASK_SOCKET_AUTH_KEY, MASK_SOCKET_VERSION_KEY, MASK_VERSION, unmaskPayload } from './payloadMask';
 import { prisma } from './prisma';
 import { JwtPayload } from './types';
@@ -40,13 +43,29 @@ export function createSocketServer(server: Server) {
       }
 
       const payload = jwt.verify(token, config.JWT_SECRET) as JwtPayload;
+      const tokenHash = hashAccessToken(token);
+      const installationId = socket.handshake.auth?.installationId ?? socket.handshake.headers['x-meetvap-installation-id'];
+
+      if (typeof installationId !== 'string' || !/^[A-Za-z0-9._-]{16,64}$/.test(installationId.trim())) {
+        next(new Error('INSTALLATION_ID_REQUIRED'));
+        return;
+      }
+
+      await assertDeviceIdentifierAllowed('INSTALLATION_ID', installationId.trim());
+
+      const authState = await getUserAuthState(payload.sub);
+
+      if (!authState.exists || authState.blocked || (payload.authVersion ?? 0) !== authState.authVersion) {
+        next(new Error(authState.blocked ? 'ACCOUNT_BLOCKED' : 'SESSION_REVOKED'));
+        return;
+      }
       if (payload.scope === 'web') {
         const session = await prisma.session.findFirst({
           select: { id: true },
           where: {
             expiresAt: { gt: new Date() },
             platform: 'WEB',
-            tokenHash: hashAccessToken(token),
+            tokenHash,
             userId: payload.sub,
           },
         });
@@ -55,6 +74,12 @@ export function createSocketServer(server: Server) {
           next(new Error('Web session expired'));
           return;
         }
+      }
+      const attestationDecision = await getSessionAttestationAccessDecision(payload.sub, tokenHash);
+
+      if (!attestationDecision.allowed) {
+        next(new Error(attestationDecision.code ?? 'ATTESTATION_REQUIRED'));
+        return;
       }
       const user = await prisma.user.findUnique({
         select: {
@@ -177,6 +202,18 @@ export function createSocketServer(server: Server) {
   });
 
   return io;
+}
+
+export async function suspendUserSockets(io: SocketServer, userId: string, reason?: string | null) {
+  const room = `user:${userId}`;
+  const sockets = await io.in(room).fetchSockets();
+
+  io.to(room).emit('account:suspended', {
+    code: 'ACCOUNT_BLOCKED',
+    reason: reason || null,
+  });
+  await io.in(room).disconnectSockets(true);
+  return sockets.length;
 }
 
 async function updateSocketForegroundState(io: SocketServer, socket: { data: Record<string, unknown> }, userId: string, isForeground: boolean) {

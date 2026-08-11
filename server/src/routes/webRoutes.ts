@@ -1,8 +1,10 @@
 import crypto from 'crypto';
 import { Router } from 'express';
 
-import { getAuthedUser, requireAuth, signWebAccessToken, toAuthUser } from '../auth';
+import { getAuthedUser, isAdminBlocked, requireAuth, signWebAccessToken, toAuthUser } from '../auth';
 import { getClientMetadataWriteData, hashAccessToken } from '../clientCompatibility';
+import { normalizeInstallationId } from '../clientActivity';
+import { assertRequestDeviceAllowed } from '../deviceAccess';
 import { config } from '../config';
 import { HttpError } from '../httpError';
 import { prisma } from '../prisma';
@@ -15,6 +17,7 @@ const WEB_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 webRoutes.post('/pairing', async (req, res, next) => {
   try {
+    await assertRequestDeviceAllowed(req, { required: true });
     const secret = crypto.randomBytes(32).toString('base64url');
     const requestHost = req.get('host');
     const serverUrl = normalizeServerUrl(
@@ -48,6 +51,7 @@ webRoutes.post('/pairing', async (req, res, next) => {
 
 webRoutes.get('/pairing/:pairingId', async (req, res, next) => {
   try {
+    await assertRequestDeviceAllowed(req, { required: true });
     const pairingId = String(req.params.pairingId ?? '');
     const secret = getSingleQueryValue(req.query.secret);
 
@@ -77,6 +81,10 @@ webRoutes.get('/pairing/:pairingId', async (req, res, next) => {
 
     if (!user) {
       throw new HttpError(404, 'User not found');
+    }
+
+    if (await isAdminBlocked(user.id)) {
+      throw new HttpError(403, 'This account is blocked', { code: 'ACCOUNT_BLOCKED' });
     }
 
     const token = await createSingleWebSession(req, toAuthUser(user));
@@ -257,7 +265,10 @@ async function createSingleWebSession(req: { get: (name: string) => string | und
 
   await prisma.session.create({
     data: {
-      ...getClientMetadataWriteData({ platform: 'WEB' }),
+      ...getClientMetadataWriteData({
+        installationId: normalizeInstallationId(req.get('x-meetvap-installation-id')) ?? undefined,
+        platform: 'WEB',
+      }),
       expiresAt: new Date(Date.now() + WEB_SESSION_TTL_MS),
       ipAddress: getRequestIp(req),
       tokenHash: hashAccessToken(token),

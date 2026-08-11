@@ -2,7 +2,7 @@ import * as SQLite from 'expo-sqlite';
 import Constants from 'expo-constants';
 import * as FileSystem from 'expo-file-system/legacy';
 
-import { Message } from '../types/domain';
+import { Conversation, Message } from '../types/domain';
 
 type MessageDatabaseExecutor = Pick<SQLite.SQLiteDatabase, 'getAllAsync' | 'runAsync'>;
 
@@ -344,6 +344,75 @@ export async function removeAllMessagesFromDatabase() {
   await enqueueDatabaseWrite(() => database.runAsync('delete from messages').then(() => undefined));
 }
 
+export async function getConversationsFromDatabase() {
+  const database = await getDatabase();
+  await waitForPendingDatabaseWrites();
+  const rows = await database.getAllAsync<{ payload: string }>(
+    'select payload from conversations order by updatedAtMs desc, id asc',
+  );
+  const conversations: Conversation[] = [];
+
+  rows.forEach((row) => {
+    try {
+      conversations.push(JSON.parse(row.payload) as Conversation);
+    } catch {
+      // Ignore malformed local rows and let the server restore them.
+    }
+  });
+
+  return conversations;
+}
+
+export async function replaceConversationsInDatabase(conversations: Conversation[]) {
+  const database = await getDatabase();
+  const deduped = Array.from(new Map(conversations.map((conversation) => [conversation.id, conversation])).values());
+
+  await enqueueDatabaseWrite(() => runDatabaseTransaction(database, async (executor) => {
+    await executor.runAsync('delete from conversations');
+    for (const conversation of deduped) {
+      await upsertConversationRow(executor, conversation);
+    }
+  }));
+}
+
+export async function upsertConversationsInDatabase(conversations: Conversation[]) {
+  const deduped = Array.from(new Map(conversations.map((conversation) => [conversation.id, conversation])).values());
+
+  if (deduped.length === 0) {
+    return;
+  }
+
+  const database = await getDatabase();
+  await enqueueDatabaseWrite(() => runDatabaseTransaction(database, async (executor) => {
+    for (const conversation of deduped) {
+      await upsertConversationRow(executor, conversation);
+    }
+  }));
+}
+
+export async function removeConversationRecordsFromDatabase(conversationIds: string[]) {
+  const uniqueConversationIds = Array.from(new Set(conversationIds.filter(Boolean)));
+
+  if (uniqueConversationIds.length === 0) {
+    return;
+  }
+
+  const database = await getDatabase();
+  await enqueueDatabaseWrite(() => runDatabaseTransaction(database, async (executor) => {
+    for (const conversationIdChunk of chunk(uniqueConversationIds, 200)) {
+      await executor.runAsync(
+        `delete from conversations where id in (${conversationIdChunk.map(() => '?').join(', ')})`,
+        conversationIdChunk,
+      );
+    }
+  }));
+}
+
+export async function removeAllConversationRecordsFromDatabase() {
+  const database = await getDatabase();
+  await enqueueDatabaseWrite(() => database.runAsync('delete from conversations').then(() => undefined));
+}
+
 export async function ensureMessageDatabaseReady() {
   await getDatabase();
 }
@@ -559,6 +628,11 @@ async function openDatabase() {
     );
     create index if not exists messages_conversation_created_idx
       on messages (conversationId, createdAtMs);
+    create table if not exists conversations (
+      id text primary key not null,
+      payload text not null,
+      updatedAtMs integer not null
+    );
     create table if not exists local_call_stats (
       id text primary key not null,
       appVersion text not null,
@@ -736,6 +810,15 @@ async function upsertMessageRow(
       JSON.stringify(message),
       Date.now(),
     ],
+  );
+}
+
+async function upsertConversationRow(executor: MessageDatabaseExecutor, conversation: Conversation) {
+  await executor.runAsync(
+    `insert into conversations (id, payload, updatedAtMs)
+      values (?, ?, ?)
+      on conflict(id) do update set payload = excluded.payload, updatedAtMs = excluded.updatedAtMs`,
+    [conversation.id, JSON.stringify(conversation), Date.now()],
   );
 }
 

@@ -4,6 +4,7 @@ import { z } from 'zod';
 
 const positiveInteger = z.number().int().positive();
 const nonNegativeInteger = z.number().int().nonnegative();
+const attestationModeSchema = z.enum(['observe', 'soft', 'enforce']);
 const appDomainSchema = z.string()
   .trim()
   .transform((value) => value.toLowerCase().replace(/\.$/, ''))
@@ -54,18 +55,27 @@ const operationalConfigSchema = z.object({
   }),
   attestation: z.object({
     androidRequiredBuild: positiveInteger.default(999999),
+    bootstrapGraceMinutes: positiveInteger.default(15),
     challengeTtlMinutes: positiveInteger.default(2),
     iosRequiredBuild: positiveInteger.default(999999),
     legacyAllowUntil: z.string().datetime().nullable().default(null),
-    mode: z.enum(['observe', 'soft', 'enforce']).default('observe'),
+    mode: attestationModeSchema.default('observe'),
+    platforms: z.object({
+      android: attestationModeSchema.optional(),
+      ios: attestationModeSchema.optional(),
+    }).default({}),
     trustTtlHours: positiveInteger.default(24),
+    unevaluatedRetryAfterSeconds: positiveInteger.default(300),
   }).default({
     androidRequiredBuild: 999999,
+    bootstrapGraceMinutes: 15,
     challengeTtlMinutes: 2,
     iosRequiredBuild: 999999,
     legacyAllowUntil: null,
     mode: 'observe',
+    platforms: {},
     trustTtlHours: 24,
+    unevaluatedRetryAfterSeconds: 300,
   }),
   maintenance: z.object({
     cleanupIntervalMinutes: positiveInteger.default(15),
@@ -155,9 +165,15 @@ export function getClientPolicy() {
     },
     attestation: {
       androidRequiredBuild: operationalConfig.attestation.androidRequiredBuild,
+      bootstrapGraceMinutes: operationalConfig.attestation.bootstrapGraceMinutes,
       iosRequiredBuild: operationalConfig.attestation.iosRequiredBuild,
       mode: operationalConfig.attestation.mode,
+      platforms: {
+        android: getAttestationMode('android'),
+        ios: getAttestationMode('ios'),
+      },
       trustTtlHours: operationalConfig.attestation.trustTtlHours,
+      unevaluatedRetryAfterSeconds: operationalConfig.attestation.unevaluatedRetryAfterSeconds,
     },
     premium: {
       trialDays: operationalConfig.premium.trialDays,
@@ -177,4 +193,11 @@ export function getClientPolicy() {
       maxTotalBytes: operationalConfig.webMediaCache.maxTotalBytes,
     },
   };
+}
+
+export type AttestationPlatform = 'android' | 'ios';
+export type AttestationMode = 'observe' | 'soft' | 'enforce';
+
+export function getAttestationMode(platform: AttestationPlatform): AttestationMode {
+  return operationalConfig.attestation.platforms[platform] ?? operationalConfig.attestation.mode;
 }

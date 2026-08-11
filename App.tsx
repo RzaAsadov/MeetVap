@@ -6,7 +6,7 @@ import { NavigationContainer, DefaultTheme } from '@react-navigation/native';
 import * as Notifications from 'expo-notifications';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Appearance, AppState, Linking, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Appearance, AppState, Linking, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { RootNavigator } from './src/navigation/RootNavigator';
@@ -28,6 +28,7 @@ import { getAuthToken, getServerUrl, getStoredLanguage, migrateLegacyMessageStor
 import { resolveLanguage, setI18nLanguage, t, type LanguagePreference } from './src/i18n';
 import { clearNativeQuickReplyCredentials, setNativeQuickReplyCredentials } from './src/native/CallNative';
 import { initializeClientInstallationId } from './src/lib/appClientInfo';
+import { subscribeToAuthSuspension } from './src/lib/authSuspensionEvents';
 
 // MeetVap owns AVAudioSession activation through CallNative so incoming
 // CallKit calls and regular LiveKit calls share one authority. LiveKit's
@@ -75,6 +76,7 @@ export default function App() {
   const isDarkMode = useAppStore((state) => state.isDarkMode);
   const serverUrl = useAppStore((state) => state.serverUrl);
   const syncSystemDarkMode = useAppStore((state) => state.syncSystemDarkMode);
+  const signOut = useAppStore((state) => state.signOut);
   const subscriptionStatus = useAppStore((state) => state.subscriptionStatus);
   const user = useAppStore((state) => state.user);
   const [isInitialCallUrlCheckPending, setInitialCallUrlCheckPending] = useState(Platform.OS === 'ios');
@@ -85,6 +87,17 @@ export default function App() {
     done: 0,
     total: 0,
   });
+
+  useEffect(() => subscribeToAuthSuspension((event) => {
+    void signOut().finally(() => {
+      Alert.alert(
+        event.code === 'DEVICE_BLOCKED' ? 'Device blocked' : 'Account suspended',
+        event.message || (event.code === 'DEVICE_BLOCKED'
+          ? 'This device cannot sign in to MeetVap.'
+          : 'This account has been suspended. Contact support for assistance.'),
+      );
+    });
+  }), [signOut]);
 
   useEffect(() => {
     let isCancelled = false;

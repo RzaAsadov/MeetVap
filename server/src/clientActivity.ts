@@ -72,7 +72,7 @@ export async function recordUserClientActivity(userId: string, client: MessageCl
   });
 }
 
-function normalizeInstallationId(value: unknown) {
+export function normalizeInstallationId(value: unknown) {
   const normalized = typeof value === 'string' ? value.trim() : '';
 
   return /^[A-Za-z0-9._-]{16,64}$/.test(normalized) ? normalized : null;

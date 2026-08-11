@@ -29,10 +29,9 @@ Then open `http://localhost:4300`.
 
 ## Notes
 
-- The admin panel creates `AdminBlockedUser` if it does not already exist.
-- The backend migration `000010_admin_blocked_users` also creates this table.
-- Blocking a user removes their sessions and the backend rejects future login/API access.
-- Phone model is not currently stored by the mobile app. The panel shows available device evidence: push token platform/provider plus session user agent and IP address.
+- Account suspension is executed by the backend internal moderation API. It revokes authentication, sessions, sockets, calls, presence, and push tokens together.
+- Administrators can optionally block selected known app installations. Device identifiers are HMAC-hashed in `AdminDeviceBlock`; raw identifiers are not stored in the block record.
+- `backendPublicUrl` and `SERVER_EVENTS_INTERNAL_SECRET` must point to and match the backend configuration. Suspension deliberately has no direct-database fallback.
 - Dashboard live counters use database state and poll `/api/live` every 5 seconds. Peak online/call counters are tracked in memory since the admin process started; persistent historical online peaks require a backend sampling table.
 - New sections include calls, groups, and subscriptions. User detail pages include contacts management, sessions, push devices, reports, calls, groups, and paid entitlements.
 - Group detail pages allow admin-side member/admin changes, ownership transfer, and group setting edits.

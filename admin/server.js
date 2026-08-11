@@ -168,6 +168,23 @@ async function init() {
       "createdAt" timestamp(3) not null default current_timestamp
     )
   `);
+  await pool.query('alter table "AdminBlockedUser" add column if not exists "createdByAdminUsername" text');
+  await pool.query(`
+    create table if not exists "AdminDeviceBlock" (
+      id text primary key,
+      "sourceUserId" text references "User"(id) on delete set null,
+      "identifierType" text not null,
+      "identifierHash" text not null,
+      label text,
+      platform text,
+      reason text,
+      "createdByAdminUsername" text,
+      "createdAt" timestamp(3) not null default current_timestamp,
+      "revokedAt" timestamp(3),
+      "revokedByAdminUsername" text,
+      unique ("identifierType", "identifierHash")
+    )
+  `);
   await pool.query(`
     create table if not exists "IpLocationCache" (
       ip text primary key,
@@ -1793,10 +1810,10 @@ app.get('/users/:id', requireAdmin, requireSection('users'), async (req, res, ne
     const showSensitiveUserDetails = canEdit('users');
     const [
       user, sessions, devices, messageStats, mediaStats, groups, ownedGroups, reportsByUser,
-      reportsAgainstUser, blocks, contacts, subscribers, subscriptions, calls,
+      reportsAgainstUser, blocks, contacts, subscribers, subscriptions, calls, attestations, deviceBlocks,
     ] = await Promise.all([
       getUser(id),
-      showSensitiveUserDetails ? pool.query('select * from "Session" where "userId" = $1 order by "createdAt" desc limit 30', [id]) : { rows: [] },
+      showSensitiveUserDetails ? pool.query('select * from "Session" where "userId" = $1 order by "createdAt" desc limit 100', [id]) : { rows: [] },
       showSensitiveUserDetails ? pool.query('select * from "DevicePushToken" where "userId" = $1 order by "updatedAt" desc', [id]) : { rows: [] },
       getUserMessageStats(id),
       getUserMediaStats(id),
@@ -1809,12 +1826,18 @@ app.get('/users/:id', requireAdmin, requireSection('users'), async (req, res, ne
       showSensitiveUserDetails ? getUserSavedBy(id) : { rows: [] },
       getUserSubscriptions(id),
       showSensitiveUserDetails ? getUserCalls(id) : { rows: [] },
+      showSensitiveUserDetails ? pool.query('select da.*, s."installationId" from "DeviceAttestation" da left join "Session" s on s.id = da."sessionId" where da."userId" = $1 order by da."lastAttestedAt" desc limit 100', [id]) : { rows: [] },
+      showSensitiveUserDetails ? pool.query('select * from "AdminDeviceBlock" where "sourceUserId" = $1 order by "createdAt" desc', [id]) : { rows: [] },
     ]);
     if (!user) {
       res.status(404).send(page({ active: 'users', body: empty('User not found.'), title: 'Not found' }));
       return;
     }
     const blocked = blocks.rows[0];
+    const activeDeviceBlocks = deviceBlocks.rows.filter((item) => !item.revokedAt);
+    const suspensionModal = canEdit('users')
+      ? userSuspensionModal(user, blocked, sessions.rows, devices.rows, attestations.rows, activeDeviceBlocks)
+      : '';
     const [registrationIpLocation, latestIpLocation] = await Promise.all([
       resolveIpLocation(user.registration_ip),
       resolveIpLocation(user.latest_ip),
@@ -1846,11 +1869,11 @@ app.get('/users/:id', requireAdmin, requireSection('users'), async (req, res, ne
     ];
     const adminActionsBody = canEdit('users') ? `
       <div class="stack">
-        <form method="post" action="/users/${escapeAttr(id)}/block">
-          <label>${escapeHtml(translateText('Block reason'))} <textarea name="reason" rows="3">${blocked ? escapeHtml(blocked.reason || '') : ''}</textarea></label>
-          <button class="danger">${escapeHtml(translateText(blocked ? 'Update block' : 'Block user'))}</button>
-        </form>
-        ${blocked ? `<form method="post" action="/users/${escapeAttr(id)}/unblock"><button>${escapeHtml(translateText('Unblock user'))}</button></form>` : ''}
+        <button class="danger" type="button" onclick="document.getElementById('user-suspension-modal-${escapeAttr(id)}').showModal()">${escapeHtml(translateText(blocked ? 'Update block' : 'Block user'))}</button>
+        ${blocked ? `<form method="post" action="/users/${escapeAttr(id)}/unblock">
+          ${activeDeviceBlocks.map((item) => `<label class="check"><input name="unblockDeviceBlockIds" type="checkbox" value="${escapeAttr(item.id)}"> ${escapeHtml(translateText('Also unblock device'))}: ${escapeHtml(item.label || item.platform || item.identifierType)}</label>`).join('')}
+          <button>${escapeHtml(translateText('Unblock user'))}</button>
+        </form>` : ''}
         <details class="admin-details">
           <summary>${escapeHtml(translateText('Change password'))}</summary>
           <form method="post" action="/users/${escapeAttr(id)}/password" onsubmit="return confirm('${escapeAttr(translateText('Change this user password and sign out their active sessions?'))}')">
@@ -1931,6 +1954,14 @@ app.get('/users/:id', requireAdmin, requireSection('users'), async (req, res, ne
             label: countTitle('Push devices', devices.rows.length),
           },
           {
+            body: attestationTable(attestations.rows),
+            label: countTitle('Device attestations', attestations.rows.length),
+          },
+          {
+            body: deviceBlockTable(deviceBlocks.rows),
+            label: countTitle('Device blocks', deviceBlocks.rows.length),
+          },
+          {
             body: `<div class="privacy-pill-list">${privacySummary(user)}</div>`,
             label: translateText('Privacy'),
           },
@@ -1954,6 +1985,7 @@ app.get('/users/:id', requireAdmin, requireSection('users'), async (req, res, ne
       active: 'users',
       body: `
         ${hero(escapeHtml(user.displayName), `@${escapeHtml(user.username)}`, `<div class="actions"><a class="btn secondary" href="/users">Back</a>${logout()}</div>`)}
+        ${req.query.moderation ? `<div class="notice success">${escapeHtml(`Suspension completed: ${String(req.query.moderation)}`)}</div>` : ''}
         <section class="metric-grid user-metric-grid">
           ${userMetricCards}
         </section>
@@ -1964,6 +1996,7 @@ app.get('/users/:id', requireAdmin, requireSection('users'), async (req, res, ne
           ${modalCards}
         </section>
         ${manualPaymentModal(id)}
+        ${suspensionModal}
       `,
       title: user.displayName || user.username,
     }));
@@ -1974,13 +2007,20 @@ app.get('/users/:id', requireAdmin, requireSection('users'), async (req, res, ne
 
 app.post('/users/:id/block', requireAdmin, requireSection('users', 'edit'), requireSuperAdmin, async (req, res, next) => {
   try {
-    await pool.query(`
-      insert into "AdminBlockedUser" ("userId", reason)
-      values ($1, $2)
-      on conflict ("userId") do update set reason = excluded.reason, "createdAt" = current_timestamp
-    `, [req.params.id, req.body.reason || null]);
-    await pool.query('delete from "Session" where "userId" = $1', [req.params.id]);
-    res.redirect(`/users/${encodeURIComponent(req.params.id)}`);
+    const result = await callInternalModeration(`/users/${encodeURIComponent(req.params.id)}/suspend`, {
+      adminUsername: req.admin.username,
+      attestationKeyIds: formValues(req.body.attestationKeyIds),
+      blockDevices: req.body.blockDevices === 'true',
+      installationIds: formValues(req.body.installationIds),
+      reason: String(req.body.reason || '').trim(),
+    });
+    const summary = [
+      `${result.sessionsRevoked || 0} sessions`,
+      `${result.socketsDisconnected || 0} sockets`,
+      `${result.pushTokensRemoved || 0} push tokens`,
+      `${result.devicesBlocked || 0} device identifiers`,
+    ].join(', ');
+    res.redirect(`/users/${encodeURIComponent(req.params.id)}?moderation=${encodeURIComponent(summary)}`);
   } catch (error) {
     next(error);
   }
@@ -1988,7 +2028,10 @@ app.post('/users/:id/block', requireAdmin, requireSection('users', 'edit'), requ
 
 app.post('/users/:id/unblock', requireAdmin, requireSection('users', 'edit'), requireSuperAdmin, async (req, res, next) => {
   try {
-    await pool.query('delete from "AdminBlockedUser" where "userId" = $1', [req.params.id]);
+    await callInternalModeration(`/users/${encodeURIComponent(req.params.id)}/unblock`, {
+      adminUsername: req.admin.username,
+      unblockDeviceBlockIds: formValues(req.body.unblockDeviceBlockIds),
+    });
     res.redirect(`/users/${encodeURIComponent(req.params.id)}`);
   } catch (error) {
     next(error);
@@ -2803,6 +2846,11 @@ async function getOverview() {
   `)).rows[0];
 }
 
+function formValues(value) {
+  if (Array.isArray(value)) return value.map(String).filter(Boolean);
+  return value ? [String(value)] : [];
+}
+
 async function getCleanupExposure() {
   const textCutoff = new Date(Date.now() - backendPolicy.retention.textMessageDays * 24 * 60 * 60 * 1000);
   const mediaCutoff = new Date(Date.now() - backendPolicy.retention.mediaMessageDays * 24 * 60 * 60 * 1000);
@@ -3027,6 +3075,7 @@ function normalizeLiveKitServerConfig(parsed) {
 
     return {
       enabled: item.enabled !== false,
+      healthUrl: String(item.healthUrl || '').trim(),
       id,
       maxActiveCalls: Number.isInteger(item.maxActiveCalls) && item.maxActiveCalls > 0 ? item.maxActiveCalls : null,
       url,
@@ -3057,7 +3106,7 @@ async function probeLiveKitServerHealth(server) {
   const timeout = setTimeout(() => controller.abort(), 2500);
 
   try {
-    const response = await fetch(liveKitHttpUrl(server.url), {
+    const response = await fetch(liveKitHttpUrl(server.healthUrl || server.url), {
       cache: 'no-store',
       method: 'GET',
       signal: controller.signal,
@@ -4457,6 +4506,57 @@ function manualPaymentModal(userId) {
   </dialog>`;
 }
 
+function userSuspensionModal(user, blocked, sessions, pushTokens, attestations, activeDeviceBlocks) {
+  const installations = new Map();
+
+  [...sessions, ...pushTokens].forEach((item) => {
+    const installationId = String(item.installationId || '').trim();
+    if (!installationId) return;
+    const current = installations.get(installationId) || {};
+    installations.set(installationId, {
+      appVersion: item.appVersion || current.appVersion,
+      installationId,
+      lastActiveAt: item.updatedAt || item.createdAt || current.lastActiveAt,
+      platform: item.platform || current.platform,
+    });
+  });
+  const linkedAttestationKeys = new Set(attestations.filter((item) => item.installationId).map((item) => item.deviceKeyId).filter(Boolean));
+  const unlinkedAttestations = attestations.filter((item) => item.deviceKeyId && !linkedAttestationKeys.has(item.deviceKeyId));
+  const choices = [
+    ...Array.from(installations.values()).map((item) => `
+      <label class="suspension-device-choice">
+        <input name="installationIds" type="checkbox" value="${escapeAttr(item.installationId)}">
+        <span><strong>${escapeHtml(item.platform || 'App installation')}</strong><small>${escapeHtml(item.appVersion || 'Unknown version')} · ${date(item.lastActiveAt)} · ${escapeHtml(maskAdminIdentifier(item.installationId))}</small></span>
+      </label>`),
+    ...unlinkedAttestations.map((item) => `
+      <label class="suspension-device-choice">
+        <input name="attestationKeyIds" type="checkbox" value="${escapeAttr(item.deviceKeyId)}">
+        <span><strong>${escapeHtml(item.platform || 'Attested device')}</strong><small>${escapeHtml(item.provider || '')} · ${escapeHtml(item.status || '')} · ${escapeHtml(maskAdminIdentifier(item.deviceKeyId))}</small></span>
+      </label>`),
+  ].join('');
+
+  return `<dialog class="admin-modal" id="user-suspension-modal-${escapeAttr(user.id)}">
+    <form class="admin-modal-card" method="post" action="/users/${escapeAttr(user.id)}/block">
+      <div class="admin-modal-head"><div><h3>${escapeHtml(translateText(blocked ? 'Update block' : 'Block user'))}</h3><span class="subtle">@${escapeHtml(user.username)}</span></div><button class="secondary small" type="button" onclick="this.closest('dialog').close()">×</button></div>
+      <div class="admin-modal-body">
+        <p class="danger-note">${escapeHtml(translateText('This immediately logs out every device, disconnects sockets and calls, stops presence, and removes push tokens.'))}</p>
+        <label>${escapeHtml(translateText('Block reason'))}<textarea name="reason" rows="4" required>${escapeHtml(blocked?.reason || '')}</textarea></label>
+        <label class="check suspension-device-toggle"><input name="blockDevices" type="checkbox" value="true" onchange="this.closest('form').querySelector('[data-device-choices]').hidden=!this.checked"> ${escapeHtml(translateText('Also block selected known devices from every account'))}</label>
+        <div class="suspension-device-list" data-device-choices hidden>
+          ${choices || `<p class="subtle">${escapeHtml(translateText('No known device identifiers are available.'))}</p>`}
+        </div>
+        ${activeDeviceBlocks.length ? `<p class="subtle">${escapeHtml(`${activeDeviceBlocks.length} device identifiers are already blocked.`)}</p>` : ''}
+        <div class="actions"><button class="secondary" type="button" onclick="this.closest('dialog').close()">${escapeHtml(translateText('Cancel'))}</button><button class="danger">${escapeHtml(translateText('Suspend immediately'))}</button></div>
+      </div>
+    </form>
+  </dialog>`;
+}
+
+function maskAdminIdentifier(value) {
+  const normalized = String(value || '');
+  return normalized.length > 10 ? `${normalized.slice(0, 6)}...${normalized.slice(-4)}` : normalized;
+}
+
 function catalogUrlForm(user) {
   return `<form class="stack" method="post" action="/users/${escapeAttr(user.id)}/catalog-url">
     <label>${escapeHtml(translateText('Custom Catalog URL'))}
@@ -4888,6 +4988,14 @@ function sessionTable(rows) {
 
 function deviceTable(rows) {
   return rows.length ? `<div class="table-wrap"><table><tbody>${rows.map((d) => `<tr><td data-label="${escapeAttr(translateText('Provider'))}"><span class="pill">${escapeHtml(d.provider)}</span></td><td data-label="${escapeAttr(translateText('Platform'))}">${escapeHtml(translateText(d.platform || ''))}</td><td data-label="${escapeAttr(translateText('App version'))}">${appVersionLabel(d)}</td><td data-label="${escapeAttr(translateText('Language'))}">${escapeHtml(d.locale || '')}</td><td data-label="${escapeAttr(translateText('Updated'))}">${date(d.updatedAt)}</td></tr>`).join('')}</tbody></table></div>` : empty('No devices.');
+}
+
+function attestationTable(rows) {
+  return rows.length ? `<div class="table-wrap"><table><thead><tr><th>${escapeHtml(translateText('Platform'))}</th><th>${escapeHtml(translateText('Provider'))}</th><th>${escapeHtml(translateText('Status'))}</th><th>${escapeHtml(translateText('Updated'))}</th></tr></thead><tbody>${rows.map((item) => `<tr><td>${escapeHtml(item.platform || '')}</td><td>${escapeHtml(item.provider || '')}</td><td><span class="pill">${escapeHtml(item.status || '')}</span>${item.failureReason ? `<br><span class="subtle">${escapeHtml(item.failureReason)}</span>` : ''}</td><td>${date(item.lastAttestedAt)}</td></tr>`).join('')}</tbody></table></div>` : empty('No device attestations.');
+}
+
+function deviceBlockTable(rows) {
+  return rows.length ? `<div class="table-wrap"><table><thead><tr><th>${escapeHtml(translateText('Type'))}</th><th>${escapeHtml(translateText('Device'))}</th><th>${escapeHtml(translateText('Status'))}</th><th>${escapeHtml(translateText('Created'))}</th></tr></thead><tbody>${rows.map((item) => `<tr><td>${escapeHtml(item.identifierType || '')}</td><td>${escapeHtml(item.label || item.platform || '')}</td><td><span class="pill">${escapeHtml(item.revokedAt ? 'REVOKED' : 'ACTIVE')}</span></td><td>${date(item.createdAt)}</td></tr>`).join('')}</tbody></table></div>` : empty('No device blocks.');
 }
 
 function appVersionLabel(row) {
@@ -5625,6 +5733,31 @@ function getWebhookUrl(token) {
 
 function getBackendBaseUrl() {
   return String(config.backendPublicUrl || config.publicApiUrl || config.publicApiURL || '').trim().replace(/\/+$/, '');
+}
+
+async function callInternalModeration(pathname, body) {
+  const secret = String(config.serverEventsInternalSecret || process.env.SERVER_EVENTS_INTERNAL_SECRET || '').trim();
+  const baseUrl = getBackendBaseUrl();
+
+  if (!secret || !baseUrl) {
+    throw new Error('Immediate moderation requires backendPublicUrl and SERVER_EVENTS_INTERNAL_SECRET.');
+  }
+
+  const response = await fetch(`${baseUrl}/internal/moderation${pathname}`, {
+    body: JSON.stringify(body),
+    headers: {
+      'Content-Type': 'application/json',
+      'x-meetvap-internal-secret': secret,
+    },
+    method: 'POST',
+  });
+  const result = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    throw new Error(result.error || `Backend moderation failed with ${response.status}`);
+  }
+
+  return result;
 }
 
 function getBackendMediaUrl(mediaId) {
