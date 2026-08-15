@@ -203,6 +203,8 @@ model Session {
   appBuildNumber Int?
   capabilities String[] @default([])
   installationId String?
+  deviceModel String?
+  osVersion String?
   attestationGraceStartedAt DateTime?
   createdAt DateTime @default(now())
   expiresAt DateTime
@@ -325,6 +327,8 @@ model DevicePushToken {
   appBuildNumber Int?
   capabilities String[] @default([])
   installationId String?
+  deviceModel String?
+  osVersion String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -1104,9 +1108,68 @@ model LoginDomain {
   createdAt              DateTime @default(now())
   updatedAt              DateTime @updatedAt
   usernames              LoginDomainUsername[]
+  childUsers             ChildServerUser[]
 
   @@index([isActive, expiresAt])
   @@index([createdAt])
+}
+
+model ChildServerUser {
+  id                    String   @id @default(cuid())
+  domainId              String
+  childUserId           String
+  username              String
+  displayName           String
+  avatarUrl             String?
+  registrationLocale    String?
+  registrationPlatform  String?
+  registrationIpAddress String?
+  registrationUserAgent String?
+  latestLocale          String?
+  latestPlatform        String?
+  deviceModel           String?
+  osVersion             String?
+  appVersion            String?
+  appBuildNumber        Int?
+  installationId        String?
+  lastLoginAt           DateTime?
+  lastSeenAt            DateTime?
+  childCreatedAt        DateTime
+  childUpdatedAt        DateTime
+  firstSyncedAt         DateTime @default(now())
+  lastSyncedAt          DateTime @default(now())
+  deletedAt             DateTime?
+  domain                LoginDomain @relation(fields: [domainId], references: [id], onDelete: Cascade)
+
+  @@unique([domainId, childUserId])
+  @@index([domainId, username])
+  @@index([domainId, lastLoginAt])
+  @@index([domainId, lastSeenAt])
+}
+
+model ChildUserSyncEvent {
+  id            String   @id @default(cuid())
+  childUserId   String
+  operation     String   @default("UPSERT")
+  reason        String   @default("UPDATE")
+  payload       Json?
+  status        String   @default("QUEUED")
+  attemptCount  Int      @default(0)
+  nextAttemptAt DateTime @default(now())
+  error         String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([status, nextAttemptAt])
+  @@index([childUserId, createdAt])
+}
+
+model ChildUserSyncState {
+  id              String   @id
+  cursorUpdatedAt DateTime?
+  cursorUserId    String?
+  lastCompletedAt DateTime?
+  updatedAt       DateTime @updatedAt
 }
 
 model LoginDomainUsername {
@@ -1138,16 +1201,41 @@ model PushRelayJob {
   invalidTokenIds String[] @default([])
   receivedCount   Int      @default(0)
   receivedTokenIds String[] @default([])
+  attemptCount    Int      @default(0)
+  nextAttemptAt   DateTime @default(now())
+  expiresAt       DateTime?
   error           String?
   completedAt     DateTime?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
   statusEvents    PushRelayStatusEvent[]
+  providerReceipts PushProviderReceipt[]
 
   @@unique([scope, requestId])
   @@index([scope, status, updatedAt])
+  @@index([scope, status, nextAttemptAt])
   @@index([domainId, updatedAt, id])
   @@index([remoteRelayId])
+}
+
+model PushProviderReceipt {
+  id            String   @id @default(cuid())
+  pushJobId     String
+  provider      String
+  receiptId     String
+  tokenId       String?
+  status        String   @default("PENDING")
+  attemptCount  Int      @default(0)
+  nextAttemptAt DateTime @default(now())
+  error         String?
+  completedAt   DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  pushJob       PushRelayJob @relation(fields: [pushJobId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, receiptId])
+  @@index([provider, status, nextAttemptAt])
+  @@index([pushJobId])
 }
 
 model PushRelayStatusEvent {

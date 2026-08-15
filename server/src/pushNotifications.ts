@@ -6,6 +6,7 @@ import jwt from 'jsonwebtoken';
 import { countUnreadConversationsForUser } from './conversationList';
 import { relayPushToMainServer } from './childPushRelay';
 import { config } from './config';
+import { operationalConfig } from './operationalConfig';
 import { prisma } from './prisma';
 
 const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
@@ -15,6 +16,7 @@ const INCOMING_CALL_FCM_SOUND = 'ringtone';
 export type StoredPushToken = {
   deliveryReceiptUrl?: string;
   id?: string;
+  installationId?: string | null;
   locale?: string | null;
   platform?: string | null;
   provider: string;
@@ -60,6 +62,8 @@ export type PushDispatchResult = {
   acceptedCount: number;
   failedCount: number;
   invalidTokenIds: string[];
+  providerReceipts: Array<{ provider: 'expo'; receiptId: string; tokenId?: string }>;
+  retryableTokenIds: string[];
   skippedCount: number;
 };
 
@@ -375,26 +379,21 @@ export async function sendMessagePush(input: MessagePush) {
     type: 'message-prefetch',
   };
 
-  const results = await Promise.all([
-    sendExpoPushNotifications(expoTokens.map((item) => ({
-      body: input.body,
-      categoryId: 'message',
-      channelId: 'messages',
-      data: dataForToken(item),
-      priority: 'high',
-      title: input.title,
-      to: item.token,
-      tokenId: item.id,
-    }))),
-    sendExpoPushNotifications(expoTokens.map((item) => ({
-      channelId: 'messages',
-      contentAvailable: true,
-      data: prefetchData,
-      priority: 'normal',
-      to: item.token,
-      tokenId: item.id,
-    }))),
-    ...fcmTokens.map((item) => sendFcmNotifications([item], {
+  const messageTtlSeconds = operationalConfig.pushNotifications.messageTtlHours * 60 * 60;
+  const [visibleResults] = await Promise.all([
+    Promise.all([
+      sendExpoPushNotifications(expoTokens.map((item) => ({
+        body: input.body,
+        categoryId: 'message',
+        channelId: 'messages',
+        data: dataForToken(item),
+        priority: 'high',
+        title: input.title,
+        to: item.token,
+        tokenId: item.id,
+        ttlSeconds: messageTtlSeconds,
+      }))),
+      ...fcmTokens.map((item) => sendFcmNotifications([item], {
         body: input.body,
         categoryId: 'message',
         channelId: 'messages',
@@ -403,28 +402,43 @@ export async function sendMessagePush(input: MessagePush) {
         priority: 'high',
         title: input.title,
         imageUrl: input.avatarUrl,
+        ttlMs: messageTtlSeconds * 1000,
       })),
-    sendFcmNotifications(fcmTokens, {
-      body: '',
-      channelId: 'messages',
-      data: prefetchData,
-      dataOnly: true,
-      priority: 'high',
-      title: '',
-    }),
-    ...apnsTokens.map((item) => sendApnsNotifications([item], {
+      ...apnsTokens.map((item) => sendApnsNotifications([item], {
         body: input.body,
         badge: item.userId ? apnsBadgeCountByUserId.get(item.userId) : undefined,
         categoryId: 'message',
         data: dataForToken(item),
+        expirySeconds: messageTtlSeconds,
         title: input.title,
       })),
-    sendApnsBackgroundNotifications(apnsTokens, {
-      data: prefetchData,
-    }),
+    ]),
+    Promise.all([
+      sendExpoPushNotifications(expoTokens.map((item) => ({
+        channelId: 'messages',
+        contentAvailable: true,
+        data: prefetchData,
+        priority: 'normal',
+        to: item.token,
+        tokenId: item.id,
+        ttlSeconds: messageTtlSeconds,
+      }))),
+      sendFcmNotifications(fcmTokens, {
+        body: '',
+        channelId: 'messages',
+        data: prefetchData,
+        dataOnly: true,
+        priority: 'high',
+        title: '',
+        ttlMs: messageTtlSeconds * 1000,
+      }),
+      sendApnsBackgroundNotifications(apnsTokens, {
+        data: prefetchData,
+      }),
+    ]),
   ]);
 
-  return mergePushDispatchResults(results);
+  return mergePushDispatchResults(visibleResults);
 }
 
 async function getApnsBadgeCountByUserId(tokens: StoredPushToken[]) {
@@ -481,7 +495,7 @@ async function sendExpoPushNotifications(messages: Array<{
 
       try {
         const payload = await response.json() as {
-          data?: Array<{ details?: { error?: string }; status?: string }>;
+          data?: Array<{ details?: { error?: string }; id?: string; status?: string }>;
         };
         if (!Array.isArray(payload.data)) {
           return acceptedPushDispatchResult(batch);
@@ -491,10 +505,19 @@ async function sendExpoPushNotifications(messages: Array<{
           const tokenId = batch[index]?.tokenId;
           if (ticket.status === 'ok') {
             result.acceptedCount += 1;
+            if (ticket.id) {
+              result.providerReceipts.push({
+                provider: 'expo',
+                receiptId: ticket.id,
+                ...(tokenId ? { tokenId } : {}),
+              });
+            }
           } else {
             result.failedCount += 1;
             if (ticket.details?.error === 'DeviceNotRegistered' && tokenId) {
               result.invalidTokenIds.push(tokenId);
+            } else if (tokenId) {
+              result.retryableTokenIds.push(tokenId);
             }
           }
           return result;
@@ -598,6 +621,7 @@ async function sendFcmNotifications(tokens: StoredPushToken[], input: {
       return {
         ...emptyPushDispatchResult(),
         failedCount: 1,
+        retryableTokenIds: item.id ? [item.id] : [],
       };
     }
   }));
@@ -801,11 +825,17 @@ function getApnsDispatchResult(
       ? [item.id]
       : [];
   });
+  const retryableTokenIds = result.failed.flatMap((failure) => {
+    const item = failure.device ? tokensByValue.get(failure.device) : undefined;
+    return item?.id && !invalidTokenIds.includes(item.id) ? [item.id] : [];
+  });
 
   return {
     acceptedCount: result.sent.length,
     failedCount: result.failed.length,
     invalidTokenIds,
+    providerReceipts: [],
+    retryableTokenIds,
     skippedCount: 0,
   };
 }
@@ -839,6 +869,8 @@ function emptyPushDispatchResult(): PushDispatchResult {
     acceptedCount: 0,
     failedCount: 0,
     invalidTokenIds: [],
+    providerReceipts: [],
+    retryableTokenIds: [],
     skippedCount: 0,
   };
 }
@@ -854,6 +886,7 @@ function failedPushDispatchResult(items: Array<{ tokenId?: string }>): PushDispa
   return {
     ...emptyPushDispatchResult(),
     failedCount: items.length,
+    retryableTokenIds: items.flatMap((item) => item.tokenId ? [item.tokenId] : []),
   };
 }
 
@@ -862,6 +895,8 @@ function mergePushDispatchResults(results: PushDispatchResult[]): PushDispatchRe
     acceptedCount: merged.acceptedCount + result.acceptedCount,
     failedCount: merged.failedCount + result.failedCount,
     invalidTokenIds: [...new Set([...merged.invalidTokenIds, ...result.invalidTokenIds])],
+    providerReceipts: [...merged.providerReceipts, ...result.providerReceipts],
+    retryableTokenIds: [...new Set([...merged.retryableTokenIds, ...result.retryableTokenIds])],
     skippedCount: merged.skippedCount + result.skippedCount,
   }), emptyPushDispatchResult());
 }

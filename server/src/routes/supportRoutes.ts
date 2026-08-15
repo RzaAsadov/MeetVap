@@ -4,8 +4,8 @@ import { Router } from 'express';
 
 import { config } from '../config';
 import { HttpError } from '../httpError';
+import { enqueueMessagePush, kickMessagePushOutbox } from '../messagePushOutbox';
 import { prisma } from '../prisma';
-import { sendMessagePush } from '../pushNotifications';
 import { cacheDeletePattern } from '../redisCache';
 import { serializeMessage } from '../serializers';
 import { recordMessageStats } from '../stats';
@@ -75,7 +75,7 @@ supportRoutes.post('/internal/conversations/:conversationId/messages', async (re
       source: 'support_admin',
     };
 
-    const message = await prisma.$transaction(async (tx) => {
+    const { message, pushJobId } = await prisma.$transaction(async (tx) => {
       const createdMessage = await tx.message.create({
         data: {
           body,
@@ -134,7 +134,16 @@ supportRoutes.post('/internal/conversations/:conversationId/messages', async (re
         on conflict ("messageId") do update set "adminUsername" = excluded."adminUsername"
       `;
 
-      return createdMessage;
+      const pushJob = await enqueueMessagePush(tx, {
+        avatarUrl: createdMessage.sender.avatarUrl,
+        body,
+        conversationId,
+        messageId: createdMessage.id,
+        senderId: supportUserId,
+        title: 'MeetVap',
+      });
+
+      return { message: createdMessage, pushJobId: pushJob.id };
     });
 
     const serializedMessage = serializeMessage(message);
@@ -144,14 +153,7 @@ supportRoutes.post('/internal/conversations/:conversationId/messages', async (re
     io?.to(conversationId).to(memberRooms).emit('message:new', serializedMessage);
     io?.to(memberRooms).emit('conversation:updated', { conversationId });
 
-    void sendSupportReplyPush({
-      body,
-      conversationId,
-      messageId: message.id,
-      recipientUserId: recipient.userId,
-    }).catch((error) => {
-      console.warn('Could not send support reply push notification', error);
-    });
+    kickMessagePushOutbox(pushJobId);
 
     res.status(201).json({ message: serializedMessage, ok: true });
   } catch (error) {
@@ -378,43 +380,4 @@ async function queueSupportMessageEditRequest(input: {
   })));
 
   return recipients;
-}
-
-async function sendSupportReplyPush(input: {
-  body: string;
-  conversationId: string;
-  messageId: string;
-  recipientUserId: string;
-}) {
-  const tokens = await prisma.devicePushToken.findMany({
-    select: {
-      id: true,
-      locale: true,
-      platform: true,
-      provider: true,
-      token: true,
-    },
-    where: {
-      userId: input.recipientUserId,
-      user: {
-        memberships: {
-          some: {
-            conversationId: input.conversationId,
-            OR: [
-              { mutedAt: null },
-              { mutedUntil: { lte: new Date() } },
-            ],
-          },
-        },
-      },
-    },
-  });
-
-  await sendMessagePush({
-    body: input.body,
-    conversationId: input.conversationId,
-    messageId: input.messageId,
-    title: 'MeetVap',
-    tokens,
-  });
 }

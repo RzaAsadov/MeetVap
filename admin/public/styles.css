@@ -636,6 +636,38 @@ dialog.admin-modal::backdrop {
   overscroll-behavior: contain;
 }
 
+.subdomain-edit-modal {
+  max-width: min(620px, calc(100vw - 28px));
+}
+
+.subdomain-edit-modal .admin-modal-card {
+  max-height: min(88dvh, 900px);
+}
+
+.subdomain-edit-body {
+  max-height: calc(min(88dvh, 900px) - 72px);
+}
+
+.subdomain-edit-form .stack {
+  padding: 2px;
+}
+
+.subdomain-danger-zone {
+  align-items: center;
+  background: rgba(231, 76, 60, 0.09);
+  border: 1px solid rgba(231, 76, 60, 0.34);
+  border-radius: 8px;
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 14px;
+}
+
+.subdomain-danger-zone p {
+  line-height: 1.4;
+  margin: 5px 0 0;
+}
+
 .danger-note {
   background: rgba(231, 76, 60, 0.12);
   border: 1px solid rgba(231, 76, 60, 0.42);
@@ -772,6 +804,15 @@ button.modal-close {
 }
 .mobile-only {
   display: none;
+}
+.users-period-cell {
+  min-width: 190px;
+  white-space: normal;
+}
+.users-period-cell .users-stat-part {
+  display: inline-flex;
+  gap: 3px;
+  white-space: nowrap;
 }
 table {
   border-collapse: collapse;
@@ -1310,6 +1351,25 @@ tr:hover td { background: rgba(23, 184, 151, 0.06); }
   .admin-modal-card {
     gap: 10px;
     padding: 10px;
+  }
+  dialog.subdomain-edit-modal {
+    max-height: calc(100dvh - 18px);
+    max-width: calc(100vw - 18px);
+  }
+  .subdomain-edit-modal .admin-modal-card {
+    max-height: calc(100dvh - 18px);
+  }
+  .subdomain-edit-body {
+    max-height: calc(100dvh - 86px);
+  }
+  .subdomain-danger-zone {
+    align-items: stretch;
+    grid-template-columns: 1fr;
+  }
+  .subdomain-danger-zone form,
+  .subdomain-danger-zone button,
+  .subdomain-edit-form button {
+    width: 100%;
   }
   .admin-modal-head {
     align-items: start;

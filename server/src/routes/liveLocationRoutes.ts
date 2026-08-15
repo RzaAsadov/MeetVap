@@ -4,8 +4,8 @@ import { Request, Router } from 'express';
 
 import { getAuthedUser } from '../auth';
 import { HttpError } from '../httpError';
+import { enqueueMessagePush, kickMessagePushOutbox } from '../messagePushOutbox';
 import { prisma } from '../prisma';
-import { sendMessagePush } from '../pushNotifications';
 import { operationalConfig } from '../operationalConfig';
 import { enforceRateLimit } from '../rateLimits';
 import { serializeMessage } from '../serializers';
@@ -49,7 +49,7 @@ liveLocationRoutes.post('/', async (req, res, next) => {
       startedAt,
     });
 
-    const message = await prisma.$transaction(async (tx) => {
+    const { message, pushJobId } = await prisma.$transaction(async (tx) => {
       const createdMessage = await tx.message.create({
         data: {
           body: 'Live location',
@@ -110,7 +110,19 @@ liveLocationRoutes.post('/', async (req, res, next) => {
         where: { conversationId_userId: { conversationId: input.conversationId, userId: currentUser.id } },
       });
 
-      return createdMessage;
+      const senderAliasName = createdMessage.conversation.members.find(
+        (member) => member.userId === currentUser.id,
+      )?.aliasName;
+      const pushJob = await enqueueMessagePush(tx, {
+        avatarUrl: createdMessage.sender.avatarUrl,
+        body: 'Live location',
+        conversationId: input.conversationId,
+        messageId: createdMessage.id,
+        senderId: currentUser.id,
+        title: senderAliasName || createdMessage.sender.displayName || createdMessage.sender.username,
+      });
+
+      return { message: createdMessage, pushJobId: pushJob.id };
     });
 
     const memberRooms = message.conversation.members
@@ -121,7 +133,7 @@ liveLocationRoutes.post('/', async (req, res, next) => {
 
     req.app.get('io')?.to(input.conversationId).to(memberRooms).emit('message:new', serializedMessage);
     req.app.get('io')?.to(memberRooms).emit('conversation:updated', { conversationId: input.conversationId });
-    void sendInitialLiveLocationPush(input.conversationId, currentUser.id, message.id, senderAliasName || message.sender.displayName || message.sender.username).catch(() => undefined);
+    kickMessagePushOutbox(pushJobId);
     res.status(201).json({ liveLocation: metadata.liveLocation, message: serializedMessage });
   } catch (error) {
     next(error);
@@ -315,35 +327,4 @@ function serializeLiveLocation(input: {
     stoppedAt: input.stoppedAt?.toISOString(),
     updatedAt: (input.updatedAt ?? input.startedAt).toISOString(),
   };
-}
-
-async function sendInitialLiveLocationPush(conversationId: string, senderId: string, messageId: string, title: string) {
-  const tokens = await prisma.devicePushToken.findMany({
-    select: { id: true, locale: true, platform: true, provider: true, token: true },
-    where: {
-      user: {
-        memberships: {
-          some: {
-            conversationId,
-            AND: [
-              {
-                OR: [
-                  { mutedAt: null },
-                  { mutedUntil: { lte: new Date() } },
-                ],
-              },
-              {
-                OR: [
-                  { aliasPromptSeen: true },
-                  { conversation: { type: { not: 'GROUP' } } },
-                ],
-              },
-            ],
-          },
-        },
-      },
-      userId: { not: senderId },
-    },
-  });
-  await sendMessagePush({ body: 'Live location', conversationId, messageId, title, tokens });
 }

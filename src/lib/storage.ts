@@ -14,6 +14,7 @@ const DELETED_CHAT_PREFIX = 'messenger.deletedChat.';
 const CALL_LOGS_KEY = 'messenger.callLogs';
 const CONVERSATIONS_KEY = 'messenger.conversations';
 const DARK_MODE_KEY = 'messenger.darkMode';
+const AUTO_DOWNLOAD_MEDIA_KEY = 'messenger.autoDownloadMedia';
 const LANGUAGE_KEY = 'messenger.language';
 const FAVORITE_CONVERSATIONS_KEY = 'messenger.favoriteConversations';
 const PLAYED_VOICE_MESSAGES_KEY = 'messenger.playedVoiceMessages';
@@ -325,6 +326,15 @@ export async function getStoredDarkMode() {
 
 export async function setStoredDarkMode(isDarkMode: boolean) {
   await AsyncStorage.setItem(DARK_MODE_KEY, isDarkMode ? 'true' : 'false');
+}
+
+export async function getStoredAutoDownloadMedia() {
+  const value = await AsyncStorage.getItem(AUTO_DOWNLOAD_MEDIA_KEY);
+  return value === null ? true : value === 'true';
+}
+
+export async function setStoredAutoDownloadMedia(isEnabled: boolean) {
+  await AsyncStorage.setItem(AUTO_DOWNLOAD_MEDIA_KEY, isEnabled ? 'true' : 'false');
 }
 
 export async function getStoredLanguage() {

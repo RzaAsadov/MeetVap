@@ -375,6 +375,42 @@ button {
   color: #8ba1b8;
 }
 
+.attachment-upload-progress {
+  display: grid;
+  gap: 5px;
+  margin-top: 8px;
+  min-width: 180px;
+}
+
+.attachment-upload-progress > div {
+  background: rgba(139, 161, 184, 0.28);
+  border-radius: 3px;
+  height: 4px;
+  overflow: hidden;
+}
+
+.attachment-upload-progress i {
+  background: #45a3ff;
+  display: block;
+  height: 100%;
+  transition: width 120ms linear;
+}
+
+.attachment-upload-progress small {
+  color: #b4c4d6;
+  font-size: 11px;
+  text-align: right;
+}
+
+.attachment-upload-progress.failed i {
+  background: #ff7272;
+  width: 100% !important;
+}
+
+.attachment-upload-progress.failed small {
+  color: #ff9b9b;
+}
+
 .message-media {
   border-radius: 10px;
   display: block;
@@ -410,6 +446,30 @@ button {
   background: #05080c;
   object-fit: contain;
   width: min(360px, 100%);
+}
+
+.video-preview {
+  position: relative;
+}
+
+.video-preview .server-video-thumbnail {
+  object-fit: cover;
+}
+
+.video-preview-play {
+  align-items: center;
+  background: rgba(4, 10, 16, 0.68);
+  border-radius: 50%;
+  color: #fff;
+  display: flex;
+  height: 44px;
+  justify-content: center;
+  left: 50%;
+  pointer-events: none;
+  position: absolute;
+  top: calc(50% - 10px);
+  transform: translate(-50%, -50%);
+  width: 44px;
 }
 
 .media-loading {
@@ -515,16 +575,65 @@ button {
   align-items: center;
   display: grid;
   gap: 10px;
-  grid-template-columns: 24px minmax(180px, 1fr) auto;
-  min-width: min(280px, 100%);
+  grid-template-columns: 38px minmax(150px, 1fr) 48px;
+  min-width: min(300px, 100%);
 }
 
 .voice-message audio {
-  max-width: 100%;
+  display: none;
+}
+
+.voice-play-button,
+.voice-speed-button {
+  align-items: center;
+  background: #23384b;
+  border: 0;
+  color: #edf5ff;
+  display: inline-flex;
+  font-weight: 900;
+  justify-content: center;
+  min-height: 36px;
+}
+
+.voice-play-button {
+  border-radius: 50%;
+  height: 36px;
+  padding: 0;
+  width: 36px;
+}
+
+.voice-play-button svg {
+  margin-left: 1px;
+}
+
+.voice-play-button:disabled,
+.voice-speed-button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.voice-speed-button {
+  border-radius: 8px;
+  font-size: 12px;
+  padding: 0 8px;
+  width: 48px;
+}
+
+.voice-playback-track {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.voice-playback-track input {
+  accent-color: #45a3ff;
+  cursor: pointer;
+  margin: 0;
+  min-width: 0;
   width: 100%;
 }
 
-.voice-message span {
+.voice-playback-track span {
   color: #b4c4d6;
   font-size: 12px;
   font-variant-numeric: tabular-nums;
@@ -1012,6 +1121,51 @@ button {
 .empty-main-panel strong {
   color: #edf5ff;
   font-size: 22px;
+}
+
+.group-invite-placeholder {
+  align-items: center;
+  background: #0b141a;
+  color: #8ba1b8;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  justify-content: center;
+  min-height: 0;
+  padding: 24px;
+  text-align: center;
+}
+
+.group-invite-placeholder-icon,
+.group-invite-modal-icon {
+  align-items: center;
+  background: rgba(69, 163, 255, 0.14);
+  border: 1px solid rgba(69, 163, 255, 0.34);
+  border-radius: 50%;
+  color: #45a3ff;
+  display: inline-flex;
+  justify-content: center;
+}
+
+.group-invite-placeholder-icon {
+  height: 64px;
+  width: 64px;
+}
+
+.group-invite-placeholder strong {
+  color: #edf5ff;
+  font-size: 20px;
+}
+
+.group-invite-placeholder button {
+  background: #45a3ff;
+  border: 0;
+  border-radius: 8px;
+  color: #fff;
+  font-weight: 800;
+  margin-top: 6px;
+  min-height: 40px;
+  padding: 0 18px;
 }
 
 .statuses-panel {
@@ -3017,6 +3171,86 @@ button {
   display: grid;
   overflow: hidden;
   width: min(520px, calc(100vw - 32px));
+}
+
+.group-invite-modal {
+  background: #162232;
+  border: 1px solid #30445a;
+  border-radius: 8px;
+  color: #edf5ff;
+  display: grid;
+  gap: 16px;
+  justify-items: center;
+  padding: 24px;
+  text-align: center;
+  width: min(440px, calc(100vw - 32px));
+}
+
+.group-invite-modal-icon {
+  height: 62px;
+  width: 62px;
+}
+
+.group-invite-modal-heading span {
+  color: #45a3ff;
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.group-invite-modal-heading h2 {
+  font-size: 22px;
+  margin: 5px 0 0;
+}
+
+.group-invite-modal-group {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  max-width: 100%;
+}
+
+.group-invite-modal-group strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.group-invite-modal p {
+  color: #b4c4d6;
+  line-height: 1.55;
+  margin: 0;
+}
+
+.group-invite-modal footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: center;
+  width: 100%;
+}
+
+.group-invite-modal footer button {
+  align-items: center;
+  background: #45a3ff;
+  border: 0;
+  border-radius: 8px;
+  color: #fff;
+  display: inline-flex;
+  font-weight: 800;
+  gap: 7px;
+  justify-content: center;
+  min-height: 42px;
+  padding: 0 18px;
+}
+
+.group-invite-modal footer button.secondary {
+  background: #23384b;
+}
+
+.group-invite-modal footer button:disabled {
+  cursor: default;
+  opacity: 0.55;
 }
 
 .bulk-action-modal header,

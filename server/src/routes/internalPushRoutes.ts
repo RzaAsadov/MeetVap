@@ -4,15 +4,20 @@ import { Request, Router } from 'express';
 import { z } from 'zod';
 
 import { HttpError } from '../httpError';
-import { operationalConfig } from '../operationalConfig';
+import { childUserSnapshotSchema } from '../childUserSyncSchemas';
+import { recordProviderReceipts } from '../expoPushReceipts';
+import { operationalConfig, refreshOperationalAppVersionsFromDisk } from '../operationalConfig';
 import { prisma } from '../prisma';
+import { getPushRetryDelayMs } from '../pushDeliveryPolicy';
 import { PushDispatchResult, sendCallEndedPush, sendIncomingCallPush, sendMessagePush } from '../pushNotifications';
+import { notifyServerChildUserRegistered } from '../serverEventMessages';
 
 export const internalPushRoutes = Router();
 
 const tokenSchema = z.object({
   deliveryReceiptUrl: z.string().url().max(2048).optional(),
   id: z.string().max(128).optional(),
+  installationId: z.string().max(256).nullable().optional(),
   locale: z.string().max(16).nullable().optional(),
   platform: z.string().max(32).nullable().optional(),
   provider: z.enum(['expo', 'fcm', 'apns', 'apns_voip']),
@@ -47,6 +52,97 @@ const statusBatchSchema = z.object({
   cursor: z.string().max(1024).nullable().optional(),
   limit: z.number().int().min(1).max(500).default(500),
 });
+const childUserBatchEnvelopeSchema = z.object({
+  events: z.array(z.unknown()).min(1).max(200),
+});
+const childUserEventEnvelopeSchema = z.object({
+  eventId: z.string().uuid(),
+  operation: z.enum(['UPSERT', 'DELETE']),
+  reason: z.enum(['REGISTERED', 'LOGIN', 'PROFILE', 'DEVICE', 'RECONCILE', 'UPDATE', 'DELETED']).default('UPDATE'),
+  snapshot: z.unknown().nullable(),
+});
+
+internalPushRoutes.get('/child-config/app-versions', async (req, res, next) => {
+  try {
+    await authenticateChildRequest(req);
+    const appVersions = await refreshOperationalAppVersionsFromDisk();
+    const etag = `"${crypto.createHash('sha256').update(JSON.stringify(appVersions)).digest('base64url')}"`;
+
+    if (req.get('if-none-match') === etag) {
+      res.status(304).end();
+      return;
+    }
+
+    res.setHeader('Cache-Control', 'private, no-cache');
+    res.setHeader('ETag', etag);
+    res.json({ appVersions });
+  } catch (error) {
+    next(error);
+  }
+});
+
+internalPushRoutes.post('/child-users/batch', async (req, res, next) => {
+  try {
+    const domain = await authenticateChildRequest(req);
+    const input = childUserBatchEnvelopeSchema.parse(req.body);
+    const acknowledgedEventIds: string[] = [];
+    const rejected: Array<{ error: string; eventId: string | null; retryable: boolean }> = [];
+
+    for (const rawEvent of input.events) {
+      const envelopeResult = childUserEventEnvelopeSchema.safeParse(rawEvent);
+
+      if (!envelopeResult.success) {
+        rejected.push({
+          error: envelopeResult.error.issues[0]?.message ?? 'Invalid child user event',
+          eventId: getUntrustedEventId(rawEvent),
+          retryable: false,
+        });
+        continue;
+      }
+
+      const event = envelopeResult.data;
+
+      try {
+        if (event.operation === 'DELETE') {
+          const childUserId = getDeletionChildUserId(event.snapshot);
+          await prisma.childServerUser.updateMany({
+            data: { deletedAt: new Date(), lastSyncedAt: new Date() },
+            where: { childUserId, domainId: domain.id },
+          });
+        } else {
+          const snapshot = childUserSnapshotSchema.parse(event.snapshot);
+          await upsertChildServerUser(domain.id, snapshot);
+          if (event.reason === 'REGISTERED') {
+            await notifyServerChildUserRegistered({
+              domain,
+              io: req.app.get('io'),
+              occurredAt: new Date(snapshot.childCreatedAt),
+              platform: snapshot.latestPlatform ?? snapshot.registrationPlatform,
+              user: {
+                displayName: snapshot.displayName,
+                id: snapshot.childUserId,
+                username: snapshot.username,
+              },
+            });
+          }
+        }
+        acknowledgedEventIds.push(event.eventId);
+      } catch (error) {
+        rejected.push({
+          error: error instanceof z.ZodError
+            ? error.issues[0]?.message ?? 'Invalid child user snapshot'
+            : getRelayError(error),
+          eventId: event.eventId,
+          retryable: !(error instanceof z.ZodError || error instanceof HttpError),
+        });
+      }
+    }
+
+    res.json({ acknowledgedEventIds, rejected });
+  } catch (error) {
+    next(error);
+  }
+});
 
 internalPushRoutes.post('/child-push', async (req, res, next) => {
   try {
@@ -59,6 +155,7 @@ internalPushRoutes.post('/child-push', async (req, res, next) => {
     const job = await prisma.pushRelayJob.upsert({
       create: {
         domainId: domain.id,
+        expiresAt: getRelayExpiry(payload.type),
         payload: payload as Prisma.InputJsonValue,
         requestId,
         scope,
@@ -144,7 +241,8 @@ export function startMainPushRelayWorker() {
       take: 100,
       where: {
         scope: { startsWith: 'main:' },
-        status: 'QUEUED',
+        nextAttemptAt: { lte: new Date() },
+        status: { in: ['QUEUED', 'RETRYING'] },
       },
     });
     await Promise.all(jobs.map((job) => processMainPushRelayJob(job.id)));
@@ -161,11 +259,13 @@ async function processMainPushRelayJob(jobId: string) {
   const claimed = await prisma.pushRelayJob.updateMany({
     data: {
       error: null,
+      attemptCount: { increment: 1 },
       status: 'PROCESSING',
     },
     where: {
       id: jobId,
-      status: 'QUEUED',
+      nextAttemptAt: { lte: new Date() },
+      status: { in: ['QUEUED', 'RETRYING'] },
     },
   });
 
@@ -178,6 +278,12 @@ async function processMainPushRelayJob(jobId: string) {
   try {
     const job = await prisma.pushRelayJob.findUniqueOrThrow({ where: { id: jobId } });
     domainId = job.domainId;
+    if (job.expiresAt && job.expiresAt <= new Date()) {
+      await completeMainRelayJob(jobId, domainId, 'EXPIRED', {
+        error: 'Push relay TTL expired',
+      });
+      return;
+    }
     const payload = relaySchema.parse(job.payload);
     let result: PushDispatchResult;
 
@@ -185,38 +291,106 @@ async function processMainPushRelayJob(jobId: string) {
     else if (payload.type === 'incoming-call') result = await sendIncomingCallPush(payload.input);
     else result = await sendCallEndedPush(payload.input);
 
-    await prisma.$transaction(async (tx) => {
-      await tx.pushRelayJob.update({
+    await recordProviderReceipts(jobId, result.providerReceipts);
+
+    const retryableTokenIds = [...new Set(result.retryableTokenIds)];
+    if (result.skippedCount > 0 && retryableTokenIds.length === 0) {
+      retryableTokenIds.push(...payload.input.tokens.flatMap((token) => token.id ? [token.id] : []));
+    }
+    if (retryableTokenIds.length > 0 && canRetryMainRelay(job.attemptCount, job.expiresAt)) {
+      const retryPayload = {
+        ...payload,
+        input: {
+          ...payload.input,
+          tokens: payload.input.tokens.filter((token) => token.id && retryableTokenIds.includes(token.id)),
+        },
+      };
+      await prisma.pushRelayJob.update({
         data: {
-          acceptedCount: result.acceptedCount,
-          completedAt: new Date(),
+          acceptedCount: { increment: result.acceptedCount },
           failedCount: result.failedCount,
-          invalidTokenIds: result.invalidTokenIds,
-          payload: Prisma.JsonNull,
+          invalidTokenIds: [...new Set([...job.invalidTokenIds, ...result.invalidTokenIds])],
+          nextAttemptAt: getNextRelayAttemptAt(job.attemptCount),
+          payload: retryPayload as Prisma.InputJsonValue,
           skippedCount: result.skippedCount,
-          status: getCompletedRelayStatus(result),
+          status: 'RETRYING',
         },
         where: { id: jobId },
       });
-      if (domainId) {
-        await tx.pushRelayStatusEvent.create({ data: { domainId, jobId } });
-      }
+      return;
+    }
+    await completeMainRelayJob(jobId, domainId, getCompletedRelayStatus(result), {
+      acceptedCount: result.acceptedCount,
+      failedCount: result.failedCount,
+      invalidTokenIds: [...new Set([...job.invalidTokenIds, ...result.invalidTokenIds])],
+      skippedCount: result.skippedCount,
     });
   } catch (error) {
-    await prisma.$transaction(async (tx) => {
-      await tx.pushRelayJob.update({
+    const job = await prisma.pushRelayJob.findUnique({ where: { id: jobId } }).catch(() => null);
+    if (job && canRetryMainRelay(job.attemptCount, job.expiresAt)) {
+      await prisma.pushRelayJob.update({
         data: {
-          completedAt: new Date(),
-          error: error instanceof Error ? error.message.slice(0, 2000) : String(error).slice(0, 2000),
-          status: 'FAILED',
+          error: getRelayError(error),
+          nextAttemptAt: getNextRelayAttemptAt(job.attemptCount),
+          status: 'RETRYING',
         },
         where: { id: jobId },
-      });
-      if (domainId) {
-        await tx.pushRelayStatusEvent.create({ data: { domainId, jobId } });
-      }
-    }).catch(() => undefined);
+      }).catch(() => undefined);
+      return;
+    }
+    await completeMainRelayJob(jobId, domainId, 'FAILED', { error: getRelayError(error) }).catch(() => undefined);
   }
+}
+
+function canRetryMainRelay(attemptCount: number, expiresAt: Date | null) {
+  return attemptCount < operationalConfig.pushNotifications.outboxMaxAttempts &&
+    (!expiresAt || expiresAt.getTime() > Date.now());
+}
+
+function getNextRelayAttemptAt(attemptCount: number) {
+  return new Date(Date.now() + getPushRetryDelayMs(
+    attemptCount,
+    operationalConfig.pushNotifications.outboxMaxRetrySeconds,
+  ));
+}
+
+function getRelayExpiry(type: 'message' | 'incoming-call' | 'call-ended') {
+  const ttlMs = type === 'message'
+    ? operationalConfig.pushNotifications.messageTtlHours * 60 * 60 * 1000
+    : type === 'incoming-call' ? 30_000 : 5 * 60_000;
+  return new Date(Date.now() + ttlMs);
+}
+
+async function completeMainRelayJob(jobId: string, domainId: string | null, status: string, result: {
+  acceptedCount?: number;
+  error?: string;
+  failedCount?: number;
+  invalidTokenIds?: string[];
+  skippedCount?: number;
+}) {
+  await prisma.$transaction(async (tx) => {
+    const rows = await tx.$queryRaw<Array<{ receivedCount: number }>>`
+      select "receivedCount" from "PushRelayJob" where id = ${jobId} for update
+    `;
+    await tx.pushRelayJob.update({
+      data: {
+        acceptedCount: { increment: result.acceptedCount ?? 0 },
+        completedAt: new Date(),
+        error: result.error ?? null,
+        failedCount: result.failedCount ?? 0,
+        invalidTokenIds: result.invalidTokenIds ?? [],
+        payload: Prisma.JsonNull,
+        skippedCount: result.skippedCount ?? 0,
+        status: (rows[0]?.receivedCount ?? 0) > 0 ? 'DEVICE_RECEIVED' : status,
+      },
+      where: { id: jobId },
+    });
+    if (domainId) await tx.pushRelayStatusEvent.create({ data: { domainId, jobId } });
+  });
+}
+
+function getRelayError(error: unknown) {
+  return (error instanceof Error ? error.message : String(error)).slice(0, 2000);
 }
 
 function getCompletedRelayStatus(result: PushDispatchResult) {
@@ -257,6 +431,69 @@ async function authenticateChildRequest(req: Request) {
   }
 
   return domain;
+}
+
+async function upsertChildServerUser(
+  domainId: string,
+  snapshot: z.infer<typeof childUserSnapshotSchema>,
+) {
+  const data = {
+    appBuildNumber: snapshot.appBuildNumber ?? null,
+    appVersion: snapshot.appVersion ?? null,
+    avatarUrl: snapshot.avatarUrl ?? null,
+    childCreatedAt: new Date(snapshot.childCreatedAt),
+    childUpdatedAt: new Date(snapshot.childUpdatedAt),
+    deviceModel: snapshot.deviceModel ?? null,
+    displayName: snapshot.displayName,
+    installationId: snapshot.installationId ?? null,
+    lastLoginAt: snapshot.lastLoginAt ? new Date(snapshot.lastLoginAt) : null,
+    lastSeenAt: snapshot.lastSeenAt ? new Date(snapshot.lastSeenAt) : null,
+    lastSyncedAt: new Date(),
+    latestLocale: snapshot.latestLocale ?? null,
+    latestPlatform: snapshot.latestPlatform ?? null,
+    osVersion: snapshot.osVersion ?? null,
+    registrationIpAddress: snapshot.registrationIpAddress ?? null,
+    registrationLocale: snapshot.registrationLocale ?? null,
+    registrationPlatform: snapshot.registrationPlatform ?? null,
+    registrationUserAgent: snapshot.registrationUserAgent ?? null,
+    username: snapshot.username,
+  };
+
+  await prisma.childServerUser.upsert({
+    create: {
+      ...data,
+      childUserId: snapshot.childUserId,
+      domainId,
+    },
+    update: {
+      ...data,
+      deletedAt: null,
+    },
+    where: {
+      domainId_childUserId: {
+        childUserId: snapshot.childUserId,
+        domainId,
+      },
+    },
+  });
+}
+
+function getDeletionChildUserId(snapshot: unknown) {
+  const parsed = z.object({ childUserId: z.string().min(1).max(128) }).safeParse(snapshot);
+
+  if (!parsed.success) {
+    throw new HttpError(400, 'Deletion event requires childUserId');
+  }
+
+  return parsed.data.childUserId;
+}
+
+function getUntrustedEventId(value: unknown) {
+  if (!value || typeof value !== 'object' || !('eventId' in value)) {
+    return null;
+  }
+
+  return typeof value.eventId === 'string' ? value.eventId.slice(0, 128) : null;
 }
 
 function decodeStatusCursor(value?: string | null) {

@@ -9,8 +9,9 @@ import { prisma } from './prisma';
 import { invalidatePushTokenCacheForUser } from './pushTokenCache';
 
 const CHILD_SCOPE = 'child';
+export const MESSAGE_PUSH_OUTBOX_SCOPE = 'message-notification';
 const STATUS_BATCH_LIMIT = 500;
-const PUSH_RECEIPT_TTL_MS = 24 * 60 * 60 * 1000;
+const PUSH_RECEIPT_TTL_MS = operationalConfig.pushNotifications.messageTtlHours * 60 * 60 * 1000;
 let workerRunning = false;
 export const childPushReceiptRoutes = Router();
 
@@ -44,16 +45,17 @@ export async function relayPushToMainServer(type: string, input: unknown) {
     },
   });
 
-  await submitChildPushJob(job.id);
+  await submitChildPushJob(job.id).catch((error) => {
+    console.warn('Initial child push relay submission failed; queued for retry', {
+      error: error instanceof Error ? error.message : String(error),
+      jobId: job.id,
+    });
+  });
   return true;
 }
 
 childPushReceiptRoutes.post('/:requestId/:tokenId', async (req, res, next) => {
   try {
-    if (operationalConfig.serverRole !== 'child') {
-      throw new HttpError(404, 'Route not found');
-    }
-
     const expiresAt = Number(getSingleQueryValue(req.query.expiresAt));
     const signature = getSingleQueryValue(req.query.signature);
     if (!isValidPushReceipt(req.params.requestId, req.params.tokenId, expiresAt, signature)) {
@@ -61,13 +63,11 @@ childPushReceiptRoutes.post('/:requestId/:tokenId', async (req, res, next) => {
     }
 
     await prisma.$transaction(async (tx) => {
-      const job = await tx.pushRelayJob.findUnique({
-        select: { id: true, receivedTokenIds: true },
+      const job = await tx.pushRelayJob.findFirst({
+        select: { id: true, receivedTokenIds: true, status: true },
         where: {
-          scope_requestId: {
-            requestId: req.params.requestId,
-            scope: CHILD_SCOPE,
-          },
+          requestId: req.params.requestId,
+          scope: { in: [CHILD_SCOPE, MESSAGE_PUSH_OUTBOX_SCOPE] },
         },
       });
       if (!job || job.receivedTokenIds.includes(req.params.tokenId)) {
@@ -79,7 +79,9 @@ childPushReceiptRoutes.post('/:requestId/:tokenId', async (req, res, next) => {
         data: {
           receivedCount: receivedTokenIds.length,
           receivedTokenIds,
-          status: 'DEVICE_RECEIVED',
+          ...(['QUEUED', 'RETRYING', 'PROCESSING', 'SUBMITTING'].includes(job.status)
+            ? {}
+            : { status: 'DEVICE_RECEIVED' }),
         },
         where: { id: job.id },
       });
@@ -364,7 +366,7 @@ function addDeliveryReceiptUrls(requestId: string, input: unknown) {
   };
 }
 
-function createPushReceiptUrl(requestId: string, tokenId: string) {
+export function createPushReceiptUrl(requestId: string, tokenId: string) {
   const expiresAt = Date.now() + PUSH_RECEIPT_TTL_MS;
   const url = new URL(`/push-receipts/${encodeURIComponent(requestId)}/${encodeURIComponent(tokenId)}`, config.PUBLIC_API_URL);
   url.searchParams.set('expiresAt', String(expiresAt));

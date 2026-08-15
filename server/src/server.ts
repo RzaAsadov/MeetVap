@@ -6,8 +6,11 @@ import morgan from 'morgan';
 import { ZodError } from 'zod';
 
 import { config } from './config';
+import { startChildAppVersionSyncWorker } from './childAppVersionSync';
 import { childPushReceiptRoutes, startChildPushRelayWorker } from './childPushRelay';
+import { startChildUserSyncWorker } from './childUserSync';
 import { HttpError } from './httpError';
+import { startExpoPushReceiptWorker } from './expoPushReceipts';
 import { payloadMaskMiddleware } from './payloadMaskMiddleware';
 import { prisma } from './prisma';
 import { authRoutes } from './routes/authRoutes';
@@ -31,6 +34,7 @@ import { requireAuth } from './auth';
 import { getClientPolicy, operationalConfig } from './operationalConfig';
 import { runOperationalCleanup } from './maintenance';
 import { startLiveKitHealthMonitor } from './livekitPool';
+import { startMessagePushOutboxWorker } from './messagePushOutbox';
 import { withRedisLock } from './redisCache';
 
 const app = express();
@@ -132,7 +136,11 @@ server.listen(config.PORT, () => {
 
 startLiveKitHealthMonitor(io);
 startMainPushRelayWorker();
+startChildAppVersionSyncWorker();
 startChildPushRelayWorker();
+startChildUserSyncWorker();
+startMessagePushOutboxWorker();
+startExpoPushReceiptWorker();
 
 const disappearingMessagesCleanupTimer = setInterval(() => {
   void withRedisLock('lock:cleanup:disappearing-messages', 55, () => cleanupExpiredDisappearingMessages(io)).catch((error) => {

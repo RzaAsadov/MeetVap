@@ -10,6 +10,8 @@ const APP_VERSION_HEADER = 'x-meetvap-app-version';
 const BUILD_NUMBER_HEADER = 'x-meetvap-build-number';
 const CAPABILITIES_HEADER = 'x-meetvap-capabilities';
 const PLATFORM_HEADER = 'x-meetvap-platform';
+const DEVICE_MODEL_HEADER = 'x-meetvap-device-model';
+const OS_VERSION_HEADER = 'x-meetvap-os-version';
 const MAX_HEADER_LENGTH = 64;
 const MAX_CAPABILITIES_HEADER_LENGTH = 256;
 const SESSION_METADATA_WRITE_TTL_MS = 10 * 60 * 1000;
@@ -27,6 +29,8 @@ type ClientMetadata = {
   capabilities?: string[];
   platform?: string;
   installationId?: string;
+  deviceModel?: string;
+  osVersion?: string;
 };
 
 type ClientRow = {
@@ -42,6 +46,8 @@ export function getRequestClientMetadata(req: Request, fallbackPlatform?: string
   const capabilities = normalizeCapabilities(req.get(CAPABILITIES_HEADER));
   const platform = normalizeHeaderValue(req.get(PLATFORM_HEADER)) ?? normalizeHeaderValue(fallbackPlatform);
   const installationId = normalizeInstallationId(req.get('x-meetvap-installation-id')) ?? undefined;
+  const deviceModel = normalizeHeaderValue(req.get(DEVICE_MODEL_HEADER));
+  const osVersion = normalizeHeaderValue(req.get(OS_VERSION_HEADER));
 
   return {
     ...(appBuildNumber ? { appBuildNumber } : {}),
@@ -49,6 +55,8 @@ export function getRequestClientMetadata(req: Request, fallbackPlatform?: string
     capabilities,
     ...(platform ? { platform } : {}),
     ...(installationId ? { installationId } : {}),
+    ...(deviceModel ? { deviceModel } : {}),
+    ...(osVersion ? { osVersion } : {}),
   };
 }
 
@@ -57,7 +65,9 @@ export function hasClientMetadata(input: ClientMetadata) {
     input.appVersion !== undefined ||
     input.capabilities !== undefined ||
     input.platform !== undefined ||
-    input.installationId !== undefined;
+    input.installationId !== undefined ||
+    input.deviceModel !== undefined ||
+    input.osVersion !== undefined;
 }
 
 export function hasClientCapability(input: ClientMetadata, capability: string) {
@@ -148,6 +158,8 @@ export function getClientMetadataWriteData(metadata: ClientMetadata) {
     ...(metadata.capabilities !== undefined ? { capabilities: metadata.capabilities } : {}),
     ...(metadata.platform !== undefined ? { platform: metadata.platform } : {}),
     ...(metadata.installationId !== undefined ? { installationId: metadata.installationId } : {}),
+    ...(metadata.deviceModel !== undefined ? { deviceModel: metadata.deviceModel } : {}),
+    ...(metadata.osVersion !== undefined ? { osVersion: metadata.osVersion } : {}),
   };
 }
 

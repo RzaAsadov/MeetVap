@@ -215,6 +215,8 @@ export const ru: Record<string, TranslationValue> = {
   selectAll: 'Выбрать всё',
   textOptions: 'Параметры текста',
   darkMode: 'Тёмная тема',
+  autoDownloadMedia: 'Автозагрузка медиа',
+  autoDownloadMediaDescription: 'Автоматически загружать полученные фото, видео, голосовые сообщения и файлы.',
   dismiss: 'Скрыть',
   deleteAccount: 'Удалить аккаунт',
   deleteAccountForeverBody: 'Это навсегда удалит ваш аккаунт MeetVap, сеансы, сообщения, загрузки, контакты и членство в группах на сервере.',

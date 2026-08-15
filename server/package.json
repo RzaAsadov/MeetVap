@@ -8,6 +8,7 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
     "lint": "eslint \"src/**/*.ts\"",
+    "test": "npm run build && node --test dist/*.test.js",
     "prisma:generate": "node scripts/prisma-with-env.cjs generate",
     "prisma:migrate": "node scripts/prisma-with-env.cjs migrate dev",
     "prisma:deploy": "node scripts/prisma-with-env.cjs migrate deploy",

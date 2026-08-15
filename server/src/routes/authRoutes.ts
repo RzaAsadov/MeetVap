@@ -4,6 +4,7 @@ import { z } from 'zod';
 
 import { getAuthedUser, hashPassword, isAdminBlocked, requireAuth, signAccessToken, toAuthUser, verifyPassword } from '../auth';
 import { getClientMetadataWriteData, getRequestClientMetadata, hashAccessToken } from '../clientCompatibility';
+import { enqueueChildUserSync } from '../childUserSync';
 import { assertRequestDeviceAllowed } from '../deviceAccess';
 import { HttpError } from '../httpError';
 import { operationalConfig } from '../operationalConfig';
@@ -154,14 +155,19 @@ authRoutes.post('/register', async (req, res, next) => {
         userId: user.id,
       },
     });
-    void notifyServerUserRegistered({
-      io: req.app.get('io'),
-      occurredAt: new Date(),
-      platform: input.platform,
-      user,
-    }).catch((error) => {
-      console.warn('Could not send registration server event', error);
+    void enqueueChildUserSync(user.id, 'REGISTERED').catch((error) => {
+      console.error('Could not queue registered child user synchronization', { error, userId: user.id });
     });
+    if (operationalConfig.serverRole === 'main') {
+      void notifyServerUserRegistered({
+        io: req.app.get('io'),
+        occurredAt: new Date(),
+        platform: input.platform,
+        user,
+      }).catch((error) => {
+        console.warn('Could not send registration server event', error);
+      });
+    }
 
     res.status(201).json({
       token,
@@ -218,6 +224,9 @@ authRoutes.post('/login', async (req, res, next) => {
         userAgent: req.get('user-agent') ?? null,
         userId: user.id,
       },
+    });
+    void enqueueChildUserSync(user.id, 'LOGIN').catch((error) => {
+      console.error('Could not queue logged-in child user synchronization', { error, userId: user.id });
     });
 
     res.json({

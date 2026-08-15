@@ -215,6 +215,8 @@ export const az: Record<string, TranslationValue> = {
   selectAll: 'Hamısını seç',
   textOptions: 'Mətn seçimləri',
   darkMode: 'Qaranlıq rejim',
+  autoDownloadMedia: 'Medianı avtomatik endir',
+  autoDownloadMediaDescription: 'Qəbul edilən foto, video, səsli mesaj və faylları avtomatik endir.',
   dismiss: 'Bağla',
   deleteAccount: 'Hesabı sil',
   deleteAccountForeverBody: 'Bu, MeetVap hesabınızı, sessiyalarınızı, mesajlarınızı, yüklədiyiniz faylları, kontaktlarınızı və qrup üzvlüklərinizi serverdən həmişəlik siləcək.',

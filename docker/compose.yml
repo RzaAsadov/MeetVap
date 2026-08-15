@@ -68,7 +68,7 @@ services:
     environment: *server-environment
     volumes:
       - uploads_data:/uploads
-      - ./generated/config.json:/app/config.json:ro
+      - ./generated/config.json:/app/config.json
       - ./generated/livekit-servers.json:/app/livekit-servers.json:ro
       - ./secrets:/run/secrets/meetvap:ro
     depends_on:

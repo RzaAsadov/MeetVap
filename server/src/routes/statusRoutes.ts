@@ -11,6 +11,7 @@ import { config } from '../config';
 import { HttpError } from '../httpError';
 import { prisma } from '../prisma';
 import { serializeUser } from '../serializers';
+import { getVideoThumbnailPublicPath, removeVideoThumbnail } from '../videoThumbnails';
 import { assertNotBlockedBetween } from './userRoutes';
 import { createAndBroadcastConversationMessage } from './conversationRoutes';
 
@@ -407,6 +408,7 @@ function serializeStatus(status: StatusWithRelations, currentUserId: string) {
       mimeType: status.media.mimeType,
       originalName: status.media.originalName,
       sizeBytes: status.media.sizeBytes,
+      thumbnailPath: getVideoThumbnailPublicPath(status.media),
     } : null,
     mediaId: status.mediaId,
     viewedByMe: status.authorId === currentUserId || status.views.some((view) => view.viewerId === currentUserId),
@@ -627,5 +629,6 @@ async function deleteStatusMediaFiles(mediaFiles: Array<{ id: string; storageKey
     }
 
     await fs.unlink(filePath).catch(() => undefined);
+    await removeVideoThumbnail(media.id);
   }));
 }

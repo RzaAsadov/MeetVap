@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client';
 import QRCode from 'qrcode';
 import { io, Socket } from 'socket.io-client';
-import { Ban, Bell, BellOff, BookUser, Camera, Check, CheckCheck, Contact, Copy, Download, Eye, File, Flag, Image, Link, LoaderCircle, Maximize2, MessageCircle, MessageCirclePlus, Mic, MicOff, Minimize2, MoreVertical, Paperclip, Pencil, Phone, PhoneCall, PhoneIncoming, PhoneOff, PhoneOutgoing, Pin, Plus, Reply, ScreenShare, Search, Send, Settings as SettingsIcon, Share2, Shield, Smile, Star, Trash2, Type, UserPlus, Users, Video, Volume2, VolumeX, X } from 'lucide-react';
+import { Ban, Bell, BellOff, BookUser, Camera, Check, CheckCheck, Contact, Copy, Download, Eye, File, Flag, Image, Link, LoaderCircle, Maximize2, MessageCircle, MessageCirclePlus, Mic, MicOff, Minimize2, MoreVertical, Paperclip, Pause, Pencil, Phone, PhoneCall, PhoneIncoming, PhoneOff, PhoneOutgoing, Pin, Play, Plus, Reply, ScreenShare, Search, Send, Settings as SettingsIcon, Share2, Shield, Smile, Star, Trash2, Type, UserPlus, Users, Video, Volume2, VolumeX, X } from 'lucide-react';
 import { Room, RoomEvent, Track, VideoPreset, VideoPresets, VideoQuality } from 'livekit-client';
 import type { LocalTrack, LocalVideoTrack, RemoteTrack, RemoteTrackPublication, ScreenShareCaptureOptions, TrackPublishOptions, VideoCaptureOptions } from 'livekit-client';
 
@@ -111,6 +111,11 @@ const DEFAULT_WEB_MEDIA_CACHE_CONFIG = {
   maxSingleMediaBytes: 500 * 1024 * 1024,
   maxTotalBytes: 10 * 1024 * 1024 * 1024,
 };
+const DEFAULT_WEB_UPLOAD_CONFIG = {
+  maxAttachmentBytes: 1024 * 1024 * 1024,
+  maxChunkBytes: 1024 * 1024,
+  maxDirectUploadBytes: 100 * 1024 * 1024,
+};
 const WEB_LANGUAGE_KEY = 'meetvap.web.language';
 const EMOJI_GROUPS = [
   { key: 'smileys', label: 'Smileys', emojis: ['😀', '😃', '😄', '😁', '😆', '😅', '😂', '🤣', '😊', '😇', '🙂', '🙃', '😉', '😍', '😘', '😋', '😎', '🤩', '🥳', '😏', '😢', '😭', '😤', '😡', '🤔', '🤗', '🤫', '😴', '😱', '🥰'] },
@@ -123,6 +128,8 @@ type Language = 'en' | 'tr' | 'ru';
 
 const translations = {
   en: {
+    acceptGroupInvite: 'Accept invitation',
+    acceptingGroupInvite: 'Joining...',
     answer: 'Answer',
     attachmentFailed: 'Could not send attachment',
     admin: 'Admin',
@@ -160,6 +167,9 @@ const translations = {
     incomingCall: 'Incoming call',
     incoming: 'Incoming',
     online: 'Online',
+    pauseVoiceMessage: 'Pause voice message',
+    playVoiceMessage: 'Play voice message',
+    playbackSpeed: 'Playback speed',
     loading: 'Loading...',
     logout: 'Logout',
     maximize: 'Maximize',
@@ -299,10 +309,19 @@ const translations = {
     textStatus: 'Text story',
     typeStatus: 'Type a story',
     viewedStatuses: 'Viewed updates',
+    groupInvitation: 'Group invitation',
+    groupInviteAcceptFailed: 'Could not accept group invitation',
+    groupInviteDescription: 'You were invited to join {name}. Accept to view messages and participate.',
+    invited: 'Invited',
+    notNow: 'Not now',
+    reviewInvitation: 'Review invitation',
+    voiceGroupInviteDescription: 'You were invited to join the voice group {name}. Accept to view messages and enter the voice room.',
     waitingForScan: 'Waiting for scan...',
     webPairingHelp: 'Open MeetVap on your phone, go to Devices, then scan this QR code.',
   },
   tr: {
+    acceptGroupInvite: 'Daveti kabul et',
+    acceptingGroupInvite: 'Katılınıyor...',
     answer: 'Yanıtla',
     attachmentFailed: 'Ek gönderilemedi',
     admin: 'Admin',
@@ -340,6 +359,9 @@ const translations = {
     incomingCall: 'Gelen arama',
     incoming: 'Gelen',
     online: 'Çevrimiçi',
+    pauseVoiceMessage: 'Sesli mesajı duraklat',
+    playVoiceMessage: 'Sesli mesajı oynat',
+    playbackSpeed: 'Oynatma hızı',
     loading: 'Yükleniyor...',
     logout: 'Çıkış',
     maximize: 'Büyüt',
@@ -479,10 +501,19 @@ const translations = {
     textStatus: 'Yazılı durum',
     typeStatus: 'Durum yaz',
     viewedStatuses: 'Görülen durumlar',
+    groupInvitation: 'Grup daveti',
+    groupInviteAcceptFailed: 'Grup daveti kabul edilemedi',
+    groupInviteDescription: '{name} grubuna davet edildin. Mesajları görmek ve katılmak için daveti kabul et.',
+    invited: 'Davet edildi',
+    notNow: 'Şimdi değil',
+    reviewInvitation: 'Daveti görüntüle',
+    voiceGroupInviteDescription: '{name} sesli grubuna davet edildin. Mesajları görmek ve ses odasına katılmak için daveti kabul et.',
     waitingForScan: 'Tarama bekleniyor...',
     webPairingHelp: 'Telefonunda MeetVap uygulamasını aç, Cihazlar bölümüne git ve bu QR kodunu tara.',
   },
   ru: {
+    acceptGroupInvite: 'Принять приглашение',
+    acceptingGroupInvite: 'Выполняется вход...',
     answer: 'Ответить',
     attachmentFailed: 'Не удалось отправить вложение',
     admin: 'Админ',
@@ -520,6 +551,9 @@ const translations = {
     incomingCall: 'Входящий звонок',
     incoming: 'Входящий',
     online: 'Онлайн',
+    pauseVoiceMessage: 'Приостановить голосовое сообщение',
+    playVoiceMessage: 'Воспроизвести голосовое сообщение',
+    playbackSpeed: 'Скорость воспроизведения',
     loading: 'Загрузка...',
     logout: 'Выйти',
     maximize: 'Развернуть',
@@ -659,6 +693,13 @@ const translations = {
     textStatus: 'Текстовый статус',
     typeStatus: 'Напишите статус',
     viewedStatuses: 'Просмотренные статусы',
+    groupInvitation: 'Приглашение в группу',
+    groupInviteAcceptFailed: 'Не удалось принять приглашение в группу',
+    groupInviteDescription: 'Вас пригласили в группу {name}. Примите приглашение, чтобы просматривать сообщения и участвовать.',
+    invited: 'Приглашение',
+    notNow: 'Не сейчас',
+    reviewInvitation: 'Просмотреть приглашение',
+    voiceGroupInviteDescription: 'Вас пригласили в голосовую группу {name}. Примите приглашение, чтобы просматривать сообщения и войти в голосовую комнату.',
     waitingForScan: 'Ожидание сканирования...',
     webPairingHelp: 'Откройте MeetVap на телефоне, перейдите в раздел «Устройства» и отсканируйте этот QR-код.',
   },
@@ -934,6 +975,24 @@ function normalizeWebMediaCacheConfig(input: unknown): WebMediaCacheConfig {
   };
 }
 
+function normalizeWebUploadConfig(input: unknown): WebUploadConfig {
+  if (!input || typeof input !== 'object') {
+    return DEFAULT_WEB_UPLOAD_CONFIG;
+  }
+
+  const source = input as Partial<WebUploadConfig>;
+  const normalize = (value: unknown, fallback: number) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+  };
+
+  return {
+    maxAttachmentBytes: normalize(source.maxAttachmentBytes, DEFAULT_WEB_UPLOAD_CONFIG.maxAttachmentBytes),
+    maxChunkBytes: normalize(source.maxChunkBytes, DEFAULT_WEB_UPLOAD_CONFIG.maxChunkBytes),
+    maxDirectUploadBytes: normalize(source.maxDirectUploadBytes, DEFAULT_WEB_UPLOAD_CONFIG.maxDirectUploadBytes),
+  };
+}
+
 function buildRequestSignature(values: string[]) {
   return [...new Set(values)].sort().join(',');
 }
@@ -977,6 +1036,8 @@ type Conversation = {
   memberCount?: number;
   members?: AuthUser[];
   myGroupAliasName?: string | null;
+  myGroupAliasPromptSeen?: boolean;
+  myGroupInvitePending?: boolean;
   otherUserId?: string | null;
   ownerId?: string | null;
   ownerOnlyMessages?: boolean;
@@ -1000,6 +1061,7 @@ type Message = {
     originalName: string;
     sizeBytes?: number;
     storageKey: string;
+    thumbnailPath?: string | null;
   } | null;
   mediaId?: string | null;
   metadata?: {
@@ -1041,6 +1103,7 @@ type StatusUpdate = {
     mimeType: string;
     originalName: string;
     sizeBytes?: number;
+    thumbnailPath?: string | null;
   } | null;
   mediaId?: string | null;
   mediaUri?: string;
@@ -1068,6 +1131,11 @@ type PendingCaptionAttachment = {
   previewUrl: string | null;
 };
 
+type AttachmentUploadState = {
+  progress: number;
+  status: 'failed' | 'uploading';
+};
+
 type ForwardTarget = {
   conversationId?: string;
   id: string;
@@ -1085,6 +1153,12 @@ type PendingStatusMedia = {
 type WebMediaCacheConfig = {
   maxSingleMediaBytes: number;
   maxTotalBytes: number;
+};
+
+type WebUploadConfig = {
+  maxAttachmentBytes: number;
+  maxChunkBytes: number;
+  maxDirectUploadBytes: number;
 };
 
 type MediaViewerState = {
@@ -1253,12 +1327,14 @@ function App() {
   const [draft, setDraft] = useState('');
   const [language, setLanguage] = useState<Language>(() => getStoredWebLanguage() ?? getBrowserLanguage());
   const [webMediaCacheConfig, setWebMediaCacheConfig] = useState<WebMediaCacheConfig>(DEFAULT_WEB_MEDIA_CACHE_CONFIG);
+  const [webUploadConfig, setWebUploadConfig] = useState<WebUploadConfig>(DEFAULT_WEB_UPLOAD_CONFIG);
   const [isLoading, setLoading] = useState(false);
   const [isRecordingVoice, setRecordingVoice] = useState(false);
   const [voiceRecordingSeconds, setVoiceRecordingSeconds] = useState(0);
   const [isSendingVoice, setSendingVoice] = useState(false);
   const [isAttachmentMenuOpen, setAttachmentMenuOpen] = useState(false);
   const [isSendingAttachment, setSendingAttachment] = useState(false);
+  const [attachmentUploadsByMessageId, setAttachmentUploadsByMessageId] = useState<Record<string, AttachmentUploadState>>({});
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [contacts, setContacts] = useState<AuthUser[]>([]);
   const [contactQuery, setContactQuery] = useState('');
@@ -1318,6 +1394,8 @@ function App() {
   const [callState, setCallState] = useState<CallState | null>(null);
   const [voiceRoom, setVoiceRoom] = useState<VoiceRoomState | null>(null);
   const [isVoiceRoomPeopleOpen, setVoiceRoomPeopleOpen] = useState(false);
+  const [dismissedGroupInviteId, setDismissedGroupInviteId] = useState<string | null>(null);
+  const [isAcceptingGroupInvite, setAcceptingGroupInvite] = useState(false);
   const [isChatHeaderMenuOpen, setChatHeaderMenuOpen] = useState(false);
   const [isGroupDetailsOpen, setGroupDetailsOpen] = useState(false);
   const [isDirectDetailsOpen, setDirectDetailsOpen] = useState(false);
@@ -1356,6 +1434,7 @@ function App() {
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const groupAvatarInputRef = useRef<HTMLInputElement>(null);
   const composerTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const messagesContainerRef = useRef<HTMLElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const voiceChunksRef = useRef<Blob[]>([]);
@@ -1390,6 +1469,12 @@ function App() {
     () => conversations.find((conversation) => conversation.id === selectedConversationId) ?? null,
     [conversations, selectedConversationId],
   );
+
+  useEffect(() => {
+    setDismissedGroupInviteId((current) => (
+      current && current !== selectedConversationId ? null : current
+    ));
+  }, [selectedConversationId]);
 
   useEffect(() => {
     callStateRef.current = callState;
@@ -1610,7 +1695,10 @@ function App() {
   const selectedConversationRole = selectedConversation
     ? getConversationRoleBadge(selectedConversation, user?.id)
     : null;
-  const canManageSelectedGroup = selectedConversation?.type !== 'GROUP' || selectedConversationRole !== null;
+  const isSelectedGroupInvitePending = selectedConversation?.type === 'GROUP' &&
+    selectedConversation.myGroupInvitePending === true;
+  const canManageSelectedGroup = !isSelectedGroupInvitePending &&
+    (selectedConversation?.type !== 'GROUP' || selectedConversationRole !== null);
   const isMessageSelectionActive = selectedMessageIds.size > 0;
   const selectedMessages = useMemo(() => {
     const selectedIds = selectedMessageIds;
@@ -1823,14 +1911,23 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (activePanelTab !== 'chats' || !selectedConversationId) {
-      return;
+    if (activePanelTab !== 'chats' || !selectedConversationId || isLoading) {
+      return undefined;
     }
 
-    requestAnimationFrame(() => {
+    const frame = requestAnimationFrame(() => {
+      const container = messagesContainerRef.current;
+
+      if (container) {
+        container.scrollTop = container.scrollHeight;
+        return;
+      }
+
       messagesEndRef.current?.scrollIntoView({ block: 'end' });
     });
-  }, [activePanelTab, messages.length, selectedConversationId]);
+
+    return () => cancelAnimationFrame(frame);
+  }, [activePanelTab, isLoading, messages.length, selectedConversationId]);
 
   useEffect(() => {
     const textarea = composerTextareaRef.current;
@@ -1872,6 +1969,7 @@ function App() {
     stopIncomingRingtone();
     stopOutgoingRingback();
     localStorage.removeItem(TOKEN_KEY);
+    localMediaBlobsById.clear();
     setToken(null);
     setUser(null);
     setConversations([]);
@@ -2541,6 +2639,7 @@ function App() {
         if (!cancelled) {
           setUser(response.user);
           setWebMediaCacheConfig(normalizeWebMediaCacheConfig(clientConfig?.webMediaCache));
+          setWebUploadConfig(normalizeWebUploadConfig(clientConfig?.uploads));
           setLanguage(getStoredWebLanguage() ?? preferences.locale ?? getBrowserLanguage());
           setContacts(contactsResponse.contacts);
           setBlockedUserIds(new Set(blocksResponse.blockedUsers.map((blockedUser) => blockedUser.id)));
@@ -2640,7 +2739,8 @@ function App() {
   }, [publicMeeting]);
 
   useEffect(() => {
-    if (!token || !selectedConversationId) {
+    if (!token || !selectedConversationId || isSelectedGroupInvitePending) {
+      setPinnedMessages([]);
       return;
     }
 
@@ -2681,10 +2781,10 @@ function App() {
       cancelled = true;
       socketRef.current?.emit('conversation:leave', selectedConversationId);
     };
-  }, [authedRequest, loadMessages, selectedConversationId, token, updateConversationPreviewFromMessage, user?.id]);
+  }, [authedRequest, isSelectedGroupInvitePending, loadMessages, selectedConversationId, token, updateConversationPreviewFromMessage, user?.id]);
 
   useEffect(() => {
-    if (!token || !selectedConversation?.isVoiceRoom || callState) {
+    if (!token || !selectedConversation?.isVoiceRoom || isSelectedGroupInvitePending || callState) {
       void closeVoiceRoom(false);
       return;
     }
@@ -2694,7 +2794,7 @@ function App() {
     }
 
     void joinVoiceRoom(selectedConversation);
-  }, [callState, selectedConversation, token]);
+  }, [callState, isSelectedGroupInvitePending, selectedConversation, token]);
 
   useEffect(() => {
     if (!token) {
@@ -3399,6 +3499,17 @@ function App() {
     }
   }
 
+  function dismissCaptionModalForUpload() {
+    setPendingCaptionAttachment(null);
+    setCaptionDraft('');
+    if (galleryInputRef.current) {
+      galleryInputRef.current.value = '';
+    }
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  }
+
   function applyEditedImage(file: globalThis.File) {
     setPendingCaptionAttachment((current) => {
       if (!current || current.kind !== 'IMAGE') {
@@ -3417,12 +3528,16 @@ function App() {
       return;
     }
 
+    const conversationId = selectedConversationId;
+    const previewUrl = pendingCaptionAttachment?.file === file
+      ? pendingCaptionAttachment.previewUrl
+      : null;
     setAttachmentError(null);
     setSendingAttachment(true);
     const optimisticId = createLocalMessageId();
     const optimisticMessage = createOptimisticMessage({
       body: caption.trim() || (kind === 'FILE' ? file.name : ''),
-      conversationId: selectedConversationId,
+      conversationId,
       id: optimisticId,
       kind,
       media: {
@@ -3431,31 +3546,26 @@ function App() {
         originalName: file.name || 'attachment',
         storageKey: '',
       },
-      metadata: pendingCaptionAttachment?.previewUrl ? { previewUrl: pendingCaptionAttachment.previewUrl } : undefined,
+      metadata: previewUrl ? { previewUrl } : undefined,
       user,
     });
 
     addOptimisticMessage(optimisticMessage);
+    setAttachmentUploadsByMessageId((current) => ({
+      ...current,
+      [optimisticId]: { progress: 0, status: 'uploading' },
+    }));
+    dismissCaptionModalForUpload();
 
     try {
-      const uploadResponse = await fetch(`${API_URL}/media/upload-binary`, {
-        body: file,
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': file.type || 'application/octet-stream',
-          'x-mime-type': file.type || 'application/octet-stream',
-          'x-original-name': encodeURIComponent(file.name || 'attachment'),
-        },
-        method: 'POST',
-      });
-      const uploadText = await uploadResponse.text();
-      const uploadPayload = uploadText ? JSON.parse(uploadText) : null;
+      const uploadPayload = await uploadWebMessageMedia(file, token, webUploadConfig, (progress) => {
+        setAttachmentUploadsByMessageId((current) => ({
+          ...current,
+          [optimisticId]: { progress, status: 'uploading' },
+        }));
+      }, t('attachmentFailed'));
 
-      if (!uploadResponse.ok) {
-        throw new Error(uploadPayload?.error || t('attachmentFailed'));
-      }
-
-      const response = await authedRequest<{ message: Message }>(`/conversations/${selectedConversationId}/messages`, {
+      const response = await authedRequest<{ message: Message }>(`/conversations/${conversationId}/messages`, {
         body: JSON.stringify({
           body: caption.trim() || (kind === 'FILE' ? file.name : ''),
           kind,
@@ -3464,12 +3574,32 @@ function App() {
         method: 'POST',
       });
 
-      replaceOptimisticMessage(selectedConversationId, optimisticId, response.message);
-      void persistAndAcknowledgeWebMessageContent(selectedConversationId, [response.message])
+      const displayedMessage = previewUrl
+        ? {
+            ...response.message,
+            metadata: {
+              ...(response.message.metadata && typeof response.message.metadata === 'object' ? response.message.metadata : {}),
+              previewUrl,
+            },
+          }
+        : response.message;
+
+      if (response.message.media?.id) {
+        primeLocalMediaBlob(response.message.media.id, file, response.message.media, webMediaCacheConfig);
+      }
+      replaceOptimisticMessage(conversationId, optimisticId, displayedMessage);
+      setAttachmentUploadsByMessageId((current) => omitRecordKey(current, optimisticId));
+      void persistAndAcknowledgeWebMessageContent(conversationId, [displayedMessage])
         .catch(() => undefined);
-      closeCaptionModal();
     } catch (error) {
-      markOptimisticMessageFailed(selectedConversationId, optimisticId);
+      markOptimisticMessageFailed(conversationId, optimisticId);
+      setAttachmentUploadsByMessageId((current) => ({
+        ...current,
+        [optimisticId]: {
+          progress: current[optimisticId]?.progress ?? 0,
+          status: 'failed',
+        },
+      }));
       setAttachmentError(error instanceof Error ? error.message : t('attachmentFailed'));
     } finally {
       setSendingAttachment(false);
@@ -3571,20 +3701,26 @@ function App() {
       return;
     }
 
+    const conversationId = selectedConversationId;
     setSendingVoice(true);
     setAttachmentError(null);
     const optimisticId = createLocalMessageId();
     const previewUrl = URL.createObjectURL(blob);
+    const extension = getVoiceFileExtension(blob.type);
+    const originalName = `voice-message-${Date.now()}${extension}`;
+    const voiceFile = new globalThis.File([blob], originalName, {
+      type: blob.type || 'audio/webm',
+    });
     const optimisticMessage = createOptimisticMessage({
       body: '',
-      conversationId: selectedConversationId,
+      conversationId,
       id: optimisticId,
       kind: 'VOICE',
       media: {
         durationSec: durationSeconds,
         id: null,
         mimeType: blob.type || 'audio/webm',
-        originalName: `voice-message-${Date.now()}${getVoiceFileExtension(blob.type)}`,
+        originalName,
         sizeBytes: blob.size,
         storageKey: '',
       },
@@ -3593,28 +3729,20 @@ function App() {
     });
 
     addOptimisticMessage(optimisticMessage);
+    setAttachmentUploadsByMessageId((current) => ({
+      ...current,
+      [optimisticId]: { progress: 0, status: 'uploading' },
+    }));
 
     try {
-      const extension = getVoiceFileExtension(blob.type);
-      const uploadResponse = await fetch(`${API_URL}/media/upload-binary`, {
-        body: blob,
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': blob.type || 'audio/webm',
-          'x-duration-sec': String(durationSeconds),
-          'x-mime-type': blob.type || 'audio/webm',
-          'x-original-name': encodeURIComponent(`voice-message-${Date.now()}${extension}`),
-        },
-        method: 'POST',
-      });
-      const uploadText = await uploadResponse.text();
-      const uploadPayload = uploadText ? JSON.parse(uploadText) : null;
+      const uploadPayload = await uploadWebMessageMedia(voiceFile, token, webUploadConfig, (progress) => {
+        setAttachmentUploadsByMessageId((current) => ({
+          ...current,
+          [optimisticId]: { progress, status: 'uploading' },
+        }));
+      }, t('attachmentFailed'), { durationSeconds });
 
-      if (!uploadResponse.ok) {
-        throw new Error(uploadPayload?.error || t('attachmentFailed'));
-      }
-
-      const response = await authedRequest<{ message: Message }>(`/conversations/${selectedConversationId}/messages`, {
+      const response = await authedRequest<{ message: Message }>(`/conversations/${conversationId}/messages`, {
         body: JSON.stringify({
           body: '',
           kind: 'VOICE',
@@ -3623,11 +3751,30 @@ function App() {
         method: 'POST',
       });
 
-      replaceOptimisticMessage(selectedConversationId, optimisticId, response.message);
-      void persistAndAcknowledgeWebMessageContent(selectedConversationId, [response.message])
+      const displayedMessage = {
+        ...response.message,
+        metadata: {
+          ...(response.message.metadata && typeof response.message.metadata === 'object' ? response.message.metadata : {}),
+          previewUrl,
+        },
+      };
+
+      if (response.message.media?.id) {
+        primeLocalMediaBlob(response.message.media.id, voiceFile, response.message.media, webMediaCacheConfig);
+      }
+      replaceOptimisticMessage(conversationId, optimisticId, displayedMessage);
+      setAttachmentUploadsByMessageId((current) => omitRecordKey(current, optimisticId));
+      void persistAndAcknowledgeWebMessageContent(conversationId, [displayedMessage])
         .catch(() => undefined);
     } catch (error) {
-      markOptimisticMessageFailed(selectedConversationId, optimisticId);
+      markOptimisticMessageFailed(conversationId, optimisticId);
+      setAttachmentUploadsByMessageId((current) => ({
+        ...current,
+        [optimisticId]: {
+          progress: current[optimisticId]?.progress ?? 0,
+          status: 'failed',
+        },
+      }));
       setAttachmentError(error instanceof Error ? error.message : t('attachmentFailed'));
     } finally {
       setSendingVoice(false);
@@ -4228,6 +4375,29 @@ function App() {
 
   function applyUpdatedConversation(updated: Conversation) {
     setConversations((current) => current.map((item) => item.id === updated.id ? updated : item));
+  }
+
+  async function acceptSelectedGroupInvite() {
+    if (!selectedConversation || !isSelectedGroupInvitePending || isAcceptingGroupInvite) {
+      return;
+    }
+
+    setAcceptingGroupInvite(true);
+    setAttachmentError(null);
+
+    try {
+      const response = await authedRequest<{ conversation: Conversation }>(`/conversations/${selectedConversation.id}/alias`, {
+        body: JSON.stringify({ aliasName: null }),
+        method: 'PATCH',
+      });
+
+      applyUpdatedConversation(response.conversation);
+      setDismissedGroupInviteId(null);
+    } catch (error) {
+      setAttachmentError(error instanceof Error ? error.message : t('groupInviteAcceptFailed'));
+    } finally {
+      setAcceptingGroupInvite(false);
+    }
   }
 
   async function updateGroupTitle(conversation: Conversation) {
@@ -5431,11 +5601,15 @@ function App() {
               displayConversation,
               latestLocalMessage,
             );
-            const previewText = getConversationPreviewTextWithLocalFallback(
-              displayConversation,
-              conversationMessages,
-              t,
-            );
+            const isPendingGroupInvite = displayConversation.type === 'GROUP' &&
+              displayConversation.myGroupInvitePending === true;
+            const previewText = isPendingGroupInvite
+              ? t('groupInvitation')
+              : getConversationPreviewTextWithLocalFallback(
+                  displayConversation,
+                  conversationMessages,
+                  t,
+                );
             const peer = getConversationPeer(conversation, user?.id);
             const shouldShowOnlineDot = conversation.type === 'DIRECT' && peer?.isOnline === true;
 
@@ -5465,7 +5639,7 @@ function App() {
                     <span>{displayConversation.title}</span>
                   </strong>
                   <small className="conversation-preview-line">
-                    {displayConversation.lastMessageSenderId === user?.id && displayLastMessageStatus ? (
+                    {!isPendingGroupInvite && displayConversation.lastMessageSenderId === user?.id && displayLastMessageStatus ? (
                       <MessageStatus status={displayLastMessageStatus} t={t} />
                     ) : null}
                     <span>{previewText}</span>
@@ -5474,6 +5648,7 @@ function App() {
                 <div className="conversation-side">
                   <time>{formatConversationTime(displayConversation.lastMessageAt)}</time>
                   <div className="conversation-badges">
+                    {isPendingGroupInvite ? <em>{t('invited')}</em> : null}
                     {getConversationRoleBadge(displayConversation, user?.id) ? <em>{getConversationRoleBadge(displayConversation, user?.id) === 'owner' ? t('owner') : t('admin')}</em> : null}
                     {shouldShowNotInContactsBadge(displayConversation) ? <em>{t('notInContacts')}</em> : null}
                     {displayConversation.unreadCount ? <b>{displayConversation.unreadCount}</b> : null}
@@ -5610,10 +5785,10 @@ function App() {
       <main className="chat-panel">
         <header className="topbar">
           <button
-            className={`chat-header-identity ${selectedConversation?.type === 'GROUP' || selectedConversation?.type === 'DIRECT' ? 'clickable' : ''}`}
-            disabled={selectedConversation?.type !== 'GROUP' && selectedConversation?.type !== 'DIRECT'}
+            className={`chat-header-identity ${selectedConversation?.type === 'DIRECT' || (selectedConversation?.type === 'GROUP' && !isSelectedGroupInvitePending) ? 'clickable' : ''}`}
+            disabled={(selectedConversation?.type !== 'GROUP' && selectedConversation?.type !== 'DIRECT') || isSelectedGroupInvitePending}
             onClick={() => {
-              if (selectedConversation?.type === 'GROUP') {
+              if (selectedConversation?.type === 'GROUP' && !isSelectedGroupInvitePending) {
                 setGroupDetailsOpen(true);
               } else if (selectedConversation?.type === 'DIRECT') {
                 setDirectDetailsTab('media');
@@ -5651,7 +5826,7 @@ function App() {
             <div className="chat-header-menu-wrap">
               <button
                 aria-label={t('chatOptions')}
-                disabled={!selectedConversation}
+                disabled={!selectedConversation || isSelectedGroupInvitePending}
                 onClick={() => setChatHeaderMenuOpen((current) => !current)}
                 title={t('chatOptions')}
               >
@@ -5768,8 +5943,17 @@ function App() {
               <button className="settings-logout" onClick={logout}>{t('logout')}</button>
             </div>
           </section>
+        ) : activePanelTab === 'chats' && isSelectedGroupInvitePending && selectedConversation ? (
+          <section className="group-invite-placeholder">
+            <div className="group-invite-placeholder-icon">
+              {selectedConversation.isVoiceRoom ? <Volume2 aria-hidden size={28} /> : <Users aria-hidden size={28} />}
+            </div>
+            <strong>{t('groupInvitation')}</strong>
+            <span>{selectedConversation.title}</span>
+            <button onClick={() => setDismissedGroupInviteId(null)}>{t('reviewInvitation')}</button>
+          </section>
         ) : activePanelTab === 'chats' ? (
-        <section className="messages">
+        <section className="messages" ref={messagesContainerRef}>
           {latestPinnedMessage ? (
             <button className="pinned-banner" onClick={() => {
               setPinnedSearchQuery('');
@@ -5807,8 +5991,15 @@ function App() {
                     setMediaViewerZoom(1);
                   }}
                   onContentReady={(message) => void acknowledgeWebMessageContent(message.conversationId, [message], true).catch(() => undefined)}
+                  t={t}
                   token={token}
                 />
+                {attachmentUploadsByMessageId[row.message.id] ? (
+                  <AttachmentUploadProgress
+                    state={attachmentUploadsByMessageId[row.message.id]}
+                    t={t}
+                  />
+                ) : null}
                 <div className="message-meta">
                   <time>{new Date(row.message.createdAt).toLocaleTimeString()}</time>
                   {row.message.senderId === user?.id ? <MessageStatus status={row.message.status} t={t} /> : null}
@@ -5823,7 +6014,7 @@ function App() {
             <strong>{getMainPanelTitle(activePanelTab, selectedConversation, selectedPeer, t)}</strong>
           </section>
         )}
-        {activePanelTab === 'chats' && replyingTo ? (
+        {activePanelTab === 'chats' && !isSelectedGroupInvitePending && replyingTo ? (
           <div className="reply-banner">
             <Reply aria-hidden size={18} />
             <div>
@@ -5835,7 +6026,7 @@ function App() {
             </button>
           </div>
         ) : null}
-        {activePanelTab === 'chats' && selectedConversation?.isVoiceRoom ? (
+        {activePanelTab === 'chats' && !isSelectedGroupInvitePending && selectedConversation?.isVoiceRoom ? (
           <div className="voice-room-controls">
             <button
               className={voiceRoom?.isSelfMuted ? 'active' : ''}
@@ -5873,7 +6064,7 @@ function App() {
             <span>{voiceRoom?.isConnecting ? t('voiceRoomConnecting') : voiceRoom?.room ? t('voiceRoomConnected') : t('voiceRoomConnecting')}</span>
           </div>
         ) : null}
-        {activePanelTab === 'chats' && isEmojiPickerOpen ? (
+        {activePanelTab === 'chats' && !isSelectedGroupInvitePending && isEmojiPickerOpen ? (
           <div className="emoji-panel">
             <div className="emoji-tabs">
               {EMOJI_GROUPS.map((group) => (
@@ -5895,7 +6086,7 @@ function App() {
             </div>
           </div>
         ) : null}
-        {activePanelTab === 'chats' ? <footer className="composer">
+        {activePanelTab === 'chats' && !isSelectedGroupInvitePending ? <footer className="composer">
           <div className="attachment-control">
             <button
               aria-label={t('sendAttachment')}
@@ -6003,6 +6194,42 @@ function App() {
           </div>
         ) : null}
       </main>
+      {isSelectedGroupInvitePending &&
+      selectedConversation &&
+      dismissedGroupInviteId !== selectedConversation.id ? (
+        <div className="modal-backdrop">
+          <section aria-labelledby="group-invite-title" aria-modal="true" className="group-invite-modal" role="dialog">
+            <div className="group-invite-modal-icon">
+              {selectedConversation.isVoiceRoom ? <Volume2 aria-hidden size={26} /> : <Users aria-hidden size={26} />}
+            </div>
+            <div className="group-invite-modal-heading">
+              <span>{t('invited')}</span>
+              <h2 id="group-invite-title">{t('groupInvitation')}</h2>
+            </div>
+            <div className="group-invite-modal-group">
+              <Avatar title={selectedConversation.title} url={selectedConversation.avatarUrl} />
+              <strong>{selectedConversation.title}</strong>
+            </div>
+            <p>{formatLabel(
+              selectedConversation.isVoiceRoom ? 'voiceGroupInviteDescription' : 'groupInviteDescription',
+              { name: selectedConversation.title },
+            )}</p>
+            <footer>
+              <button
+                className="secondary"
+                disabled={isAcceptingGroupInvite}
+                onClick={() => setDismissedGroupInviteId(selectedConversation.id)}
+              >
+                {t('notNow')}
+              </button>
+              <button disabled={isAcceptingGroupInvite} onClick={() => void acceptSelectedGroupInvite()}>
+                {isAcceptingGroupInvite ? <LoaderCircle aria-hidden className="spin" size={18} /> : <Check aria-hidden size={18} />}
+                <span>{isAcceptingGroupInvite ? t('acceptingGroupInvite') : t('acceptGroupInvite')}</span>
+              </button>
+            </footer>
+          </section>
+        </div>
+      ) : null}
       {incomingCall ? (
         <div className="incoming-call-backdrop">
           <div className="incoming-call-modal">
@@ -7311,10 +7538,19 @@ function StatusMedia({
   onVideoEnded?: () => void;
 }) {
   const token = localStorage.getItem(TOKEN_KEY);
+  const configuredThumbnailUrl = mode === 'thumb' && media.mimeType.startsWith('video/')
+    ? getServerMediaThumbnailUrl(media)
+    : '';
+  const [failedThumbnailUrl, setFailedThumbnailUrl] = useState('');
+  const thumbnailUrl = configuredThumbnailUrl === failedThumbnailUrl ? '' : configuredThumbnailUrl;
   const mediaUrl = useAuthenticatedMediaUrl(media.id, token, undefined, undefined, DEFAULT_WEB_MEDIA_CACHE_CONFIG, {
     ...media,
     storageKey: '',
-  });
+  }, mode !== 'thumb' || !thumbnailUrl);
+
+  if (mode === 'thumb' && thumbnailUrl) {
+    return <img alt={media.originalName || ''} onError={() => setFailedThumbnailUrl(configuredThumbnailUrl)} src={thumbnailUrl} />;
+  }
 
   if (!mediaUrl) {
     return <span className="status-media-loading" />;
@@ -7342,8 +7578,15 @@ function PairingScreen({ onPaired }: { onPaired: (token: string) => void }) {
     let cancelled = false;
 
     async function createPairing() {
-      const response = await fetch(`${API_URL}/web/pairing`, { method: 'POST' });
+      const response = await fetch(`${API_URL}/web/pairing`, {
+        headers: { 'X-MeetVap-Installation-Id': WEB_INSTALLATION_ID },
+        method: 'POST',
+      });
       const nextPairing = await response.json();
+
+      if (!response.ok || !nextPairing.pairingId || !nextPairing.secret || !nextPairing.url) {
+        throw new Error(nextPairing.error || 'Could not create QR');
+      }
 
       if (cancelled) {
         return;
@@ -7369,14 +7612,20 @@ function PairingScreen({ onPaired }: { onPaired: (token: string) => void }) {
     }
 
     const interval = setInterval(async () => {
-      const response = await fetch(`${API_URL}/web/pairing/${encodeURIComponent(pairing.pairingId)}?secret=${encodeURIComponent(pairing.secret)}`);
-      const payload = await response.json();
+      try {
+        const response = await fetch(`${API_URL}/web/pairing/${encodeURIComponent(pairing.pairingId)}?secret=${encodeURIComponent(pairing.secret)}`, {
+          headers: { 'X-MeetVap-Installation-Id': WEB_INSTALLATION_ID },
+        });
+        const payload = await response.json();
 
-      if (payload.status === 'approved' && payload.token) {
-        clearInterval(interval);
-        onPaired(payload.token);
-      } else if (!response.ok) {
-        setStatus(payload.error || 'QR expired. Refresh page.');
+        if (payload.status === 'approved' && payload.token) {
+          clearInterval(interval);
+          onPaired(payload.token);
+        } else if (!response.ok) {
+          setStatus(payload.error || 'QR expired. Refresh page.');
+        }
+      } catch (error) {
+        setStatus(error instanceof Error ? error.message : 'Could not check QR');
       }
     }, 1800);
 
@@ -7552,12 +7801,14 @@ function MessageContent({
   message,
   onOpenMedia,
   onContentReady,
+  t,
   token,
 }: {
   cacheConfig: WebMediaCacheConfig;
   message: Message;
   onOpenMedia?: (viewer: MediaViewerState) => void;
   onContentReady?: (message: Message) => void;
+  t: (key: TranslationKey) => string;
   token: string | null;
 }) {
   const previewUrl = getLocalPreviewUrl(message);
@@ -7594,7 +7845,14 @@ function MessageContent({
     return (
       <>
         {replyPreview ? <MessageReplyPreview reply={replyPreview} /> : null}
-        <AuthenticatedVoiceMedia media={message.media} onContentReady={() => onContentReady?.(message)} token={token} />
+        <AuthenticatedVoiceMedia
+          cacheConfig={cacheConfig}
+          media={message.media}
+          onContentReady={() => onContentReady?.(message)}
+          previewUrl={previewUrl}
+          t={t}
+          token={token}
+        />
       </>
     );
   }
@@ -7679,6 +7937,7 @@ function useAuthenticatedMediaUrl(
   onContentReady?: () => void,
   cacheConfig?: WebMediaCacheConfig,
   media?: NonNullable<Message['media']>,
+  enabled = true,
 ) {
   const [mediaUrl, setMediaUrl] = useState(previewUrl ?? '');
   const onContentReadyRef = useRef(onContentReady);
@@ -7688,6 +7947,11 @@ function useAuthenticatedMediaUrl(
   }, [onContentReady]);
 
   useEffect(() => {
+    if (!enabled) {
+      setMediaUrl('');
+      return undefined;
+    }
+
     if (previewUrl) {
       setMediaUrl(previewUrl);
       onContentReadyRef.current?.();
@@ -7724,9 +7988,21 @@ function useAuthenticatedMediaUrl(
         URL.revokeObjectURL(objectUrl);
       }
     };
-  }, [cacheConfig?.maxSingleMediaBytes, cacheConfig?.maxTotalBytes, media?.mimeType, media?.originalName, media?.sizeBytes, mediaId, previewUrl, token]);
+  }, [cacheConfig?.maxSingleMediaBytes, cacheConfig?.maxTotalBytes, enabled, media?.mimeType, media?.originalName, media?.sizeBytes, mediaId, previewUrl, token]);
 
   return mediaUrl;
+}
+
+function getServerMediaThumbnailUrl(media?: { thumbnailPath?: string | null } | null) {
+  if (!media?.thumbnailPath) {
+    return '';
+  }
+
+  try {
+    return new URL(media.thumbnailPath, `${API_URL.replace(/\/$/, '')}/`).toString();
+  } catch {
+    return '';
+  }
 }
 
 type CachedMediaRecord = {
@@ -7738,12 +8014,20 @@ type CachedMediaRecord = {
   sizeBytes: number;
 };
 
+const localMediaBlobsById = new Map<string, Blob>();
+
 async function loadMediaBlob(
   mediaId: string,
   token: string,
   cacheConfig: WebMediaCacheConfig,
   media?: NonNullable<Message['media']>,
 ) {
+  const localBlob = localMediaBlobsById.get(mediaId);
+
+  if (localBlob) {
+    return localBlob;
+  }
+
   const cachedBlob = await getCachedMediaBlob(mediaId).catch(() => null);
 
   if (cachedBlob) {
@@ -7765,6 +8049,19 @@ async function loadMediaBlob(
   }
 
   return blob;
+}
+
+function primeLocalMediaBlob(
+  mediaId: string,
+  blob: Blob,
+  media: NonNullable<Message['media']>,
+  cacheConfig: WebMediaCacheConfig,
+) {
+  localMediaBlobsById.set(mediaId, blob);
+
+  if (shouldCacheMediaBlob(blob, media, cacheConfig)) {
+    void putCachedMediaBlob(mediaId, blob, media, cacheConfig).catch(() => undefined);
+  }
 }
 
 function shouldCacheMediaBlob(
@@ -7985,33 +8282,195 @@ function AuthenticatedImageMedia({ cacheConfig, caption, media, onContentReady, 
 }
 
 function AuthenticatedVideoMedia({ cacheConfig, caption, media, onContentReady, onOpenMedia, previewUrl, token }: { cacheConfig: WebMediaCacheConfig; caption?: string; media: NonNullable<Message['media']>; onContentReady?: () => void; onOpenMedia?: (viewer: MediaViewerState) => void; previewUrl?: string | null; token: string | null }) {
-  const videoUrl = useAuthenticatedMediaUrl(media.id, token, previewUrl, onContentReady, cacheConfig, media);
+  const configuredThumbnailUrl = getServerMediaThumbnailUrl(media);
+  const [failedThumbnailUrl, setFailedThumbnailUrl] = useState('');
+  const [fullVideoRequested, setFullVideoRequested] = useState(false);
+  const openWhenReadyRef = useRef(false);
+  const thumbnailUrl = configuredThumbnailUrl === failedThumbnailUrl ? '' : configuredThumbnailUrl;
+  const shouldLoadFullVideo = !!previewUrl || !thumbnailUrl || fullVideoRequested;
+  const videoUrl = useAuthenticatedMediaUrl(media.id, token, previewUrl, onContentReady, cacheConfig, media, shouldLoadFullVideo);
   const [aspectRatio, setAspectRatio] = useState(16 / 9);
+
+  useEffect(() => {
+    if (!videoUrl || !openWhenReadyRef.current) {
+      return;
+    }
+
+    openWhenReadyRef.current = false;
+    onOpenMedia?.({ caption, kind: 'VIDEO', media, url: videoUrl });
+  }, [caption, media, onOpenMedia, videoUrl]);
+
+  const openVideo = () => {
+    if (videoUrl) {
+      onOpenMedia?.({ caption, kind: 'VIDEO', media, url: videoUrl });
+      return;
+    }
+
+    openWhenReadyRef.current = true;
+    setFullVideoRequested(true);
+  };
 
   return (
     <button
       className="media-preview video-preview"
-      disabled={!videoUrl}
-      onClick={() => videoUrl && onOpenMedia?.({ caption, kind: 'VIDEO', media, url: videoUrl })}
+      disabled={!previewUrl && (!media.id || !token)}
+      onClick={openVideo}
       type="button"
     >
-      {videoUrl ? <video className="message-media" muted onLoadedMetadata={(event) => {
-        const video = event.currentTarget;
-        if (video.videoWidth && video.videoHeight) setAspectRatio(video.videoWidth / video.videoHeight);
-      }} preload="metadata" src={videoUrl} style={{ aspectRatio }} /> : <div className="message-media media-loading" style={{ aspectRatio }} />}
+      {previewUrl && videoUrl ? (
+        <video className="message-media" muted onLoadedMetadata={(event) => {
+          const video = event.currentTarget;
+          if (video.videoWidth && video.videoHeight) setAspectRatio(video.videoWidth / video.videoHeight);
+        }} preload="metadata" src={videoUrl} style={{ aspectRatio }} />
+      ) : thumbnailUrl ? (
+        <img
+          alt={media.originalName}
+          className="message-media server-video-thumbnail"
+          loading="lazy"
+          onError={() => setFailedThumbnailUrl(configuredThumbnailUrl)}
+          onLoad={(event) => {
+            const image = event.currentTarget;
+            if (image.naturalWidth && image.naturalHeight) setAspectRatio(image.naturalWidth / image.naturalHeight);
+          }}
+          src={thumbnailUrl}
+          style={{ aspectRatio }}
+        />
+      ) : videoUrl ? (
+        <video className="message-media" muted onLoadedMetadata={(event) => {
+          const video = event.currentTarget;
+          if (video.videoWidth && video.videoHeight) setAspectRatio(video.videoWidth / video.videoHeight);
+        }} preload="metadata" src={videoUrl} style={{ aspectRatio }} />
+      ) : (
+        <div className="message-media media-loading" style={{ aspectRatio }} />
+      )}
+      <i className="video-preview-play"><Video aria-hidden size={22} /></i>
       {caption ? <span>{caption}</span> : <span>{media.originalName}</span>}
     </button>
   );
 }
 
-function AuthenticatedVoiceMedia({ media, onContentReady, token }: { media: NonNullable<Message['media']>; onContentReady?: () => void; token: string | null }) {
-  const voiceUrl = useAuthenticatedMediaUrl(media.id, token, undefined, onContentReady);
+function AuthenticatedVoiceMedia({
+  cacheConfig,
+  media,
+  onContentReady,
+  previewUrl,
+  t,
+  token,
+}: {
+  cacheConfig: WebMediaCacheConfig;
+  media: NonNullable<Message['media']>;
+  onContentReady?: () => void;
+  previewUrl?: string | null;
+  t: (key: TranslationKey) => string;
+  token: string | null;
+}) {
+  const voiceUrl = useAuthenticatedMediaUrl(media.id, token, previewUrl, onContentReady, cacheConfig, media);
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(media.durationSec ?? 0);
+  const [isPlaying, setPlaying] = useState(false);
+  const [playbackRate, setPlaybackRate] = useState<1 | 1.5 | 2>(1);
+
+  useEffect(() => {
+    setCurrentTime(0);
+    setDuration(media.durationSec ?? 0);
+    setPlaying(false);
+    setPlaybackRate(1);
+  }, [media.durationSec, voiceUrl]);
+
+  const togglePlayback = async () => {
+    const audio = audioRef.current;
+
+    if (!audio || !voiceUrl) {
+      return;
+    }
+
+    if (!audio.paused) {
+      audio.pause();
+      return;
+    }
+
+    try {
+      await audio.play();
+    } catch {
+      setPlaying(false);
+    }
+  };
+
+  const cyclePlaybackRate = () => {
+    const nextRate = playbackRate === 1 ? 1.5 : playbackRate === 1.5 ? 2 : 1;
+
+    setPlaybackRate(nextRate);
+    if (audioRef.current) {
+      audioRef.current.playbackRate = nextRate;
+    }
+  };
+
+  const updateDuration = (audio: HTMLAudioElement) => {
+    if (Number.isFinite(audio.duration) && audio.duration > 0) {
+      setDuration(audio.duration);
+    }
+  };
 
   return (
     <div className="voice-message">
-      <Mic aria-hidden size={18} />
-      <audio controls preload="metadata" src={voiceUrl} />
-      {media.durationSec ? <span>{formatRecorderDuration(media.durationSec)}</span> : null}
+      <button
+        aria-label={t(isPlaying ? 'pauseVoiceMessage' : 'playVoiceMessage')}
+        className="voice-play-button"
+        disabled={!voiceUrl}
+        onClick={() => void togglePlayback()}
+        title={t(isPlaying ? 'pauseVoiceMessage' : 'playVoiceMessage')}
+        type="button"
+      >
+        {isPlaying ? <Pause aria-hidden size={17} /> : <Play aria-hidden fill="currentColor" size={17} />}
+      </button>
+      <div className="voice-playback-track">
+        <input
+          aria-label={t('voiceMessage')}
+          disabled={!voiceUrl || duration <= 0}
+          max={Math.max(duration, 1)}
+          min={0}
+          onChange={(event) => {
+            const nextTime = Number(event.target.value);
+            setCurrentTime(nextTime);
+            if (audioRef.current) {
+              audioRef.current.currentTime = nextTime;
+            }
+          }}
+          step={0.1}
+          type="range"
+          value={Math.min(currentTime, Math.max(duration, 1))}
+        />
+        <span>{formatRecorderDuration(Math.floor(currentTime))} / {formatRecorderDuration(Math.ceil(duration || media.durationSec || 0))}</span>
+      </div>
+      <button
+        aria-label={t('playbackSpeed')}
+        className="voice-speed-button"
+        disabled={!voiceUrl}
+        onClick={cyclePlaybackRate}
+        title={t('playbackSpeed')}
+        type="button"
+      >
+        {playbackRate}x
+      </button>
+      <audio
+        onDurationChange={(event) => updateDuration(event.currentTarget)}
+        onEnded={(event) => {
+          event.currentTarget.currentTime = 0;
+          setCurrentTime(0);
+          setPlaying(false);
+        }}
+        onLoadedMetadata={(event) => updateDuration(event.currentTarget)}
+        onPause={() => setPlaying(false)}
+        onPlay={(event) => {
+          event.currentTarget.playbackRate = playbackRate;
+          setPlaying(true);
+        }}
+        onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)}
+        preload="metadata"
+        ref={audioRef}
+        src={voiceUrl || undefined}
+      />
     </div>
   );
 }
@@ -8038,7 +8497,23 @@ function DirectMediaTile({
   token: string | null;
 }) {
   const media = message.media;
-  const mediaUrl = useAuthenticatedMediaUrl(media?.id, token, getLocalPreviewUrl(message), undefined, cacheConfig, media ?? undefined);
+  const localPreviewUrl = getLocalPreviewUrl(message);
+  const configuredThumbnailUrl = message.kind === 'VIDEO' ? getServerMediaThumbnailUrl(media) : '';
+  const [failedThumbnailUrl, setFailedThumbnailUrl] = useState('');
+  const [fullVideoRequested, setFullVideoRequested] = useState(false);
+  const openWhenReadyRef = useRef(false);
+  const thumbnailUrl = configuredThumbnailUrl === failedThumbnailUrl ? '' : configuredThumbnailUrl;
+  const shouldLoadMedia = message.kind !== 'VIDEO' || !!localPreviewUrl || !thumbnailUrl || fullVideoRequested;
+  const mediaUrl = useAuthenticatedMediaUrl(media?.id, token, localPreviewUrl, undefined, cacheConfig, media ?? undefined, shouldLoadMedia);
+
+  useEffect(() => {
+    if (!media || !mediaUrl || !openWhenReadyRef.current || message.kind !== 'VIDEO') {
+      return;
+    }
+
+    openWhenReadyRef.current = false;
+    onOpenMedia?.({ caption: message.body, kind: 'VIDEO', media, url: mediaUrl });
+  }, [media, mediaUrl, message.body, message.kind, onOpenMedia]);
 
   if (!media) {
     return null;
@@ -8047,17 +8522,24 @@ function DirectMediaTile({
   return (
     <button
       className="direct-media-tile"
-      disabled={!mediaUrl}
+      disabled={message.kind === 'VIDEO' ? !localPreviewUrl && (!media.id || !token) : !mediaUrl}
       onClick={() => {
         if (mediaUrl && (message.kind === 'IMAGE' || message.kind === 'VIDEO')) {
           onOpenMedia?.({ caption: message.body, kind: message.kind, media, url: mediaUrl });
+        } else if (message.kind === 'VIDEO') {
+          openWhenReadyRef.current = true;
+          setFullVideoRequested(true);
         }
       }}
       type="button"
     >
-      {mediaUrl && message.kind === 'VIDEO' ? <video muted preload="metadata" src={mediaUrl} /> : null}
+      {message.kind === 'VIDEO' && localPreviewUrl && mediaUrl ? <video muted preload="metadata" src={mediaUrl} /> : null}
+      {message.kind === 'VIDEO' && !localPreviewUrl && thumbnailUrl ? (
+        <img alt={media.originalName} loading="lazy" onError={() => setFailedThumbnailUrl(configuredThumbnailUrl)} src={thumbnailUrl} />
+      ) : null}
+      {message.kind === 'VIDEO' && !localPreviewUrl && !thumbnailUrl && mediaUrl ? <video muted preload="metadata" src={mediaUrl} /> : null}
       {mediaUrl && message.kind === 'IMAGE' ? <img alt={media.originalName} loading="lazy" src={mediaUrl} /> : null}
-      {!mediaUrl ? <div className="direct-media-loading"><LoaderCircle aria-hidden className="spin" size={18} /></div> : null}
+      {!mediaUrl && !thumbnailUrl ? <div className="direct-media-loading"><LoaderCircle aria-hidden className="spin" size={18} /></div> : null}
       {message.kind === 'VIDEO' ? <span><Video aria-hidden size={16} /></span> : null}
     </button>
   );
@@ -8104,6 +8586,17 @@ function MessageStatus({ status, t }: { status: Message['status']; t: (key: Tran
     >
       <StatusIcon aria-hidden size={16} />
     </span>
+  );
+}
+
+function AttachmentUploadProgress({ state, t }: { state: AttachmentUploadState; t: (key: TranslationKey) => string }) {
+  const progress = Math.max(0, Math.min(100, Math.round(state.progress)));
+
+  return (
+    <div className={`attachment-upload-progress ${state.status === 'failed' ? 'failed' : ''}`}>
+      <div aria-hidden><i style={{ width: `${progress}%` }} /></div>
+      <small>{state.status === 'failed' ? t('attachmentFailed') : `${t('sending')} ${progress}%`}</small>
+    </div>
   );
 }
 
@@ -8430,6 +8923,172 @@ function sortStatusGroups(groups: StatusGroup[], currentUserId?: string | null) 
   });
 }
 
+function uploadWebMessageMedia(
+  file: globalThis.File,
+  token: string | null,
+  uploadConfig: WebUploadConfig,
+  onProgress: (progress: number) => void,
+  fallbackError: string,
+  metadata?: { durationSeconds?: number },
+) {
+  if (file.size > uploadConfig.maxAttachmentBytes) {
+    return Promise.reject(new Error(fallbackError));
+  }
+
+  if (file.size > uploadConfig.maxDirectUploadBytes) {
+    return uploadWebMessageMediaInChunks(file, token, uploadConfig.maxChunkBytes, onProgress, fallbackError, metadata);
+  }
+
+  return new Promise<{ media: { id: string } }>((resolve, reject) => {
+    const request = new XMLHttpRequest();
+
+    request.open('POST', `${API_URL}/media/upload-binary`);
+    request.setRequestHeader('Authorization', `Bearer ${token}`);
+    request.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
+    request.setRequestHeader('x-mime-type', file.type || 'application/octet-stream');
+    request.setRequestHeader('x-original-name', encodeURIComponent(file.name || 'attachment'));
+    if (metadata?.durationSeconds) {
+      request.setRequestHeader('x-duration-sec', String(metadata.durationSeconds));
+    }
+    request.upload.onprogress = (event) => {
+      if (event.lengthComputable && event.total > 0) {
+        onProgress((event.loaded / event.total) * 100);
+      }
+    };
+    request.onerror = () => reject(new Error(fallbackError));
+    request.onabort = () => reject(new Error(fallbackError));
+    request.onload = () => {
+      let payload: { error?: string; media?: { id?: string } } | null = null;
+
+      try {
+        payload = request.responseText ? JSON.parse(request.responseText) : null;
+      } catch {
+        // The status check below reports a stable localized error for invalid responses.
+      }
+
+      if (request.status < 200 || request.status >= 300 || !payload?.media?.id) {
+        reject(new Error(payload?.error || fallbackError));
+        return;
+      }
+
+      onProgress(100);
+      resolve({ media: { id: payload.media.id } });
+    };
+    request.send(file);
+  });
+}
+
+async function uploadWebMessageMediaInChunks(
+  file: globalThis.File,
+  token: string | null,
+  configuredChunkBytes: number,
+  onProgress: (progress: number) => void,
+  fallbackError: string,
+  metadata?: { durationSeconds?: number },
+) {
+  const chunkSizeBytes = Math.min(8 * 1024 * 1024, Math.max(1024 * 1024, Math.floor(configuredChunkBytes)));
+  const totalChunks = Math.ceil(file.size / chunkSizeBytes);
+  const uploadId = createWebUploadId();
+
+  onProgress(0);
+
+  try {
+    for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex += 1) {
+      const start = chunkIndex * chunkSizeBytes;
+      const chunk = file.slice(start, Math.min(file.size, start + chunkSizeBytes));
+      const chunkBase64 = await readBlobAsBase64(chunk);
+      await requestWebUploadJson(`/media/uploads/${encodeURIComponent(uploadId)}/chunks/${chunkIndex}`, token, fallbackError, {
+        body: JSON.stringify({
+          chunkBase64,
+          chunkSize: chunk.size,
+          durationSec: metadata?.durationSeconds,
+          mimeType: file.type || 'application/octet-stream',
+          originalName: file.name || 'attachment',
+          sizeBytes: file.size,
+          totalChunks,
+        }),
+        method: 'POST',
+      });
+      onProgress(((chunkIndex + 1) / totalChunks) * 100);
+    }
+
+    return await requestWebUploadJson<{ media: { id: string } }>(
+      `/media/uploads/${encodeURIComponent(uploadId)}/complete`,
+      token,
+      fallbackError,
+      { method: 'POST' },
+    );
+  } catch (error) {
+    void requestWebUploadJson(`/media/uploads/${encodeURIComponent(uploadId)}`, token, fallbackError, { method: 'DELETE' })
+      .catch(() => undefined);
+    throw error;
+  }
+}
+
+async function requestWebUploadJson<T = { ok: true }>(
+  path: string,
+  token: string | null,
+  fallbackError: string,
+  init: RequestInit,
+) {
+  const response = await fetch(`${API_URL}${path}`, {
+    ...init,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      ...(init.body ? { 'Content-Type': 'application/json' } : {}),
+    },
+  });
+  const responseText = await response.text();
+  let payload: (T & { error?: string }) | null = null;
+
+  try {
+    payload = responseText ? JSON.parse(responseText) : null;
+  } catch {
+    // Invalid responses use the stable localized upload error below.
+  }
+
+  if (!response.ok || !payload) {
+    throw new Error(payload?.error || fallbackError);
+  }
+
+  return payload;
+}
+
+function readBlobAsBase64(blob: Blob) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+
+    reader.onerror = () => reject(reader.error ?? new Error('Could not read upload chunk'));
+    reader.onload = () => {
+      const result = typeof reader.result === 'string' ? reader.result : '';
+      const separatorIndex = result.indexOf(',');
+
+      if (separatorIndex < 0) {
+        reject(new Error('Could not read upload chunk'));
+        return;
+      }
+
+      resolve(result.slice(separatorIndex + 1));
+    };
+    reader.readAsDataURL(blob);
+  });
+}
+
+function createWebUploadId() {
+  const randomPart = typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+  return `web-${randomPart}`.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 128);
+}
+
+function omitRecordKey<T>(record: Record<string, T>, key: string) {
+  const next = { ...record };
+
+  delete next[key];
+  return next;
+}
+
 async function uploadWebMedia(file: globalThis.File, kind: 'IMAGE' | 'VIDEO') {
   const uploadResponse = await fetch(`${API_URL}/media/upload-binary`, {
     body: file,
@@ -8635,7 +9294,7 @@ function getCachedConversationMessages(userId: string | undefined, conversationI
     });
 
     return mergeMessages([], messages)
-      .filter(isVisibleChatMessage)
+      .filter(isDurableChatMessage)
       .slice(-MESSAGE_CACHE_LIMIT);
   } catch {
     return [];
@@ -8663,16 +9322,16 @@ async function getStoredConversationMessages(userId: string | undefined, convers
   );
   const storedMessages = records
     .map(({ cacheUserId: _cacheUserId, cachedAt: _cachedAt, userConversationKey: _userConversationKey, ...message }) => message)
-    .filter(isVisibleChatMessage);
+    .filter(isDurableChatMessage);
   const legacyMessages = getCachedConversationMessages(userId, conversationId);
 
-  return mergeMessages(storedMessages, legacyMessages).filter(isVisibleChatMessage);
+  return mergeMessages(storedMessages, legacyMessages).filter(isDurableChatMessage);
 }
 
 async function replaceStoredConversationMessages(userId: string | undefined, conversationId: string, messages: Message[]) {
   const db = await openMediaCacheDb();
   const cacheUserId = getMessageCacheUserId(userId);
-  const visibleMessages = messages.filter(isVisibleChatMessage);
+  const visibleMessages = messages.filter(isDurableChatMessage).map(stripTransientMessageMetadata);
   const records = await mediaCacheRequest<CachedMessageRecord[]>(
     db.transaction(MESSAGE_CACHE_STORE_NAME, 'readonly')
       .objectStore(MESSAGE_CACHE_STORE_NAME)
@@ -8705,7 +9364,7 @@ function cacheConversationMessages(userId: string | undefined, conversationId: s
 }
 
 async function persistConversationMessages(userId: string | undefined, conversationId: string, messages: Message[]) {
-  const visibleMessages = messages.filter(isVisibleChatMessage);
+  const visibleMessages = messages.filter(isDurableChatMessage).map(stripTransientMessageMetadata);
 
   try {
     localStorage.setItem(
@@ -8733,6 +9392,20 @@ function isVisibleChatMessage(message: Message) {
   }
 
   return false;
+}
+
+function isDurableChatMessage(message: Message) {
+  return !message.id.startsWith('web-local-') && isVisibleChatMessage(message);
+}
+
+function stripTransientMessageMetadata(message: Message) {
+  if (!message.metadata || typeof message.metadata !== 'object' || !('previewUrl' in message.metadata)) {
+    return message;
+  }
+
+  const { previewUrl: _previewUrl, ...metadata } = message.metadata as Record<string, unknown>;
+
+  return { ...message, metadata };
 }
 
 function getSupportedVoiceMimeType() {

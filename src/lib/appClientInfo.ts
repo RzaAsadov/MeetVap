@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Device from 'expo-device';
 import { Platform } from 'react-native';
 
 import { getNativeAppBuildNumber, getNativeAppVersion } from '../native/CallNative';
@@ -61,6 +62,8 @@ export function getClientRequestHeaders() {
   };
   const appVersion = cachedNativeAppVersion;
   const buildNumber = cachedNativeBuildNumber;
+  const deviceModel = normalizeHeaderValue(Device.modelName);
+  const osVersion = normalizeHeaderValue(Device.osVersion);
 
   if (appVersion) {
     headers['X-MeetVap-App-Version'] = appVersion;
@@ -72,6 +75,14 @@ export function getClientRequestHeaders() {
 
   if (cachedInstallationId) {
     headers['X-MeetVap-Installation-Id'] = cachedInstallationId;
+  }
+
+  if (deviceModel) {
+    headers['X-MeetVap-Device-Model'] = deviceModel;
+  }
+
+  if (osVersion) {
+    headers['X-MeetVap-OS-Version'] = osVersion;
   }
 
   return headers;

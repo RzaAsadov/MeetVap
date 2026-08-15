@@ -17,6 +17,9 @@ FROM node:22-bookworm-slim AS runtime
 WORKDIR /app/server
 ENV NODE_ENV=production
 ENV UPLOAD_DIR=/uploads
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ffmpeg \
+  && rm -rf /var/lib/apt/lists/*
 COPY --from=deps /app/server/node_modules ./node_modules
 COPY --from=build /app/server/package*.json ./
 COPY --from=build /app/server/dist ./dist

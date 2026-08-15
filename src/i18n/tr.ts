@@ -216,6 +216,8 @@ export const tr: Record<string, TranslationValue> = {
   selectAll: 'Tümünü seç',
   textOptions: 'Metin seçenekleri',
   darkMode: 'Karanlık mod',
+  autoDownloadMedia: 'Medyayı otomatik indir',
+  autoDownloadMediaDescription: 'Alınan fotoğraf, video, sesli mesaj ve dosyaları otomatik olarak indir.',
   dismiss: 'Kapat',
   deleteAccount: 'Hesabı sil',
   deleteAccountForeverBody: 'Bu işlem MeetVap hesabını, oturumlarını, mesajlarını, yüklemelerini, kişilerini ve grup üyeliklerini sunucudan kalıcı olarak kaldırır.',

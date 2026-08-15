@@ -12,6 +12,26 @@ const appDomainSchema = z.string()
     (value) => value.length <= 253 && /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(value),
     'appdomains entries must be hostnames such as example.com',
   );
+export const appVersionsSchema = z.object({
+  android: z.object({
+    latest: z.string().trim().min(1).default('0.1.0'),
+    minimum: z.string().trim().min(1).default('0.1.0'),
+    storeUrl: z.string().url().default('https://play.google.com/store/apps/details?id=com.meetvap.messenger&hl=en'),
+  }).default({
+    latest: '0.1.0',
+    minimum: '0.1.0',
+    storeUrl: 'https://play.google.com/store/apps/details?id=com.meetvap.messenger&hl=en',
+  }),
+  ios: z.object({
+    latest: z.string().trim().min(1).default('0.1.0'),
+    minimum: z.string().trim().min(1).default('0.1.0'),
+    storeUrl: z.string().url().default('https://apps.apple.com/tr/app/meetvap/id6767963508'),
+  }).default({
+    latest: '0.1.0',
+    minimum: '0.1.0',
+    storeUrl: 'https://apps.apple.com/tr/app/meetvap/id6767963508',
+  }),
+});
 
 const operationalConfigSchema = z.object({
   serverRole: z.enum(['main', 'child']).default('main'),
@@ -22,26 +42,7 @@ const operationalConfigSchema = z.object({
     .regex(/^[A-Za-z0-9_-]+$/, 'mainServerKey must contain only ASCII letters, numbers, underscore, and hyphen')
     .optional(),
   appdomains: z.array(appDomainSchema).default([]).transform((domains) => Array.from(new Set(domains))),
-  appVersions: z.object({
-    android: z.object({
-      latest: z.string().trim().min(1).default('0.1.0'),
-      minimum: z.string().trim().min(1).default('0.1.0'),
-      storeUrl: z.string().url().default('https://play.google.com/store/apps/details?id=com.meetvap.messenger&hl=en'),
-    }).default({
-      latest: '0.1.0',
-      minimum: '0.1.0',
-      storeUrl: 'https://play.google.com/store/apps/details?id=com.meetvap.messenger&hl=en',
-    }),
-    ios: z.object({
-      latest: z.string().trim().min(1).default('0.1.0'),
-      minimum: z.string().trim().min(1).default('0.1.0'),
-      storeUrl: z.string().url().default('https://apps.apple.com/tr/app/meetvap/id6767963508'),
-    }).default({
-      latest: '0.1.0',
-      minimum: '0.1.0',
-      storeUrl: 'https://apps.apple.com/tr/app/meetvap/id6767963508',
-    }),
-  }).default({
+  appVersions: appVersionsSchema.default({
     android: {
       latest: '0.1.0',
       minimum: '0.1.0',
@@ -97,6 +98,15 @@ const operationalConfigSchema = z.object({
       ios: 1,
     },
   }),
+  pushNotifications: z.object({
+    messageTtlHours: positiveInteger.default(72),
+    outboxMaxAttempts: positiveInteger.default(8),
+    outboxMaxRetrySeconds: positiveInteger.default(300),
+  }).default({
+    messageTtlHours: 72,
+    outboxMaxAttempts: 8,
+    outboxMaxRetrySeconds: 300,
+  }),
   premium: z.object({
     trialDays: nonNegativeInteger.default(15),
   }).default({
@@ -135,11 +145,12 @@ const configPaths = [
   path.resolve(__dirname, '../config.json'),
 ];
 
-const configPath = configPaths.find((candidate) => fs.existsSync(candidate));
+const discoveredConfigPath = configPaths.find((candidate) => fs.existsSync(candidate));
 
-if (!configPath) {
+if (!discoveredConfigPath) {
   throw new Error(`Operational config.json not found. Checked: ${configPaths.join(', ')}`);
 }
+const configPath: string = discoveredConfigPath;
 
 export const operationalConfig = operationalConfigSchema.parse(
   JSON.parse(fs.readFileSync(configPath, 'utf8')),
@@ -147,6 +158,62 @@ export const operationalConfig = operationalConfigSchema.parse(
 
 if (operationalConfig.serverRole === 'child' && (!operationalConfig.mainServerHost || !operationalConfig.mainServerKey)) {
   throw new Error('Child servers require mainServerHost and mainServerKey in config.json');
+}
+
+export type AppVersionsConfig = z.infer<typeof appVersionsSchema>;
+
+export async function refreshOperationalAppVersionsFromDisk() {
+  const rawConfig = JSON.parse(await fs.promises.readFile(configPath, 'utf8')) as Record<string, unknown>;
+  const appVersions = operationalConfigSchema.parse(rawConfig).appVersions;
+
+  if (JSON.stringify(operationalConfig.appVersions) !== JSON.stringify(appVersions)) {
+    applyOperationalAppVersions(appVersions);
+  }
+
+  return appVersions;
+}
+
+export async function updateOperationalAppVersions(input: unknown) {
+  const appVersions = appVersionsSchema.parse(input);
+
+  if (JSON.stringify(operationalConfig.appVersions) === JSON.stringify(appVersions)) {
+    return false;
+  }
+
+  const rawConfig = JSON.parse(await fs.promises.readFile(configPath, 'utf8')) as Record<string, unknown>;
+  const nextRawConfig = { ...rawConfig, appVersions };
+  operationalConfigSchema.parse(nextRawConfig);
+  await persistOperationalConfig(`${JSON.stringify(nextRawConfig, null, 2)}\n`);
+
+  applyOperationalAppVersions(appVersions);
+  return true;
+}
+
+function applyOperationalAppVersions(appVersions: AppVersionsConfig) {
+  operationalConfig.appVersions.android = appVersions.android;
+  operationalConfig.appVersions.ios = appVersions.ios;
+}
+
+async function persistOperationalConfig(contents: string) {
+  const temporaryPath = `${configPath}.${process.pid}.${Date.now()}.tmp`;
+  await fs.promises.writeFile(temporaryPath, contents, 'utf8');
+
+  try {
+    await fs.promises.rename(temporaryPath, configPath);
+  } catch (error) {
+    await fs.promises.unlink(temporaryPath).catch(() => undefined);
+
+    // Docker bind-mounted files cannot be replaced with rename(2), but they can
+    // be safely rewritten after the complete replacement document is validated.
+    if (!isBindMountReplacementError(error)) {
+      throw error;
+    }
+    await fs.promises.writeFile(configPath, contents, 'utf8');
+  }
+}
+
+function isBindMountReplacementError(error: unknown) {
+  return error instanceof Error && 'code' in error && ['EBUSY', 'EPERM', 'EXDEV'].includes(String(error.code));
 }
 
 export function getClientPolicy() {

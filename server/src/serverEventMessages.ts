@@ -2,8 +2,8 @@ import { Prisma, SubscriptionEntitlement } from '@prisma/client';
 import type { Server } from 'socket.io';
 
 import { config } from './config';
+import { enqueueMessagePush, kickMessagePushOutbox } from './messagePushOutbox';
 import { prisma } from './prisma';
-import { sendMessagePush } from './pushNotifications';
 import { serializeMessage } from './serializers';
 import { recordMessageStats } from './stats';
 import { getMeetVapServerUserId } from './systemAccount';
@@ -16,6 +16,14 @@ type RegisteredUserEventInput = {
     displayName: string;
     id: string;
     username: string;
+  };
+};
+
+type ChildRegisteredUserEventInput = RegisteredUserEventInput & {
+  domain: {
+    domain: string;
+    hostname: string;
+    id: string;
   };
 };
 
@@ -57,11 +65,31 @@ export async function notifyServerUserRegistered(input: RegisteredUserEventInput
       '',
       `Görünen ad: ${input.user.displayName}`,
       `Kullanıcı adı: ${input.user.username}`,
+      'Sunucu: Main',
       `Platform: ${formatPlatform(input.platform)}`,
       `Tarih: ${formatTurkishDate(input.occurredAt ?? new Date())}`,
     ].join('\n'),
     dedupeKey: `registration:${input.user.id}`,
     eventType: 'user_registered',
+    targetConversationId: config.SERVER_EVENTS_GROUP_ID,
+    io: input.io,
+  });
+}
+
+export async function notifyServerChildUserRegistered(input: ChildRegisteredUserEventInput) {
+  return sendServerEventToGroup({
+    body: [
+      'Yeni alt sunucu kullanıcı kaydı',
+      '',
+      `Görünen ad: ${input.user.displayName}`,
+      `Kullanıcı adı: ${input.user.username}`,
+      `Sunucu: ${input.domain.domain}`,
+      `API: ${input.domain.hostname}`,
+      `Platform: ${formatPlatform(input.platform)}`,
+      `Tarih: ${formatTurkishDate(input.occurredAt ?? new Date())}`,
+    ].join('\n'),
+    dedupeKey: `child_registration:${input.domain.id}:${input.user.id}`,
+    eventType: 'child_user_registered',
     targetConversationId: config.SERVER_EVENTS_GROUP_ID,
     io: input.io,
   });
@@ -220,7 +248,7 @@ async function sendServerEventToGroup(input: {
     source: 'server_event',
   };
 
-  const message = await prisma.$transaction(async (tx) => {
+  const { message, pushJobId } = await prisma.$transaction(async (tx) => {
     const conversation = await tx.conversation.findFirst({
       select: { id: true },
       where: {
@@ -289,7 +317,16 @@ async function sendServerEventToGroup(input: {
       senderId,
     });
 
-    return createdMessage;
+    const pushJob = await enqueueMessagePush(tx, {
+      avatarUrl: createdMessage.sender.avatarUrl,
+      body: input.body,
+      conversationId,
+      messageId: createdMessage.id,
+      senderId,
+      title: input.pushTitle ?? 'Meetvap Server',
+    });
+
+    return { message: createdMessage, pushJobId: pushJob.id };
   });
 
   const memberRooms = message.conversation.members
@@ -299,55 +336,11 @@ async function sendServerEventToGroup(input: {
 
   input.io?.to(conversationId).to(memberRooms).emit('message:new', serializedMessage);
   input.io?.to(memberRooms).emit('conversation:updated', { conversationId });
-  void sendServerEventPush({
-    body: input.body,
-    conversationId,
-    messageId: message.id,
-    title: input.pushTitle ?? 'Meetvap Server',
-  }).catch((error) => {
-    console.warn('Could not send server event push notification', error);
-  });
+  kickMessagePushOutbox(pushJobId);
 
   return true;
 }
 
-async function sendServerEventPush(input: {
-  body: string;
-  conversationId: string;
-  messageId: string;
-  title: string;
-}) {
-  const tokens = await prisma.devicePushToken.findMany({
-    select: {
-      locale: true,
-      platform: true,
-      provider: true,
-      token: true,
-    },
-    where: {
-      user: {
-        memberships: {
-          some: {
-            aliasPromptSeen: true,
-            conversationId: input.conversationId,
-            OR: [
-              { mutedAt: null },
-              { mutedUntil: { lte: new Date() } },
-            ],
-          },
-        },
-      },
-    },
-  });
-
-  await sendMessagePush({
-    body: input.body,
-    conversationId: input.conversationId,
-    messageId: input.messageId,
-    title: input.title,
-    tokens,
-  });
-}
 
 function formatPlatform(platform?: string | null) {
   const normalized = platform?.trim();

@@ -22,7 +22,19 @@ const adminContext = new AsyncLocalStorage();
 const requestContext = new AsyncLocalStorage();
 
 const ONLINE_WINDOW_MINUTES = 2;
-const ADMIN_SECTIONS = ['dashboard', 'users', 'calls', 'groups', 'subscriptions', 'partners', 'reports', 'support', 'subdomains', 'operations'];
+const SERVER_ROLE = backendPolicy.serverRole === 'child' ? 'child' : 'main';
+const ADMIN_SECTIONS = [
+  'dashboard',
+  'users',
+  'calls',
+  'groups',
+  'subscriptions',
+  'partners',
+  'reports',
+  'support',
+  ...(SERVER_ROLE === 'main' ? ['subdomains'] : []),
+  'operations',
+];
 const ADMIN_PERMISSION_LEVELS = ['none', 'read', 'edit'];
 const ADMIN_LANGUAGES = ['en', 'tr'];
 const MANUAL_SUBSCRIPTION_PERIODS = {
@@ -428,6 +440,15 @@ async function requireAdmin(req, res, next) {
 
 function requireSection(section, mode = 'read') {
   return (req, res, next) => {
+    if (!ADMIN_SECTIONS.includes(section)) {
+      res.status(404).send(page({
+        active: '',
+        body: empty('This section is not available for this server role.'),
+        title: 'Not found',
+      }));
+      return;
+    }
+
     if (!hasAdminPermission(req.admin, section, mode)) {
       res.status(403).send(page({
         active: section,
@@ -466,6 +487,7 @@ function getCurrentAdmin() {
 
 function hasAdminPermission(admin, section, mode = 'read') {
   if (!admin) return false;
+  if (section !== 'admins' && !ADMIN_SECTIONS.includes(section)) return false;
   if (admin.isSuperAdmin) return true;
   const level = admin.permissions?.[section] || 'none';
   return mode === 'edit' ? level === 'edit' : level === 'read' || level === 'edit';
@@ -1073,6 +1095,7 @@ const ADMIN_TR = {
   'Voice 7d': '7 günlük ses',
   'Voice 15d': '15 günlük ses',
   'Voice 30d': '30 günlük ses',
+  'Voice 1d/7d/15d/30d': 'Ses 1g/7g/15g/30g',
   'Voice calls 15 days': '15 günlük sesli aramalar',
   'Voice calls 30 days': '30 günlük sesli aramalar',
   'Voice calls 7 days': '7 günlük sesli aramalar',
@@ -1083,6 +1106,7 @@ const ADMIN_TR = {
   'Video 7d': '7 günlük video',
   'Video 15d': '15 günlük video',
   'Video 30d': '30 günlük video',
+  'Video 1d/7d/15d/30d': 'Video 1g/7g/15g/30g',
   'Voice calls 30d': '30 günlük sesli aramalar',
   'Video calls 30d': '30 günlük görüntülü aramalar',
   'Sent messages': 'Gönderilen mesajlar',
@@ -1204,7 +1228,8 @@ app.get('/sub-domains', requireAdmin, requireSection('subdomains'), async (_req,
     const domains = (await pool.query(`
       select d.*,
         count(u.id)::int as "usernameCount",
-        coalesce(sum(u."requestCount"), 0)::bigint as "requestCount"
+        coalesce(sum(u."requestCount"), 0)::bigint as "requestCount",
+        (select count(*)::int from "ChildServerUser" cu where cu."domainId" = d.id and cu."deletedAt" is null) as "childUserCount"
       from "LoginDomain" d
       left join "LoginDomainUsername" u on u."domainId" = d.id
       group by d.id
@@ -1214,14 +1239,20 @@ app.get('/sub-domains', requireAdmin, requireSection('subdomains'), async (_req,
       select * from "LoginDomainUsername"
       order by "lastRequestedAt" desc
     `)).rows;
+    const childUsers = (await pool.query(`
+      select * from "ChildServerUser"
+      order by "lastLoginAt" desc nulls last, username asc
+    `)).rows;
     const usernamesByDomain = new Map();
     usernames.forEach((item) => usernamesByDomain.set(item.domainId, [...(usernamesByDomain.get(item.domainId) || []), item]));
+    const childUsersByDomain = new Map();
+    childUsers.forEach((item) => childUsersByDomain.set(item.domainId, [...(childUsersByDomain.get(item.domainId) || []), item]));
 
     res.send(page({
       active: 'subdomains',
       body: `
         ${hero('Sub-domains', 'Login routing, child-server authorization, capacity, and request statistics.', `<div class="actions">${canEdit('subdomains') ? `<button type="button" onclick="document.getElementById('subdomain-create-modal').showModal()">${escapeHtml(translateText('Add sub-domain'))}</button>` : ''}${logout()}</div>`)}
-        ${panel('Sub-domains', loginDomainsTable(domains, usernamesByDomain))}
+        ${panel('Sub-domains', loginDomainsTable(domains, usernamesByDomain, childUsersByDomain))}
         ${canEdit('subdomains') ? loginDomainCreateModal() : ''}
       `,
       title: 'Sub-domains',
@@ -1658,15 +1689,25 @@ app.get('/users', requireAdmin, requireSection('users'), async (req, res, next) 
     const adminBlocked = req.query.adminBlocked === '1';
     const pageNum = Math.max(1, parseInt(req.query.page, 10) || 1);
     const pageSize = Math.min(100, Math.max(1, parseInt(req.query.pageSize, 10) || 20));
+    const serverDomains = (await pool.query('select id, domain from "LoginDomain" order by domain asc')).rows;
+    const requestedServer = String(req.query.server || 'all');
+    const allowedServerFilters = new Set(['all', 'main', ...serverDomains.map((domain) => `child:${domain.id}`)]);
+    const serverFilter = allowedServerFilters.has(requestedServer) ? requestedServer : 'all';
+    const selectedChildDomainId = serverFilter.startsWith('child:') ? serverFilter.slice(6) : null;
+    const includeMainUsers = serverFilter === 'all' || serverFilter === 'main';
+    const includeChildUsers = !adminBlocked && serverFilter !== 'main';
 
-    const { rows, pagination } = await getUsers({
-      adminBlocked,
-      direction,
-      q,
-      sort,
-      page: pageNum,
-      pageSize,
-    });
+    const [{ rows, pagination }, childUsers] = await Promise.all([
+      includeMainUsers ? getUsers({
+        adminBlocked,
+        direction,
+        q,
+        sort,
+        page: pageNum,
+        pageSize,
+      }) : Promise.resolve(emptyUserPagination(pageSize)),
+      includeChildUsers ? getChildUsers(q, selectedChildDomainId) : Promise.resolve([]),
+    ]);
 
     // preserve current filters/sort when building page links
     const baseParams = new URLSearchParams();
@@ -1674,6 +1715,7 @@ app.get('/users', requireAdmin, requireSection('users'), async (req, res, next) 
     if (sort !== 'created_at') baseParams.set('sort', sort);
     if (direction !== 'desc') baseParams.set('dir', direction);
     if (adminBlocked) baseParams.set('adminBlocked', '1');
+    if (serverFilter !== 'all') baseParams.set('server', serverFilter);
     if (pageSize !== 20) baseParams.set('pageSize', String(pageSize));
 
     const pageUrl = (p) => {
@@ -1685,7 +1727,7 @@ app.get('/users', requireAdmin, requireSection('users'), async (req, res, next) 
     res.send(page({
       active: 'users',
       body: `
-        ${hero('Users', `${number(pagination.total)} users with activity, calls, contacts, devices, and subscription data.`, `<div class="actions">${canEdit('users') ? `<button type="button" onclick="document.getElementById('user-create-modal').showModal()">${escapeHtml(translateText('Add user'))}</button>` : ''}<a class="btn secondary" href="/undelivered-messages">${escapeHtml(translateText('Undelivered messages'))}</a>${logout()}</div>`)}
+        ${hero('Users', `${number(pagination.total)} main users and ${number(childUsers.length)} child users shown.`, `<div class="actions">${canEdit('users') ? `<button type="button" onclick="document.getElementById('user-create-modal').showModal()">${escapeHtml(translateText('Add user'))}</button>` : ''}<a class="btn secondary" href="/undelivered-messages">${escapeHtml(translateText('Undelivered messages'))}</a>${logout()}</div>`)}
         ${canEdit('users') ? `
           <dialog class="admin-modal" id="user-create-modal">
             <form class="admin-modal-card" method="post" action="/users">
@@ -1706,22 +1748,33 @@ app.get('/users', requireAdmin, requireSection('users'), async (req, res, next) 
           </dialog>
         ` : ''}
         <form class="toolbar" method="get">
-          ${adminBlocked ? '<input type="hidden" name="adminBlocked" value="1">' : ''}
           <label>Search <input name="q" value="${escapeAttr(q)}" placeholder="${escapeAttr(translateText('Username or display name'))}"></label>
+          <label>${escapeHtml(translateText('Server'))} ${selectLabeled('server', serverFilter, [
+            ['all', 'All servers'],
+            ['main', 'Main'],
+            ...serverDomains.map((domain) => [`child:${domain.id}`, domain.domain]),
+          ])}</label>
           <label>Sort ${selectLabeled('sort', sort, userSortOptions())}</label>
           <label>Order ${selectLabeled('dir', direction, [['desc', 'Newest first'], ['asc', 'Oldest first']])}</label>
+          <label class="check"><input name="adminBlocked" type="checkbox" value="1" ${adminBlocked ? 'checked' : ''}> ${escapeHtml(translateText('Admin blocked'))}</label>
           <button>Apply</button>
-          <a class="btn secondary" href="${adminBlocked ? '/users' : '/users?adminBlocked=1'}">${escapeHtml(translateText(adminBlocked ? 'All users' : 'Admin blocked'))}</a>
         </form>
-        <div class="panel"><div class="table-wrap users-table-wrap"><table class="users-card-table">
+        ${includeMainUsers ? `<div class="panel"><div class="panel-head"><h2>${escapeHtml(translateText('Main server users'))}</h2></div><div class="table-wrap users-table-wrap"><table class="users-card-table">
           <thead><tr>${[
-            'User', 'Registered', 'Last online', 'Last sign-in', 'Contacts', 'Messages',
-            'Voice today', 'Voice 7d', 'Voice 15d', 'Voice 30d', 'Voice duration',
-            'Video today', 'Video 7d', 'Video 15d', 'Video 30d', 'Video duration', 'Status',
+            'User', 'Server', 'Registered', 'Last online', 'Last sign-in', 'Contacts', 'Messages',
+            'Voice 1d/7d/15d/30d', 'Voice duration',
+            'Video 1d/7d/15d/30d', 'Video duration',
           ].map((h) => `<th>${escapeHtml(translateText(h))}</th>`).join('')}</tr></thead>
           <tbody>${rows.map(userRow).join('')}</tbody>
         </table></div></div>
-        ${renderPagination(pagination, pageUrl)}
+        ${renderPagination(pagination, pageUrl)}` : ''}
+        ${includeChildUsers ? panel(
+          selectedChildDomainId
+            ? serverDomains.find((domain) => domain.id === selectedChildDomainId)?.domain || 'Child server users'
+            : 'Child server users',
+          childUsersTable(childUsers),
+        ) : ''}
+        ${!includeMainUsers && !includeChildUsers ? panel('Users', empty('Admin blocked filtering is available only for main server users.')) : ''}
       `,
       title: 'Users',
     }));
@@ -3407,6 +3460,39 @@ async function getUsers({ adminBlocked = false, direction, q, sort, page = 1, pa
   };
 }
 
+function emptyUserPagination(pageSize) {
+  return {
+    pagination: { page: 1, pageSize, total: 0, totalPages: 0 },
+    rows: [],
+  };
+}
+
+async function getChildUsers(q, domainId = null) {
+  const params = [];
+  const filters = [];
+
+  if (q) {
+    params.push(`%${q}%`);
+    filters.push(`(cu.username ilike $${params.length} or cu."displayName" ilike $${params.length} or d.domain ilike $${params.length})`);
+  }
+
+  if (domainId) {
+    params.push(domainId);
+    filters.push(`cu."domainId" = $${params.length}`);
+  }
+
+  const where = filters.length > 0 ? `where ${filters.join(' and ')}` : '';
+
+  return (await pool.query(`
+    select cu.*, d.domain, d.hostname
+    from "ChildServerUser" cu
+    join "LoginDomain" d on d.id = cu."domainId"
+    ${where}
+    order by cu."lastLoginAt" desc nulls last, cu.username asc
+    limit 1000
+  `, params)).rows;
+}
+
 async function getUser(id) {
   return (await pool.query(`select * from (${baseUserQuery()}) x where id = $1`, [id])).rows[0];
 }
@@ -4199,6 +4285,7 @@ function userRow(u) {
 
   return `<tr>
     <td data-label="${escapeAttr(translateText('User'))}">${userLink(u.id, u.displayName, u.username)}<div class="users-inline-status">${statusPill}</div></td>
+    <td data-label="${escapeAttr(translateText('Server'))}"><span class="pill soft">${escapeHtml(translateText('Main'))}</span></td>
     <td data-label="${escapeAttr(translateText('Registered'))}">${date(u.createdAt)}</td>
     <td data-label="${escapeAttr(translateText('Last online'))}">${date(u.last_online_at)}</td>
     <td data-label="${escapeAttr(translateText('Last sign-in'))}">${date(u.last_signin_at)}</td>
@@ -4209,22 +4296,35 @@ function userRow(u) {
     <td class="users-desktop-cell" data-label="${escapeAttr(translateText('Contacts'))}">${number(u.contacts_count)}</td>
     <td class="users-desktop-cell" data-label="${escapeAttr(translateText('Messages'))}">${number(u.total_messages)}</td>
     <td class="mobile-only users-stat-line" data-label="${escapeAttr(translateText('Voice'))}">${compactPeriodStats(u, 'voice')}</td>
-    <td class="users-desktop-cell" data-label="${escapeAttr(translateText('Voice today'))}">${number(u.voice_today)}</td>
-    <td class="users-desktop-cell" data-label="${escapeAttr(translateText('Voice 7d'))}">${number(u.voice_7d)}</td>
-    <td class="users-desktop-cell" data-label="${escapeAttr(translateText('Voice 15d'))}">${number(u.voice_15d)}</td>
-    <td class="users-desktop-cell" data-label="${escapeAttr(translateText('Voice 30d'))}">${number(u.voice_30d)}</td>
+    <td class="users-desktop-cell users-period-cell" data-label="${escapeAttr(translateText('Voice 1d/7d/15d/30d'))}">${compactPeriodStats(u, 'voice')}</td>
     <td class="users-desktop-cell" data-label="${escapeAttr(translateText('Voice duration'))}">${duration(u.voice_duration_sec)}</td>
     <td class="mobile-only users-stat-line" data-label="${escapeAttr(translateText('Video'))}">${compactPeriodStats(u, 'video')}</td>
-    <td class="users-desktop-cell" data-label="${escapeAttr(translateText('Video today'))}">${number(u.video_today)}</td>
-    <td class="users-desktop-cell" data-label="${escapeAttr(translateText('Video 7d'))}">${number(u.video_7d)}</td>
-    <td class="users-desktop-cell" data-label="${escapeAttr(translateText('Video 15d'))}">${number(u.video_15d)}</td>
-    <td class="users-desktop-cell" data-label="${escapeAttr(translateText('Video 30d'))}">${number(u.video_30d)}</td>
+    <td class="users-desktop-cell users-period-cell" data-label="${escapeAttr(translateText('Video 1d/7d/15d/30d'))}">${compactPeriodStats(u, 'video')}</td>
     <td class="users-desktop-cell" data-label="${escapeAttr(translateText('Video duration'))}">${duration(u.video_duration_sec)}</td>
     <td class="mobile-only users-stat-line" data-label="${escapeAttr(translateText('Duration'))}">${compactPairStats([
       ['Voice', duration(u.voice_duration_sec)],
       ['Video', duration(u.video_duration_sec)],
     ])}</td>
   </tr>`;
+}
+
+function childUsersTable(rows) {
+  if (!rows.length) return empty('No child server users match the current filter.');
+
+  return `<div class="table-wrap"><table>
+    <thead><tr>${['User', 'Server', 'Registered', 'Last online', 'Last sign-in', 'Device', 'Language', 'App', 'Status'].map((heading) => `<th>${escapeHtml(translateText(heading))}</th>`).join('')}</tr></thead>
+    <tbody>${rows.map((user) => `<tr>
+      <td><strong>${escapeHtml(user.displayName || user.username)}</strong><br><span class="subtle">@${escapeHtml(user.username)}</span></td>
+      <td><a href="/sub-domains"><span class="pill soft">${escapeHtml(user.domain)}</span></a><br><span class="subtle">${escapeHtml(user.hostname)}</span></td>
+      <td>${date(user.childCreatedAt)}</td>
+      <td>${date(user.lastSeenAt)}</td>
+      <td>${date(user.lastLoginAt)}</td>
+      <td>${escapeHtml(formatChildDevice(user))}</td>
+      <td>${escapeHtml(user.latestLocale || user.registrationLocale || '')}</td>
+      <td>${escapeHtml(formatChildApp(user))}</td>
+      <td>${user.deletedAt ? `<span class="pill danger">${escapeHtml(translateText('Deleted'))}</span>` : `<span class="pill good">${escapeHtml(translateText('Active'))}</span>`}</td>
+    </tr>`).join('')}</tbody>
+  </table></div>`;
 }
 
 function compactPairStats(items) {
@@ -4877,6 +4977,28 @@ function loginDomainCreateModal() {
   </dialog>`;
 }
 
+function loginDomainEditModal(domain, modalId) {
+  return `<dialog class="admin-modal subdomain-edit-modal" id="${escapeAttr(modalId)}">
+    <section class="admin-modal-card">
+      <div class="admin-modal-head">
+        <div><h3>${escapeHtml(translateText('Edit sub-domain'))}</h3><span class="subtle">${escapeHtml(domain.domain)}</span></div>
+        <button aria-label="${escapeAttr(translateText('Close'))}" class="secondary small modal-close" type="button" onclick="this.closest('dialog').close()">×</button>
+      </div>
+      <div class="admin-modal-body subdomain-edit-body">
+        <form class="subdomain-edit-form" method="post" action="/sub-domains/${escapeAttr(domain.id)}">
+          ${loginDomainForm(domain)}
+        </form>
+        <section class="subdomain-danger-zone">
+          <div><strong>${escapeHtml(translateText('Delete sub-domain'))}</strong><p class="subtle">${escapeHtml(translateText('This also deletes its synchronized users and request statistics.'))}</p></div>
+          <form method="post" action="/sub-domains/${escapeAttr(domain.id)}/delete" onsubmit="return confirm('${escapeAttr(translateText('Delete this sub-domain and all statistics?'))}')">
+            <button class="danger" type="submit">${escapeHtml(translateText('Delete'))}</button>
+          </form>
+        </section>
+      </div>
+    </section>
+  </dialog>`;
+}
+
 function loginDomainForm(domain, generatedKey = '') {
   return `<div class="stack">
     <label>${escapeHtml(translateText('Domain'))}<input name="domain" maxlength="253" required value="${escapeAttr(domain?.domain || '')}" placeholder="company or company.example.com"><span class="subtle">${escapeHtml(translateText('Enter the value used after @. URLs and @ prefixes are normalized automatically.'))}</span></label>
@@ -4891,38 +5013,58 @@ function loginDomainForm(domain, generatedKey = '') {
   </div>`;
 }
 
-function loginDomainsTable(domains, usernamesByDomain) {
+function loginDomainsTable(domains, usernamesByDomain, childUsersByDomain) {
   if (!domains.length) return empty('No sub-domains yet.');
   const rows = domains.map((domain) => {
       const usernames = usernamesByDomain.get(domain.id) || [];
       const expired = domain.expiresAt && new Date(domain.expiresAt) <= new Date();
       const modalId = `login-domain-${domain.id}`;
+      const editModalId = `login-domain-edit-${domain.id}`;
       return `<tr>
         <td><button class="link-button" type="button" onclick="document.getElementById('${escapeAttr(modalId)}').showModal()"><strong>${escapeHtml(domain.domain)}</strong></button><br><span class="subtle">${escapeHtml(domain.description || '')}</span></td>
         <td>${escapeHtml(domain.hostname)}<br><span class="subtle">${escapeHtml((domain.originIpAddresses || []).join(', '))}</span></td>
-        <td>${number(domain.usernameCount)} / ${domain.maxUserCount == null ? '∞' : number(domain.maxUserCount)}</td>
+        <td>${number(domain.childUserCount)} / ${domain.maxUserCount == null ? '∞' : number(domain.maxUserCount)}</td>
         <td>${number(domain.requestCount)}</td><td>${date(domain.expiresAt)}</td>
         <td>${expired ? `<span class="pill danger">${escapeHtml(translateText('Expired'))}</span>` : domain.isActive ? `<span class="pill good">${escapeHtml(translateText('Active'))}</span>` : `<span class="pill danger">${escapeHtml(translateText('Disabled'))}</span>`}</td>
-        <td>${canEdit('subdomains') ? `<details class="admin-details"><summary>${escapeHtml(translateText('Edit'))}</summary><form class="stack" method="post" action="/sub-domains/${escapeAttr(domain.id)}">${loginDomainForm(domain)}</form></details>` : ''}</td>
+        <td>${canEdit('subdomains') ? `<button class="secondary small" type="button" onclick="document.getElementById('${escapeAttr(editModalId)}').showModal()">${escapeHtml(translateText('Edit'))}</button>` : ''}</td>
       </tr>`;
     }).join('');
   const modals = domains.map((domain) => loginDomainStatsModal(
     domain,
     usernamesByDomain.get(domain.id) || [],
+    childUsersByDomain.get(domain.id) || [],
     `login-domain-${domain.id}`,
   )).join('');
+  const editModals = canEdit('subdomains')
+    ? domains.map((domain) => loginDomainEditModal(domain, `login-domain-edit-${domain.id}`)).join('')
+    : '';
 
-  return `<div class="table-wrap"><table><thead><tr>${['Domain', 'Hostname', 'Users', 'Requests', 'Expires', 'Status', 'Actions'].map((label) => `<th>${escapeHtml(translateText(label))}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div>${modals}`;
+  return `<div class="table-wrap"><table><thead><tr>${['Domain', 'Hostname', 'Users', 'Requests', 'Expires', 'Status', 'Actions'].map((label) => `<th>${escapeHtml(translateText(label))}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div>${modals}${editModals}`;
 }
 
-function loginDomainStatsModal(domain, usernames, modalId) {
+function loginDomainStatsModal(domain, usernames, childUsers, modalId) {
+  const activeChildUsers = childUsers.filter((item) => !item.deletedAt);
   return `<dialog class="admin-modal admin-modal-wide" id="${escapeAttr(modalId)}"><section class="admin-modal-card">
     <div class="admin-modal-head"><div><h3>${escapeHtml(domain.domain)}</h3><span class="subtle">${escapeHtml(domain.hostname)}</span></div><button class="secondary small" type="button" onclick="this.closest('dialog').close()">×</button></div>
-    <div class="metric-grid"><div class="metric-card"><div class="metric-label">${escapeHtml(translateText('Users'))}</div><div class="metric-value">${number(usernames.length)}</div></div><div class="metric-card"><div class="metric-label">${escapeHtml(translateText('Requests'))}</div><div class="metric-value">${number(usernames.reduce((sum, item) => sum + Number(item.requestCount || 0), 0))}</div></div></div>
-    <input placeholder="${escapeAttr(translateText('Search username'))}" oninput="const q=this.value.toLowerCase();this.parentElement.querySelectorAll('tbody tr').forEach(r=>r.hidden=!r.dataset.username.includes(q))">
-    <div class="table-wrap"><table><thead><tr><th>${escapeHtml(translateText('Username'))}</th><th>${escapeHtml(translateText('Requests'))}</th><th>${escapeHtml(translateText('Platform'))}</th><th>${escapeHtml(translateText('First requested'))}</th><th>${escapeHtml(translateText('Last requested'))}</th></tr></thead><tbody>${usernames.map((item) => `<tr data-username="${escapeAttr(item.username.toLowerCase())}"><td>${escapeHtml(item.username)}</td><td>${number(item.requestCount)}</td><td>${escapeHtml(item.platform || '')}</td><td>${date(item.firstRequestedAt)}</td><td>${date(item.lastRequestedAt)}</td></tr>`).join('')}</tbody></table></div>
-    ${canEdit('subdomains') ? `<div class="actions"><form method="post" action="/sub-domains/${escapeAttr(domain.id)}/toggle"><button class="secondary">${escapeHtml(translateText(domain.isActive ? 'Deactivate' : 'Activate'))}</button></form><form method="post" action="/sub-domains/${escapeAttr(domain.id)}/delete" onsubmit="return confirm('${escapeAttr(translateText('Delete this sub-domain and all statistics?'))}')"><button class="danger">${escapeHtml(translateText('Delete'))}</button></form></div>` : ''}
+    <div class="metric-grid"><div class="metric-card"><div class="metric-label">${escapeHtml(translateText('Child users'))}</div><div class="metric-value">${number(activeChildUsers.length)}</div></div><div class="metric-card"><div class="metric-label">${escapeHtml(translateText('Login selectors'))}</div><div class="metric-value">${number(usernames.length)}</div></div><div class="metric-card"><div class="metric-label">${escapeHtml(translateText('Requests'))}</div><div class="metric-value">${number(usernames.reduce((sum, item) => sum + Number(item.requestCount || 0), 0))}</div></div></div>
+    <h4>${escapeHtml(translateText('Child users'))}</h4>
+    <input placeholder="${escapeAttr(translateText('Search username'))}" oninput="const q=this.value.toLowerCase();this.closest('section').querySelectorAll('[data-child-user]').forEach(r=>r.hidden=!r.dataset.username.includes(q))">
+    <div class="table-wrap"><table><thead><tr><th>${escapeHtml(translateText('Username'))}</th><th>${escapeHtml(translateText('Display name'))}</th><th>${escapeHtml(translateText('Device'))}</th><th>${escapeHtml(translateText('Language'))}</th><th>${escapeHtml(translateText('App'))}</th><th>${escapeHtml(translateText('Last login'))}</th><th>${escapeHtml(translateText('Last seen'))}</th><th>${escapeHtml(translateText('Status'))}</th></tr></thead><tbody>${childUsers.map((item) => `<tr data-child-user data-username="${escapeAttr(`${item.username} ${item.displayName || ''}`.toLowerCase())}"><td>${escapeHtml(item.username)}</td><td>${escapeHtml(item.displayName || '')}</td><td>${escapeHtml(formatChildDevice(item))}</td><td>${escapeHtml(item.latestLocale || item.registrationLocale || '')}</td><td>${escapeHtml(formatChildApp(item))}</td><td>${date(item.lastLoginAt)}</td><td>${date(item.lastSeenAt)}</td><td>${item.deletedAt ? `<span class="pill danger">${escapeHtml(translateText('Deleted'))}</span>` : `<span class="pill good">${escapeHtml(translateText('Active'))}</span>`}</td></tr>`).join('')}</tbody></table></div>
+    <h4>${escapeHtml(translateText('Login routing requests'))}</h4>
+    <div class="table-wrap"><table><thead><tr><th>${escapeHtml(translateText('Username'))}</th><th>${escapeHtml(translateText('Requests'))}</th><th>${escapeHtml(translateText('Platform'))}</th><th>${escapeHtml(translateText('First requested'))}</th><th>${escapeHtml(translateText('Last requested'))}</th></tr></thead><tbody>${usernames.map((item) => `<tr><td>${escapeHtml(item.username)}</td><td>${number(item.requestCount)}</td><td>${escapeHtml(item.platform || '')}</td><td>${date(item.firstRequestedAt)}</td><td>${date(item.lastRequestedAt)}</td></tr>`).join('')}</tbody></table></div>
+    ${canEdit('subdomains') ? `<div class="actions"><form method="post" action="/sub-domains/${escapeAttr(domain.id)}/toggle"><button class="secondary">${escapeHtml(translateText(domain.isActive ? 'Deactivate' : 'Activate'))}</button></form><button type="button" onclick="this.closest('dialog').close();document.getElementById('login-domain-edit-${escapeAttr(domain.id)}').showModal()">${escapeHtml(translateText('Edit'))}</button></div>` : ''}
   </section></dialog>`;
+}
+
+function formatChildDevice(item) {
+  return [item.deviceModel, item.osVersion, item.latestPlatform || item.registrationPlatform]
+    .filter(Boolean)
+    .join(' · ');
+}
+
+function formatChildApp(item) {
+  if (!item.appVersion && !item.appBuildNumber) return '';
+  return `${item.appVersion || ''}${item.appBuildNumber ? ` (${item.appBuildNumber})` : ''}`;
 }
 
 function dateTimeLocal(value) {

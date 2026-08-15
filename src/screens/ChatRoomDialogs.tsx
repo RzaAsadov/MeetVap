@@ -15,6 +15,7 @@ import { downloadRemoteMediaFile,getCachedVideoThumbnailUri,getMessageMediaCache
 import { containsMeetVapKeyword } from '../lib/prohibitedNames';
 import { buildSharedGroupWebUrl } from '../lib/shareLinks';
 import { hasPremiumAccess } from '../lib/subscriptionAccess';
+import { getMessageVideoThumbnailUri } from '../lib/messageVideoThumbnail';
 import { useAppStore } from '../store/useAppStore';
 import { colors } from '../theme/colors';
 import { spacing } from '../theme/spacing';
@@ -422,7 +423,12 @@ function ChatGalleryTabButton({ count, isActive, label, onPress }: { count: numb
 }
 
 function ChatGalleryVideoTile({ message }: { message: Message }) {
-  const [thumbnailUri, setThumbnailUri] = useState<string | null>(() => getRememberedCachedVideoThumbnailUri({
+  const configuredServerThumbnailUri = getMessageVideoThumbnailUri(message);
+  const [failedServerThumbnailUri, setFailedServerThumbnailUri] = useState<string | null>(null);
+  const serverThumbnailUri = configuredServerThumbnailUri === failedServerThumbnailUri
+    ? null
+    : configuredServerThumbnailUri;
+  const [thumbnailUri, setThumbnailUri] = useState<string | null>(() => serverThumbnailUri ?? getRememberedCachedVideoThumbnailUri({
     messageId: message.id,
     quality: 0.72,
     sourceSizeBytes: message.sizeBytes,
@@ -434,6 +440,11 @@ function ChatGalleryVideoTile({ message }: { message: Message }) {
     let isMounted = true;
 
     async function loadThumbnail() {
+      if (serverThumbnailUri) {
+        setThumbnailUri(serverThumbnailUri);
+        return;
+      }
+
       if (!message.mediaUri) {
         setThumbnailUri(null);
         return;
@@ -478,10 +489,22 @@ function ChatGalleryVideoTile({ message }: { message: Message }) {
     return () => {
       isMounted = false;
     };
-  }, [message.id, message.mediaUri, message.sizeBytes]);
+  }, [message.id, message.mediaUri, message.sizeBytes, serverThumbnailUri]);
 
   if (thumbnailUri) {
-    return <Image resizeMode="cover" source={{ uri: thumbnailUri }} style={styles.chatGalleryMediaImage} />;
+    return (
+      <Image
+        onError={() => {
+          if (configuredServerThumbnailUri && thumbnailUri === configuredServerThumbnailUri) {
+            setFailedServerThumbnailUri(configuredServerThumbnailUri);
+            setThumbnailUri(null);
+          }
+        }}
+        resizeMode="cover"
+        source={{ uri: thumbnailUri }}
+        style={styles.chatGalleryMediaImage}
+      />
+    );
   }
 
   return (
@@ -1905,6 +1928,13 @@ export async function downloadMediaActionAttachment(message: Message) {
   if (!cachedUri) {
     throw new Error(t('mediaDownloadIncomplete'));
   }
+
+  await useAppStore.getState().cacheDownloadedMessageMedia(
+    message.conversationId,
+    message.id,
+    cachedUri,
+    remoteUri,
+  );
 
   return cachedUri;
 }

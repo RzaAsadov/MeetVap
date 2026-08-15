@@ -11,6 +11,7 @@ import { formatBytes, formatDuration } from '../lib/format';
 import { downloadRemoteMediaFile, getCachedVideoThumbnailUri, getMediaDownloadProgress, getMessageMediaCacheUri, getRememberedCachedVideoThumbnailUri, isLocalMediaFileComplete, MediaDownloadProgress, pauseMediaDownload, resolveCachedMessageMediaUri, resolveLocalMediaFileUri, subscribeToMediaDownloadProgress } from '../lib/mediaCache';
 import { LIVE_LOCATION_ESTABLISHMENT_TIMEOUT_MS, stopTrackedLiveLocationShare } from '../lib/liveLocation';
 import { openMessageUrl } from '../lib/messageLinks';
+import { getMessageVideoThumbnailUri } from '../lib/messageVideoThumbnail';
 import { openNativeAndroidFile } from '../native/CallNative';
 import { useAppStore } from '../store/useAppStore';
 import { colors } from '../theme/colors';
@@ -334,7 +335,7 @@ export function MessageBubble({ canRedialCallMessage = false, enableSwipeReply =
             if (handleDownloadPress()) return;
             onOpenMedia?.(message);
           }} style={styles.videoPreviewWrap}>
-            {message.mediaUri && !shouldHideRemoteMediaUntilDownloaded(message, downloadProgress) ? <VideoPreview message={message} /> : null}
+            {message.mediaUri || getMessageVideoThumbnailUri(message) ? <VideoPreview message={message} /> : null}
             <View style={styles.videoOverlay}>
               {isUploading ? (
                 <UploadProgressControl messageId={message.id} onCancel={onCancelUpload} progress={uploadProgress} />
@@ -675,7 +676,12 @@ function ImagePreview({ message }: { message: Message }) {
 
 function VideoPreview({ message }: { message: Message }) {
   const { fileName, id, kind, mediaUri, metadata, sizeBytes, status } = message;
-  const [thumbnailUri, setThumbnailUri] = useState<string | null>(() => getRememberedCachedVideoThumbnailUri({
+  const configuredServerThumbnailUri = getMessageVideoThumbnailUri(message);
+  const [failedServerThumbnailUri, setFailedServerThumbnailUri] = useState<string | null>(null);
+  const serverThumbnailUri = configuredServerThumbnailUri === failedServerThumbnailUri
+    ? null
+    : configuredServerThumbnailUri;
+  const [thumbnailUri, setThumbnailUri] = useState<string | null>(() => serverThumbnailUri ?? getRememberedCachedVideoThumbnailUri({
     messageId: id,
     quality: 0.72,
     sourceSizeBytes: sizeBytes,
@@ -690,6 +696,11 @@ function VideoPreview({ message }: { message: Message }) {
 
     async function loadThumbnail(shouldRetry = true) {
       setFailed(false);
+
+      if (serverThumbnailUri) {
+        setThumbnailUri(serverThumbnailUri);
+        return;
+      }
 
       try {
         const localUri = await getThumbnailSourceUri({ fileName, id, kind, mediaUri, metadata, sizeBytes, status });
@@ -741,10 +752,21 @@ function VideoPreview({ message }: { message: Message }) {
         clearTimeout(retryTimeout);
       }
     };
-  }, [fileName, id, kind, mediaUri, metadata, sizeBytes, status]);
+  }, [fileName, id, kind, mediaUri, metadata, serverThumbnailUri, sizeBytes, status]);
 
   if (thumbnailUri) {
-    return <Image source={{ uri: thumbnailUri }} style={styles.videoPreview} />;
+    return (
+      <Image
+        onError={() => {
+          if (configuredServerThumbnailUri && thumbnailUri === configuredServerThumbnailUri) {
+            setFailedServerThumbnailUri(configuredServerThumbnailUri);
+            setThumbnailUri(null);
+          }
+        }}
+        source={{ uri: thumbnailUri }}
+        style={styles.videoPreview}
+      />
+    );
   }
 
   return (

@@ -31,6 +31,13 @@ export async function resolveLoginServer(rawUsername: string) {
     return { serverUrl: DEFAULT_SERVER_URL, username: parsed.username };
   }
 
+  if (isFullyQualifiedHostname(parsed.domain)) {
+    return {
+      serverUrl: await requireReachableHost(`https://${parsed.domain}`),
+      username: parsed.username,
+    };
+  }
+
   let resolvedHostname: string;
 
   try {
@@ -64,6 +71,20 @@ export async function resolveLoginServer(rawUsername: string) {
   }
 
   return { serverUrl: await requireReachableHost(resolvedHostname), username: parsed.username };
+}
+
+export function isFullyQualifiedHostname(value: string) {
+  if (value.length > 253 || !value.includes('.')) {
+    return false;
+  }
+
+  const labels = value.split('.');
+
+  return labels.every((label) => (
+    label.length > 0 &&
+    label.length <= 63 &&
+    /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label)
+  ));
 }
 
 async function requestDomainHostname(domain: string, username: string) {

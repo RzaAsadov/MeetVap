@@ -13,6 +13,7 @@ import { prisma } from '../prisma';
 import { registerMediaSchema, uploadMediaSchema } from '../validators';
 import { operationalConfig } from '../operationalConfig';
 import { enforceRateLimit } from '../rateLimits';
+import { ensureVideoThumbnail, isVideoMedia } from '../videoThumbnails';
 
 export const mediaRoutes = Router();
 const uploadDir = path.resolve(config.UPLOAD_DIR);
@@ -60,6 +61,30 @@ mediaRoutes.get('/:mediaId/file', async (req, res, next) => {
           return;
         }
 
+        next(toMediaFileError(error));
+      }
+    });
+  } catch (error) {
+    next(toMediaFileError(error));
+  }
+});
+
+mediaRoutes.get('/:mediaId/thumbnail', async (req, res, next) => {
+  try {
+    const media = await prisma.mediaFile.findUnique({
+      select: { id: true, mimeType: true, storageKey: true },
+      where: { id: req.params.mediaId },
+    });
+
+    if (!media || !isVideoMedia(media)) {
+      throw new HttpError(404, 'Video thumbnail not found');
+    }
+
+    const thumbnailPath = await ensureVideoThumbnail(media);
+    res.type('image/jpeg');
+    res.setHeader('Cache-Control', 'private, max-age=86400');
+    res.sendFile(thumbnailPath, (error) => {
+      if (error && !(res.headersSent && isClientDisconnectError(error))) {
         next(toMediaFileError(error));
       }
     });
@@ -225,6 +250,7 @@ mediaRoutes.post('/uploads/:uploadId/complete', async (req, res, next) => {
       },
     });
 
+    void prepareVideoThumbnail(media);
     await removeChunkSession(currentUser.id, uploadId);
     res.status(201).json({ media });
   } catch (error) {
@@ -275,6 +301,7 @@ mediaRoutes.post('/upload', async (req, res, next) => {
       },
     });
 
+    void prepareVideoThumbnail(media);
     res.status(201).json({ media });
   } catch (error) {
     next(error);
@@ -341,6 +368,7 @@ mediaRoutes.post('/upload-binary', async (req, res, next) => {
       },
     });
 
+    void prepareVideoThumbnail(media);
     res.status(201).json({ media });
   } catch (error) {
     next(error);
@@ -370,6 +398,7 @@ mediaRoutes.post('/register', async (req, res, next) => {
       },
     });
 
+    void prepareVideoThumbnail(media);
     res.status(201).json({ media });
   } catch (error) {
     next(error);
@@ -426,6 +455,19 @@ function getExtension(fileName: string, mimeType: string) {
   }
 
   return '.bin';
+}
+
+async function prepareVideoThumbnail(media: { id: string; mimeType: string; storageKey: string }) {
+  if (!isVideoMedia(media)) {
+    return;
+  }
+
+  await ensureVideoThumbnail(media).catch((error) => {
+    console.warn('Could not generate uploaded video thumbnail', {
+      mediaId: media.id,
+      message: error instanceof Error ? error.message : String(error),
+    });
+  });
 }
 
 type ChunkSession = {

@@ -53,6 +53,11 @@
     },
     "activePushTokenDays": 45
   },
+  "pushNotifications": {
+    "messageTtlHours": 72,
+    "outboxMaxAttempts": 8,
+    "outboxMaxRetrySeconds": 300
+  },
   "premium": {
     "trialDays": 15
   },

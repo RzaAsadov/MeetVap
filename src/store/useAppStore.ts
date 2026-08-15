@@ -15,7 +15,7 @@ import { isHighPriorityUiActivityActive, scheduleAfterForegroundIdle } from '../
 import { downloadRemoteMediaFile, getMessageMediaCacheUri, isLocalMediaFileComplete, removePartialMediaDownloadsForMessages, resolveCachedMessageMediaUri, resolveLocalMediaFileUri, sanitizeCacheFileName } from '../lib/mediaCache';
 import { logMessageDeliveryDiagnostic, refreshRemoteMessageDeliveryDiagnostics, shouldCollectMessageDeliveryDiagnostics } from '../lib/messageDeliveryDiagnostics';
 import { dismissAllMessageNotifications, dismissMessageNotificationsForConversation } from '../lib/messageNotifications';
-import { clearAuthToken, clearDeletedConversationAfter, clearStoredConversations, clearStoredSubscriptionStatus, clearStoredUser, eraseLocalAppData, eraseLocalChatData, getAuthToken, getDeletedConversationAfter, getDeletedConversationAfters, getServerUrl, getStoredCallLogs, getStoredConversationMediaCacheCursor, getStoredConversationSyncCursors, getStoredConversations, getStoredDarkMode, getStoredDecoyOffline, getStoredErasePinDeletePeers, getStoredLanguage, getStoredLatestMessagesByConversationIds, getStoredMessages, getStoredMessagesByIds, getStoredOlderMessages, getStoredRecentMessages, getStoredSubscriptionStatus, getStoredUser, removeStoredConversationRecords, removeStoredMessageRecords, removeStoredMessages, setAuthToken, setDeletedConversationAfter, setServerUrl, setStoredCallLogs, setStoredConversationMediaCacheCursor, setStoredConversationSyncCursors, setStoredDarkMode, setStoredDecoyOffline, setStoredLanguage, setStoredSubscriptionStatus, setStoredUser, upsertStoredConversations, upsertStoredMessages } from '../lib/storage';
+import { clearAuthToken, clearDeletedConversationAfter, clearStoredConversations, clearStoredSubscriptionStatus, clearStoredUser, eraseLocalAppData, eraseLocalChatData, getAuthToken, getDeletedConversationAfter, getDeletedConversationAfters, getServerUrl, getStoredAutoDownloadMedia, getStoredCallLogs, getStoredConversationMediaCacheCursor, getStoredConversationSyncCursors, getStoredConversations, getStoredDarkMode, getStoredDecoyOffline, getStoredErasePinDeletePeers, getStoredLanguage, getStoredLatestMessagesByConversationIds, getStoredMessages, getStoredMessagesByIds, getStoredOlderMessages, getStoredRecentMessages, getStoredSubscriptionStatus, getStoredUser, removeStoredConversationRecords, removeStoredMessageRecords, removeStoredMessages, setAuthToken, setDeletedConversationAfter, setServerUrl, setStoredAutoDownloadMedia, setStoredCallLogs, setStoredConversationMediaCacheCursor, setStoredConversationSyncCursors, setStoredDarkMode, setStoredDecoyOffline, setStoredLanguage, setStoredSubscriptionStatus, setStoredUser, upsertStoredConversations, upsertStoredMessages } from '../lib/storage';
 import { resolveLoginServer } from '../lib/loginServerResolution';
 import { createBypassSubscriptionStatus, createEmptySubscriptionStatus, hasPremiumAccess, isSubscriptionBypassed } from '../lib/subscriptionAccess';
 import { clearNativeQuickReplyCredentials, setNativeQuickReplyCredentials } from '../native/CallNative';
@@ -323,6 +323,7 @@ function clearUploadProgress(messageId: string) {
 
 export type AppState = {
   isBootstrapping: boolean;
+  autoDownloadMedia: boolean;
   isCheckingSubscription: boolean;
   isDarkMode: boolean;
   isDarkModeManual: boolean;
@@ -367,6 +368,7 @@ export type AppState = {
   cancelUpload: (messageId: string) => void;
   clearConnectionNotice: () => void;
   setDarkMode: (isDarkMode: boolean) => Promise<void>;
+  setAutoDownloadMedia: (isEnabled: boolean) => Promise<void>;
   setLanguagePreference: (languagePreference: LanguagePreference) => Promise<void>;
   syncSystemDarkMode: (isDarkMode: boolean) => void;
   setDecoyOfflineMode: (isDecoyOffline: boolean) => Promise<void>;
@@ -452,6 +454,7 @@ export type AppState = {
 };
 
 export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((set) => ({
+  autoDownloadMedia: true,
   appDomains: [],
   blockedUsers: [],
   blockedUsersLastFetchedAt: 0,
@@ -495,7 +498,7 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
   user: null,
 
   async bootstrap() {
-    const [serverUrl, storedUser, token, storedConversations, storedDarkMode, storedLanguage, storedSubscriptionStatus, storedDecoyOffline] = await Promise.all([
+    const [serverUrl, storedUser, token, storedConversations, storedDarkMode, storedLanguage, storedSubscriptionStatus, storedDecoyOffline, autoDownloadMedia] = await Promise.all([
       getServerUrl(),
       getStoredUser<AuthUser>(),
       getAuthToken(),
@@ -504,6 +507,7 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
       getStoredLanguage(),
       getStoredSubscriptionStatus(),
       getStoredDecoyOffline(),
+      getStoredAutoDownloadMedia(),
     ]);
     const languagePreference: LanguagePreference = isLanguagePreference(storedLanguage)
       ? storedLanguage
@@ -523,6 +527,7 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
     setI18nLanguage(language);
 
     set({
+      autoDownloadMedia,
       callLogs,
       conversations: visibleStoredConversations,
       conversationsNextOffset: visibleStoredConversations.length,
@@ -633,6 +638,19 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
   async setDarkMode(isDarkMode) {
     await setStoredDarkMode(isDarkMode);
     set({ isDarkMode, isDarkModeManual: true });
+  },
+
+  async setAutoDownloadMedia(isEnabled) {
+    await setStoredAutoDownloadMedia(isEnabled);
+    set({ autoDownloadMedia: isEnabled });
+
+    if (!isEnabled) {
+      incomingMediaCacheQueue.splice(0, incomingMediaCacheQueue.length);
+      queuedIncomingMediaCacheIds.clear();
+      return;
+    }
+
+    resumeLoadedIncomingMediaCaching();
   },
 
   async setLanguagePreference(languagePreference) {
@@ -2705,6 +2723,17 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
       },
     }));
     await persistChangedConversationMessages(conversationId, [cachedMessage]);
+
+    const { serverUrl, user } = useAppStore.getState();
+
+    if (
+      serverUrl &&
+      user &&
+      !cachedMessage.id.startsWith('local-') &&
+      await isMessageContentReadyForAck(cachedMessage, user.id)
+    ) {
+      await acknowledgeMessageContent(serverUrl, conversationId, [cachedMessage.id]).catch(() => undefined);
+    }
   },
 
   applyMessageEdit(edit) {
@@ -3720,7 +3749,7 @@ function scheduleIncomingMediaCaching(messages: Message[], options?: { limit?: n
   const currentUserId = useAppStore.getState().user?.id;
   const limit = options?.limit ?? MAX_AUTOMATIC_INCOMING_MEDIA_CACHE_MESSAGES;
 
-  if (!currentUserId || limit <= 0 || isForegroundChatActive()) {
+  if (!currentUserId || !useAppStore.getState().autoDownloadMedia || limit <= 0 || isForegroundChatActive()) {
     return;
   }
 
@@ -3779,6 +3808,10 @@ function resumeLoadedIncomingMediaCaching() {
 }
 
 function enqueueIncomingMediaCache(message: Message, options?: { priority?: 'high' | 'normal' }) {
+  if (!useAppStore.getState().autoDownloadMedia) {
+    return;
+  }
+
   if (queuedIncomingMediaCacheIds.has(message.id) || incomingMediaCacheRequests.has(message.id)) {
     return;
   }
@@ -3799,7 +3832,7 @@ async function runIncomingMediaCacheQueue() {
 
   isIncomingMediaCacheQueueRunning = true;
   try {
-    while (incomingMediaCacheQueue.length > 0 && !isForegroundChatActive() && !isHighPriorityUiActivityActive()) {
+    while (incomingMediaCacheQueue.length > 0 && useAppStore.getState().autoDownloadMedia && !isForegroundChatActive() && !isHighPriorityUiActivityActive()) {
       const message = incomingMediaCacheQueue[0];
       if (!message) {
         continue;

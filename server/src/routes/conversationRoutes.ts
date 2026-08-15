@@ -15,12 +15,13 @@ import { config } from '../config';
 import { HttpError } from '../httpError';
 import { createUniqueGroupInviteCode } from '../groupInviteCodes';
 import { selectLiveKitServerForRoom } from '../livekitPool';
+import { enqueueMessagePush, kickMessagePushOutbox } from '../messagePushOutbox';
 import { prisma } from '../prisma';
-import { sendMessagePush } from '../pushNotifications';
 import { serializeConversation, serializeMessage } from '../serializers';
 import { notifyServerSupportTicketCreated } from '../serverEventMessages';
 import { recordMessageStats } from '../stats';
 import { getPremiumFeatureAccessMap, hasPremiumFeatureAccess, requirePremiumFeatureAccess } from '../subscriptions';
+import { removeVideoThumbnail } from '../videoThumbnails';
 import { ensureMeetVapDirectConversationForUser, getMeetVapSystemUserId } from '../systemAccount';
 import { assertNotBlockedBetween } from './userRoutes';
 import { bulkConversationAckSchema, bulkConversationDeltaSchema, bulkConversationSyncSchema, bulkDeleteConversationsSchema, createDirectConversationSchema, createGroupConversationSchema, createMessageSchema, createScheduledMessageSchema, declineGroupInviteSchema, deleteConversationSchema, deleteMessageSchema, editMessageSchema, messageDeletionAckSchema, messageIdsSchema, messageReactionSchema, openDisappearingMessageSchema, quickReplySchema, transferGroupOwnershipSchema, updateConversationMuteSchema, updateDisappearingMessagesSchema, updateGroupAliasSchema, updateGroupAvatarSchema, updateGroupMembersSchema, updateGroupSettingsSchema, updateGroupTitleSchema, updateVoiceRoomParticipantSchema } from '../validators';
@@ -3849,7 +3850,7 @@ export async function createAndBroadcastConversationMessage(
     : undefined;
   const metadata = ensureMessageDeleteKey(input.metadata);
   const sentAt = new Date();
-  const message = await prisma.$transaction(async (tx) => {
+  const { message, pushJobId } = await prisma.$transaction(async (tx) => {
     const createdMessage = await tx.message.create({
       data: {
         body: input.body,
@@ -3921,7 +3922,19 @@ export async function createAndBroadcastConversationMessage(
       senderId: currentUserId,
     });
 
-    return createdMessage;
+    const senderAliasName = createdMessage.conversation.members.find(
+      (member) => member.userId === currentUserId,
+    )?.aliasName;
+    const pushJob = await enqueueMessagePush(tx, {
+      avatarUrl: getMessageAvatarUrl(createdMessage),
+      body: getPushBodyForMessage(createdMessage),
+      conversationId,
+      messageId: createdMessage.id,
+      senderId: currentUserId,
+      title: senderAliasName || createdMessage.sender.displayName || createdMessage.sender.username,
+    });
+
+    return { message: createdMessage, pushJobId: pushJob.id };
   });
 
   const io = req.app.get('io');
@@ -3934,16 +3947,7 @@ export async function createAndBroadcastConversationMessage(
 
   io?.to(conversationId).to(memberRooms).emit('message:new', serializedMessage);
   io?.to(memberRooms).emit('conversation:updated', { conversationId });
-  void sendMessageNotification({
-    avatarUrl: getMessageAvatarUrl(message),
-    body: getPushBodyForMessage(message),
-    conversationId,
-    messageId: message.id,
-    senderId: currentUserId,
-    title: senderAliasName || message.sender.displayName || message.sender.username,
-  }).catch((error) => {
-    console.warn('Could not send message push notification', error);
-  });
+  kickMessagePushOutbox(pushJobId);
   if (message.conversation.type === 'DIRECT') {
     void getMeetVapSystemUserId()
       .then((supportUserId) => {
@@ -6201,6 +6205,7 @@ async function deleteMediaFiles(mediaFiles: Array<{ id: string; storageKey: stri
     }
 
     await fs.unlink(filePath).catch(() => undefined);
+    await removeVideoThumbnail(media.id);
   }));
 }
 
@@ -6221,59 +6226,6 @@ async function deleteUnusedMediaFiles(mediaFiles: Array<{ id: string; storageKey
   });
 
   await deleteMediaFiles(unusedMedia);
-}
-
-async function sendMessageNotification(input: {
-  avatarUrl?: string | null;
-  body: string;
-  conversationId: string;
-  messageId: string;
-  senderId: string;
-  title: string;
-}) {
-  const tokens = await prisma.devicePushToken.findMany({
-    select: {
-      id: true,
-      locale: true,
-      platform: true,
-      provider: true,
-      token: true,
-      userId: true,
-    },
-    where: {
-      user: {
-        memberships: {
-          some: {
-            conversationId: input.conversationId,
-            AND: [
-              {
-                OR: [
-                  { mutedAt: null },
-                  { mutedUntil: { lte: new Date() } },
-                ],
-              },
-              {
-                OR: [
-                  { aliasPromptSeen: true },
-                  { conversation: { type: { not: 'GROUP' } } },
-                ],
-              },
-            ],
-          },
-        },
-      },
-      userId: { not: input.senderId },
-    },
-  });
-
-  await sendMessagePush({
-    avatarUrl: input.avatarUrl,
-    body: input.body,
-    conversationId: input.conversationId,
-    messageId: input.messageId,
-    title: input.title,
-    tokens,
-  });
 }
 
 function getPushBodyForMessage(message: Pick<Message, 'body' | 'kind'>) {

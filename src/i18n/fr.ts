@@ -215,6 +215,8 @@ export const fr: Record<string, TranslationValue> = {
   selectAll: 'Tout sélectionner',
   textOptions: 'Options de texte',
   darkMode: 'Mode sombre',
+  autoDownloadMedia: 'Télécharger les médias automatiquement',
+  autoDownloadMediaDescription: 'Télécharger automatiquement les photos, vidéos, messages vocaux et fichiers reçus.',
   dismiss: 'Ignorer',
   deleteAccount: 'Supprimer le compte',
   deleteAccountForeverBody: 'Cela supprime définitivement votre compte MeetVap, vos sessions, messages, fichiers envoyés, contacts et adhésions à des groupes du serveur.',

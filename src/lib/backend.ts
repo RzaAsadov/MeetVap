@@ -77,6 +77,7 @@ type BackendMessage = {
     originalName: string;
     sizeBytes: number;
     storageKey: string;
+    thumbnailPath?: string | null;
   } | null;
   mediaId?: string | null;
   metadata?: Message['metadata'] | null;
@@ -2051,6 +2052,10 @@ export async function reportContent(
 }
 
 export function mapMessage(message: BackendMessage, serverUrl?: string | null): Message {
+  const thumbnailUri = message.media?.thumbnailPath && serverUrl
+    ? `${serverUrl}${message.media.thumbnailPath}`
+    : undefined;
+
   return {
     body: message.body ?? '',
     conversationId: message.conversationId,
@@ -2062,7 +2067,12 @@ export function mapMessage(message: BackendMessage, serverUrl?: string | null): 
     kind: mapMessageKind(message.kind),
     mediaId: message.mediaId ?? message.media?.id ?? undefined,
     mediaUri: message.media?.id && serverUrl ? `${serverUrl}/media/${message.media.id}/file` : undefined,
-    metadata: message.metadata ?? undefined,
+    metadata: thumbnailUri
+      ? {
+          ...(message.metadata ?? {}),
+          videoThumbnailUri: thumbnailUri,
+        }
+      : message.metadata ?? undefined,
     mimeType: message.media?.mimeType,
     senderId: message.senderId,
     sender: mapUser(message.sender, serverUrl),

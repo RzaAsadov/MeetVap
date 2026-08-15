@@ -9,6 +9,7 @@ import { operationalConfig } from './operationalConfig';
 import { prisma } from './prisma';
 import { pruneRateLimitBuckets } from './rateLimits';
 import { purgeAcknowledgedMessageContent } from './routes/conversationRoutes';
+import { removeVideoThumbnail } from './videoThumbnails';
 
 const uploadDir = path.resolve(config.UPLOAD_DIR);
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -84,7 +85,7 @@ async function cleanupPushRelayJobs() {
   const result = await prisma.pushRelayJob.deleteMany({
     where: {
       completedAt: { lte: cutoff },
-      status: { in: ['PROVIDER_ACCEPTED', 'PARTIAL', 'FAILED', 'DEVICE_RECEIVED', 'EXPIRED'] },
+      status: { in: ['PROVIDER_ACCEPTED', 'PARTIAL', 'FAILED', 'DEVICE_RECEIVED', 'EXPIRED', 'NO_RECIPIENTS'] },
     },
   });
   return result.count;
@@ -249,7 +250,7 @@ async function cleanupOrphanMedia() {
     }
 
     await prisma.mediaFile.deleteMany({ where: { id: { in: media.map((item) => item.id) } } });
-    await Promise.all(media.map((item) => removeStoredFile(item.storageKey)));
+    await Promise.all(media.map((item) => removeStoredFile(item.id, item.storageKey)));
     removed += media.length;
     batchCount += 1;
   } while (media.length === DATABASE_CLEANUP_BATCH_SIZE && batchCount < DATABASE_CLEANUP_MAX_BATCHES_PER_RUN);
@@ -283,7 +284,7 @@ async function deleteUnusedMedia(mediaIds: string[]) {
   }
 
   await prisma.mediaFile.deleteMany({ where: { id: { in: deletableMedia.map((item) => item.id) } } });
-  await Promise.all(deletableMedia.map((item) => removeStoredFile(item.storageKey)));
+  await Promise.all(deletableMedia.map((item) => removeStoredFile(item.id, item.storageKey)));
 }
 
 async function cleanupPartialUploads() {
@@ -406,12 +407,14 @@ async function refreshConversationPreview(conversationId: string) {
   });
 }
 
-async function removeStoredFile(storageKey: string) {
+async function removeStoredFile(mediaId: string, storageKey: string) {
   const filePath = path.resolve(uploadDir, storageKey);
 
   if (filePath.startsWith(`${uploadDir}${path.sep}`)) {
     await fs.unlink(filePath).catch(() => undefined);
   }
+
+  await removeVideoThumbnail(mediaId);
 }
 
 async function processInBatches<T>(items: T[], batchSize: number, task: (item: T) => Promise<void>) {

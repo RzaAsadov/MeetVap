@@ -4,6 +4,7 @@ import { isUserCurrentlyForeground } from './socket';
 import { isMeetVapSystemUsername } from './systemAccount';
 import { AuthUser } from './types';
 import { isConversationMembershipMuted } from './conversationMute';
+import { getVideoThumbnailPublicPath } from './videoThumbnails';
 
 type ConversationWithMembers = Conversation & {
   members: Array<ConversationMember & { user: AuthUser }>;
@@ -150,6 +151,7 @@ export function serializeMessage(message: MessageWithMedia, statusOverride?: Mes
           originalName: message.media.originalName,
           sizeBytes: message.media.sizeBytes,
           storageKey: message.media.storageKey,
+          thumbnailPath: getVideoThumbnailPublicPath(message.media),
         }
       : null,
     mediaId: message.mediaId,

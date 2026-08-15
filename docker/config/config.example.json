@@ -2,6 +2,12 @@
   "serverRole": "child",
   "mainServerHost": "__MAIN_SERVER_HOST__",
   "mainServerKey": "__MAIN_SERVER_KEY__",
+  "catalog": {
+    "url": "https://catalog.meetvap.com/index.php"
+  },
+  "help": {
+    "url": "https://help.meetvap.com/index.php"
+  },
   "appdomains": [],
   "appVersions": {
     "android": { "latest": "0.1.0", "minimum": "0.1.0", "storeUrl": "https://play.google.com/store/apps/details?id=com.meetvap.messenger" },
@@ -31,6 +37,11 @@
   "messageQueue": {
     "activePushTokenDays": 45,
     "hardDeleteMinBuild": { "android": 1, "ios": 1 }
+  },
+  "pushNotifications": {
+    "messageTtlHours": 72,
+    "outboxMaxAttempts": 8,
+    "outboxMaxRetrySeconds": 300
   },
   "premium": { "trialDays": 15 },
   "rateLimits": {

@@ -5,6 +5,7 @@ import path from 'path';
 import { getAuthedUser, hashPassword, invalidateUserAuthCache, requireAuth, verifyPassword } from '../auth';
 import { getAvatarMediaId, isAvatarMediaReferenced } from '../avatarMedia';
 import { getClientMetadataWriteData, getRequestClientMetadata } from '../clientCompatibility';
+import { deleteUserWithChildSync, enqueueChildUserSync } from '../childUserSync';
 import { config } from '../config';
 import { HttpError } from '../httpError';
 import { operationalConfig } from '../operationalConfig';
@@ -14,6 +15,7 @@ import { serializeUser } from '../serializers';
 import { ensureUserPublicShareCode } from '../shareCodes';
 import { getPremiumFeatureAccessMap, requirePremiumFeatureAccess } from '../subscriptions';
 import { getMeetVapSystemUserId } from '../systemAccount';
+import { removeVideoThumbnail } from '../videoThumbnails';
 import { deleteAccountSchema, registerPushTokenSchema, updateAvatarSchema, updatePasswordSchema, updatePrivacySchema, updateProfileSchema, userRelationshipSchema, userSearchSchema } from '../validators';
 
 export const userRoutes = Router();
@@ -323,6 +325,9 @@ async function updateCurrentUserAvatar(req: Request, res: Response, next: NextFu
 
     const serializedUser = await serializeCurrentUserForOwner(user);
 
+    void enqueueChildUserSync(currentUser.id, 'PROFILE').catch((error) => {
+      console.error('Could not queue child avatar synchronization', { error, userId: currentUser.id });
+    });
     emitCurrentUserUpdated(req, serializedUser);
     res.json({ user: serializedUser });
   } catch (error) {
@@ -368,6 +373,7 @@ async function deleteAvatarMediaIfUnused(previousAvatarMediaId: string | null, n
   }
 
   await fs.unlink(filePath).catch(() => undefined);
+  await removeVideoThumbnail(media.id);
 }
 
 userRoutes.patch('/me/avatar', requireAuth, updateCurrentUserAvatar);
@@ -533,6 +539,9 @@ userRoutes.patch('/me/profile', requireAuth, async (req, res, next) => {
 
     const serializedUser = await serializeCurrentUserForOwner(user);
 
+    void enqueueChildUserSync(currentUser.id, 'PROFILE').catch((error) => {
+      console.error('Could not queue child profile synchronization', { error, userId: currentUser.id });
+    });
     emitCurrentUserUpdated(req, serializedUser);
     res.json({ user: serializedUser });
   } catch (error) {
@@ -584,7 +593,7 @@ userRoutes.delete('/me', requireAuth, async (req, res, next) => {
     }
 
     const ownedMedia = await prisma.mediaFile.findMany({
-      select: { storageKey: true },
+      select: { id: true, storageKey: true },
       where: { ownerId: currentUser.id },
     });
     const memberships = await prisma.conversationMember.findMany({
@@ -601,9 +610,12 @@ userRoutes.delete('/me', requireAuth, async (req, res, next) => {
       where: { userId: currentUser.id },
     });
 
-    await prisma.user.delete({ where: { id: currentUser.id } });
+    await deleteUserWithChildSync(currentUser.id);
     await Promise.allSettled(
-      ownedMedia.map((media) => fs.unlink(path.join(uploadDir, media.storageKey))),
+      ownedMedia.flatMap((media) => [
+        fs.unlink(path.join(uploadDir, media.storageKey)),
+        removeVideoThumbnail(media.id),
+      ]),
     );
 
     const io = req.app.get('io');
@@ -822,6 +834,9 @@ userRoutes.post('/push-token', requireAuth, async (req, res, next) => {
       [...new Set([currentUser.id, existingToken?.userId].filter((userId): userId is string => !!userId))]
         .map(invalidatePushTokenCacheForUser),
     );
+    void enqueueChildUserSync(currentUser.id, 'DEVICE').catch((error) => {
+      console.error('Could not queue child device synchronization', { error, userId: currentUser.id });
+    });
 
     res.json({ ok: true });
   } catch (error) {

@@ -5,9 +5,9 @@ import type { Server } from 'socket.io';
 import { ZodError } from 'zod';
 
 import { HttpError } from '../httpError';
+import { enqueueMessagePush, kickMessagePushOutbox } from '../messagePushOutbox';
 import { operationalConfig } from '../operationalConfig';
 import { prisma } from '../prisma';
-import { sendMessagePush } from '../pushNotifications';
 import { enforceRateLimit } from '../rateLimits';
 import { serializeMessage } from '../serializers';
 import { recordMessageStats } from '../stats';
@@ -57,7 +57,7 @@ groupWebhookRoutes.post('/:token/messages', async (req, res, next) => {
       webhookName: activeWebhook.name,
     };
 
-    const message = await prisma.$transaction(async (tx) => {
+    const { message, pushJobId } = await prisma.$transaction(async (tx) => {
       const createdMessage = await tx.message.create({
         data: {
           body: input.text,
@@ -148,7 +148,16 @@ groupWebhookRoutes.post('/:token/messages', async (req, res, next) => {
         senderId,
       });
 
-      return createdMessage;
+      const pushJob = await enqueueMessagePush(tx, {
+        avatarUrl: activeWebhook.avatarUrl,
+        body: input.text,
+        conversationId: activeWebhook.conversationId,
+        messageId: createdMessage.id,
+        senderId,
+        title: activeWebhook.title ? `${activeWebhook.name} • ${activeWebhook.title}` : activeWebhook.name,
+      });
+
+      return { message: createdMessage, pushJobId: pushJob.id };
     });
 
     const io = req.app.get('io') as Server | undefined;
@@ -159,15 +168,7 @@ groupWebhookRoutes.post('/:token/messages', async (req, res, next) => {
 
     io?.to(activeWebhook.conversationId).to(memberRooms).emit('message:new', serializedMessage);
     io?.to(memberRooms).emit('conversation:updated', { conversationId: activeWebhook.conversationId });
-    void sendWebhookMessageNotification({
-      avatarUrl: activeWebhook.avatarUrl,
-      body: input.text,
-      conversationId: activeWebhook.conversationId,
-      messageId: message.id,
-      title: activeWebhook.title ? `${activeWebhook.name} • ${activeWebhook.title}` : activeWebhook.name,
-    }).catch((error) => {
-      console.warn('Could not send group webhook push notification', error);
-    });
+    kickMessagePushOutbox(pushJobId);
 
     res.status(201).json({ message: serializedMessage, ok: true });
   } catch (error) {
@@ -226,46 +227,6 @@ function hashWebhookToken(token: string) {
   return crypto.createHash('sha256').update(token).digest('hex');
 }
 
-async function sendWebhookMessageNotification(input: {
-  avatarUrl?: string | null;
-  body: string;
-  conversationId: string;
-  messageId: string;
-  title: string;
-}) {
-  const tokens = await prisma.devicePushToken.findMany({
-    select: {
-      id: true,
-      locale: true,
-      platform: true,
-      provider: true,
-      token: true,
-    },
-    where: {
-      user: {
-        memberships: {
-          some: {
-            aliasPromptSeen: true,
-            conversationId: input.conversationId,
-            OR: [
-              { mutedAt: null },
-              { mutedUntil: { lte: new Date() } },
-            ],
-          },
-        },
-      },
-    },
-  });
-
-  await sendMessagePush({
-    avatarUrl: input.avatarUrl,
-    body: input.body,
-    conversationId: input.conversationId,
-    messageId: input.messageId,
-    title: input.title,
-    tokens,
-  });
-}
 
 async function recordFailedDelivery(webhook: GroupWebhookRow, req: Request, error: unknown) {
   const text = getWebhookText(req.body);

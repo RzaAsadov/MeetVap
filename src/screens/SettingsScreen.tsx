@@ -54,11 +54,13 @@ export function SettingsScreen() {
   const subscriptionStatus = useAppStore((state) => state.subscriptionStatus);
   const contacts = useAppStore((state) => state.contacts);
   const isDarkMode = useAppStore((state) => state.isDarkMode);
+  const autoDownloadMedia = useAppStore((state) => state.autoDownloadMedia);
   styles = createStyles(isDarkMode);
   const language = useAppStore((state) => state.language);
   const languagePreference = useAppStore((state) => state.languagePreference);
   const loadContacts = useAppStore((state) => state.loadContacts);
   const setDarkMode = useAppStore((state) => state.setDarkMode);
+  const setAutoDownloadMedia = useAppStore((state) => state.setAutoDownloadMedia);
   const setLanguagePreference = useAppStore((state) => state.setLanguagePreference);
   const deleteAccountForever = useAppStore((state) => state.deleteAccountForever);
   const signOut = useAppStore((state) => state.signOut);
@@ -688,6 +690,21 @@ export function SettingsScreen() {
             thumbColor={colors.white}
             trackColor={{ false: colors.border, true: colors.primary }}
             value={isDarkMode}
+          />
+        </View>
+
+        <View style={styles.settingsRow}>
+          <View style={styles.settingsText}>
+            <Text style={styles.label}>{t('autoDownloadMedia')}</Text>
+            <Text style={styles.value}>{t('autoDownloadMediaDescription')}</Text>
+          </View>
+          <Switch
+            onValueChange={(value) => {
+              void setAutoDownloadMedia(value);
+            }}
+            thumbColor={colors.white}
+            trackColor={{ false: colors.border, true: colors.primary }}
+            value={autoDownloadMedia}
           />
         </View>
 

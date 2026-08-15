@@ -118,6 +118,7 @@ export type Message = {
     };
     reactions?: Record<string, string>;
     remoteMediaUri?: string;
+    videoThumbnailUri?: string;
     scheduledMessageId?: string;
     scheduledSendAt?: string;
     disappearingAfterView?: {
