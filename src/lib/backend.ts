@@ -1972,10 +1972,19 @@ export async function markAllConversationsRead(serverUrl: string) {
   });
 }
 
-export async function registerPushToken(serverUrl: string, input: { locale: AppLanguage; platform: string; provider: 'apns' | 'apns_voip' | 'expo' | 'fcm'; token: string }) {
+export async function registerPushToken(serverUrl: string, input: { locale: AppLanguage; platform: string; provider: 'apns' | 'apns_voip' | 'expo' | 'fcm'; token: string }, authToken?: string) {
   await apiRequest<{ ok: true }>('/users/push-token', {
+    authToken,
     body: JSON.stringify(input),
     method: 'POST',
+    serverUrl,
+  });
+}
+
+export async function unregisterPushTokens(serverUrl: string, authToken: string) {
+  await apiRequest<{ ok: true }>('/users/push-token', {
+    authToken,
+    method: 'DELETE',
     serverUrl,
   });
 }

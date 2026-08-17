@@ -1,5 +1,6 @@
 {
   "serverRole": "child",
+  "serverInstanceId": "__SERVER_DOMAIN__",
   "mainServerHost": "__MAIN_SERVER_HOST__",
   "mainServerKey": "__MAIN_SERVER_KEY__",
   "catalog": {

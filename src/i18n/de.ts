@@ -922,5 +922,11 @@ export const de: Record<string, TranslationValue> = {
   welcomeHeroTitle: "Private Nachrichten, richtig gemacht",
   welcomeHeroSubtitle: "Sprich und telefoniere mit Vertrauen — MeetVap hält deine Gespräche privat.",
   welcomeNewUserCta: "Ich bin neu hier",
-  welcomeExistingUserCta: "Ich habe bereits ein Konto"
+  welcomeExistingUserCta: "Ich habe bereits ein Konto",
+  accounts: 'Konten', switchAccount: 'Konto wechseln', addAccount: 'Konto hinzufügen', removeAccount: 'Konto entfernen',
+  removeAccountConfirmation: ({ name }) => `${name} von diesem Gerät entfernen? Lokale Daten dieses Kontos sind danach nicht mehr verfügbar.`,
+  accountSwitchFailed: 'Konto konnte nicht gewechselt werden', accountNeedsSignIn: 'Erneut anmelden', accountSuspended: 'Konto gesperrt',
+  accountLimitTitle: 'Kontolimit erreicht', accountLimitReached: 'Auf diesem Gerät können bis zu 5 Konten gespeichert werden. Entferne zuerst ein Konto.',
+  endCallBeforeSwitchingAccount: 'Beende den aktiven Anruf, bevor du das Konto wechselst.', stopLiveLocationBeforeSwitchingAccount: 'Beende die Live-Standortfreigabe, bevor du das Konto wechselst.',
+  serverAliasNotFound: 'Serveralias nicht verfügbar', editUsername: 'Benutzernamen bearbeiten',
 };

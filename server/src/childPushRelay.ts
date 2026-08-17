@@ -4,7 +4,7 @@ import { Router } from 'express';
 
 import { config } from './config';
 import { HttpError } from './httpError';
-import { operationalConfig } from './operationalConfig';
+import { getServerInstanceId, operationalConfig } from './operationalConfig';
 import { prisma } from './prisma';
 import { invalidatePushTokenCacheForUser } from './pushTokenCache';
 
@@ -360,6 +360,8 @@ function addDeliveryReceiptUrls(requestId: string, input: unknown) {
 
       return {
         ...token,
+        accountServerInstanceId: getServerInstanceId(config.PUBLIC_API_URL),
+        accountServerUrl: config.PUBLIC_API_URL,
         deliveryReceiptUrl: createPushReceiptUrl(requestId, token.id),
       };
     }),

@@ -6,6 +6,7 @@ export type RootStackParamList = {
   AddContact: undefined;
   Contacts: undefined;
   Auth: undefined;
+  AddAccount: undefined;
   Settings: undefined;
   Subscription: undefined;
   MainTabs: NavigatorScreenParams<MainTabParamList> | undefined;

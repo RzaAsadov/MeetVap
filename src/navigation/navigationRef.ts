@@ -12,6 +12,9 @@ export const navigationRef = createNavigationContainerRef<RootStackParamList>();
 const CHAT_OPEN_DIAGNOSTICS_ENABLED = false;
 
 let pendingNavigationAction: (() => void) | null = null;
+let pendingNavigationRoute: keyof RootStackParamList | null = null;
+let renderedAccountId: string | null = null;
+const accountRenderWaiters = new Map<string, Set<() => void>>();
 
 function logChatOpenDiagnostic(event: string, details: Record<string, unknown> = {}) {
   if (!CHAT_OPEN_DIAGNOSTICS_ENABLED) {
@@ -22,23 +25,56 @@ function logChatOpenDiagnostic(event: string, details: Record<string, unknown> =
   console.log(`[MeetVapChatOpen] ${event}`, details);
 }
 
-function runWhenNavigationReady(action: () => void) {
-  if (navigationRef.isReady()) {
+function isNavigationRouteAvailable(routeName?: keyof RootStackParamList | null) {
+  return !routeName || navigationRef.getRootState()?.routeNames.includes(routeName) === true;
+}
+
+function runWhenNavigationReady(action: () => void, routeName?: keyof RootStackParamList) {
+  if (navigationRef.isReady() && isNavigationRouteAvailable(routeName)) {
     action();
     return;
   }
 
   pendingNavigationAction = action;
+  pendingNavigationRoute = routeName ?? null;
 }
 
 export function flushPendingNavigation() {
-  if (!navigationRef.isReady() || !pendingNavigationAction) {
+  if (
+    !navigationRef.isReady() ||
+    !pendingNavigationAction ||
+    !isNavigationRouteAvailable(pendingNavigationRoute)
+  ) {
     return;
   }
 
   const action = pendingNavigationAction;
   pendingNavigationAction = null;
+  pendingNavigationRoute = null;
   action();
+}
+
+export function notifyNavigationAccountRendered(accountId: string | null) {
+  renderedAccountId = accountId;
+
+  if (accountId) {
+    accountRenderWaiters.get(accountId)?.forEach((resolve) => resolve());
+    accountRenderWaiters.delete(accountId);
+  }
+
+  flushPendingNavigation();
+}
+
+export function waitForNavigationAccount(accountId: string) {
+  if (renderedAccountId === accountId) {
+    return Promise.resolve();
+  }
+
+  return new Promise<void>((resolve) => {
+    const waiters = accountRenderWaiters.get(accountId) ?? new Set<() => void>();
+    waiters.add(resolve);
+    accountRenderWaiters.set(accountId, waiters);
+  });
 }
 
 export function navigateToCatalogUrl(url: string) {
@@ -50,7 +86,7 @@ export function navigateToCatalogUrl(url: string) {
       },
       screen: 'Catalog',
     });
-  });
+  }, 'MainTabs');
 }
 
 export function navigateToIncomingCall(input: {
@@ -118,7 +154,7 @@ export function navigateToIncomingCall(input: {
       participantNames: input.participantNames,
       title: input.title,
     });
-  });
+  }, 'CallRoom');
 }
 
 export function isCallRoomVisibleFor(callId?: string | null) {
@@ -208,7 +244,7 @@ export function restoreActiveCallIfNeeded() {
       callAccess: shouldUseCallOnlyAccess ? 'locked-call' : activeCall.callAccess,
       resumeActiveCall: true,
     });
-  });
+  }, 'CallRoom');
 }
 
 export function navigateToChat(input: {
@@ -235,7 +271,7 @@ export function navigateToChat(input: {
         targetMessageId: input.targetMessageId,
         title: input.title,
       });
-    });
+    }, 'ChatRoom');
   };
   const hasLiveMessages = (useAppStore.getState().messagesByConversation[input.conversationId] ?? []).length > 0;
 
@@ -294,14 +330,14 @@ export function navigateToChat(input: {
 export function navigateToChats() {
   runWhenNavigationReady(() => {
     navigationRef.navigate('MainTabs', { screen: 'Chats' });
-  });
+  }, 'MainTabs');
 }
 
 export function navigateToMeeting(input: string | RootStackParamList['MeetingRoom']) {
   runWhenNavigationReady(() => {
     const params = typeof input === 'string' ? { code: input } : input;
     navigationRef.navigate('MeetingRoom', params);
-  });
+  }, 'MeetingRoom');
 }
 
 export function restoreActiveMeetingIfNeeded() {

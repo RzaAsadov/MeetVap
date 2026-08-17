@@ -319,7 +319,7 @@ model DeviceAttestation {
 model DevicePushToken {
   id        String   @id @default(cuid())
   userId    String
-  token     String   @unique
+  token     String
   provider  String   @default("expo")
   platform  String?
   locale    String   @default("en")
@@ -337,6 +337,7 @@ model DevicePushToken {
   @@index([userId])
   @@index([userId, appBuildNumber])
   @@index([installationId])
+  @@unique([userId, token, provider])
 }
 
 model Conversation {

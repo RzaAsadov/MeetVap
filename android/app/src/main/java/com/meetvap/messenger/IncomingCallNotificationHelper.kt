@@ -330,12 +330,14 @@ data class IncomingCallPayload(
   val body: String = "",
   val callId: String,
   val conversationId: String,
+  val accountUserId: String? = null,
   val declineTitle: String = "",
   val fallbackTitle: String = "",
   val isGroupCall: Boolean = false,
   val issuedAt: Long? = null,
   val locale: String = "",
   val mode: String,
+  val serverInstanceId: String? = null,
   val participantNames: List<String> = emptyList(),
   val title: String,
   val expiresAt: Long? = null,
@@ -358,6 +360,9 @@ data class IncomingCallPayload(
       .appendQueryParameter("autoJoin", autoJoin.toString())
       .appendQueryParameter("surface", "fullscreen")
 
+    serverInstanceId?.let { uriBuilder.appendQueryParameter("serverInstanceId", it) }
+    accountUserId?.let { uriBuilder.appendQueryParameter("accountUserId", it) }
+
     expiresAt?.let { uriBuilder.appendQueryParameter("expiresAt", it.toString()) }
 
     if (answeredByNative) {
@@ -379,14 +384,16 @@ data class IncomingCallPayload(
   }
 
   fun toChatsIntent(context: Context): Intent {
-    val uri = Uri.Builder()
+    val uriBuilder = Uri.Builder()
       .scheme("meetvap")
       .authority("chats")
       .appendQueryParameter("conversationId", conversationId)
       .appendQueryParameter("callId", callId)
-      .build()
 
-    return Intent(Intent.ACTION_VIEW, uri, context, MainActivity::class.java)
+    serverInstanceId?.let { uriBuilder.appendQueryParameter("serverInstanceId", it) }
+    accountUserId?.let { uriBuilder.appendQueryParameter("accountUserId", it) }
+
+    return Intent(Intent.ACTION_VIEW, uriBuilder.build(), context, MainActivity::class.java)
       .addCategory(Intent.CATEGORY_DEFAULT)
       .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
       .putExtra("meetvapIncomingCallId", callId)
@@ -405,12 +412,14 @@ data class IncomingCallPayload(
         body = data.stringValue("body") ?: "",
         callId = callId,
         conversationId = conversationId,
+        accountUserId = data.stringValue("accountUserId"),
         declineTitle = data.stringValue("declineTitle") ?: "",
         fallbackTitle = data.stringValue("fallbackTitle") ?: "",
         isGroupCall = data.booleanValue("isGroupCall"),
         issuedAt = data.longValue("issuedAt"),
         locale = data.stringValue("locale") ?: "",
         mode = mode,
+        serverInstanceId = data.stringValue("serverInstanceId"),
         participantNames = data.stringListValue("participantNames"),
         title = title,
         expiresAt = data.longValue("expiresAt"),
@@ -430,12 +439,14 @@ data class IncomingCallPayload(
         body = data["body"] ?: "",
         callId = callId,
         conversationId = conversationId,
+        accountUserId = data["accountUserId"],
         declineTitle = data["declineTitle"] ?: "",
         fallbackTitle = data["fallbackTitle"] ?: "",
         isGroupCall = data["isGroupCall"] == "true",
         issuedAt = data["issuedAt"]?.toLongOrNull(),
         locale = data["locale"] ?: "",
         mode = mode,
+        serverInstanceId = data["serverInstanceId"],
         participantNames = participantNames,
         title = title,
         expiresAt = data["expiresAt"]?.toLongOrNull(),

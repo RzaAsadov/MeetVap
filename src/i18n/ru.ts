@@ -934,5 +934,11 @@ export const ru: Record<string, TranslationValue> = {
   welcomeHeroTitle: "Личные сообщения, какими они должны быть",
   welcomeHeroSubtitle: "Общайтесь и звоните с уверенностью — MeetVap не хранит ваши переписки.",
   welcomeNewUserCta: "Я здесь впервые",
-  welcomeExistingUserCta: "У меня уже есть аккаунт"  
+  welcomeExistingUserCta: "У меня уже есть аккаунт",
+  accounts: 'Аккаунты', switchAccount: 'Сменить аккаунт', addAccount: 'Добавить аккаунт', removeAccount: 'Удалить аккаунт',
+  removeAccountConfirmation: ({ name }) => `Удалить ${name} с этого устройства? Локальные данные этого аккаунта больше не будут доступны.`,
+  accountSwitchFailed: 'Не удалось сменить аккаунт', accountNeedsSignIn: 'Войдите снова', accountSuspended: 'Аккаунт заблокирован',
+  accountLimitTitle: 'Достигнут лимит аккаунтов', accountLimitReached: 'На устройстве можно сохранить до 5 аккаунтов. Перед добавлением нового удалите один из них.',
+  endCallBeforeSwitchingAccount: 'Завершите активный звонок перед сменой аккаунта.', stopLiveLocationBeforeSwitchingAccount: 'Остановите передачу геопозиции перед сменой аккаунта.',
+  serverAliasNotFound: 'Псевдоним сервера недоступен', editUsername: 'Изменить имя пользователя',
 };

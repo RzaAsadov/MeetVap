@@ -1,3 +1,5 @@
+import { setNativeVisibleMessageConversation } from '../native/CallNative';
+
 let activeConversationId: string | null = null;
 const listeners = new Set<(conversationId: string | null) => void>();
 
@@ -11,12 +13,14 @@ export function setActiveForegroundChatConversationId(conversationId: string | n
   }
 
   activeConversationId = conversationId;
+  setNativeVisibleMessageConversation(activeConversationId);
   listeners.forEach((listener) => listener(activeConversationId));
 }
 
 export function clearActiveForegroundChatConversationId(conversationId: string) {
   if (activeConversationId === conversationId) {
     activeConversationId = null;
+    setNativeVisibleMessageConversation(null);
     listeners.forEach((listener) => listener(activeConversationId));
   }
 }

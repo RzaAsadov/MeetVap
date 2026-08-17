@@ -570,7 +570,7 @@
 				CODE_SIGN_ENTITLEMENTS = MeetVap/MeetVap.debug.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 312;
+				CURRENT_PROJECT_VERSION = 313;
 				DEVELOPMENT_TEAM = 4H68W59Z24;
 				ENABLE_BITCODE = NO;
 				GCC_PREPROCESSOR_DEFINITIONS = (
@@ -585,7 +585,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 24.2;
+				MARKETING_VERSION = 24.3;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-ObjC",
@@ -613,7 +613,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "iPhone Distribution";
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 312;
+				CURRENT_PROJECT_VERSION = 313;
 				DEVELOPMENT_TEAM = "";
 				"DEVELOPMENT_TEAM[sdk=iphoneos*]" = 4H68W59Z24;
 				INFOPLIST_FILE = MeetVap/Info.plist;
@@ -624,7 +624,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 24.2;
+				MARKETING_VERSION = 24.3;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-ObjC",
@@ -772,7 +772,7 @@
 				CODE_SIGN_ENTITLEMENTS = MeetVapShareExtension/MeetVapShareExtension.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 312;
+				CURRENT_PROJECT_VERSION = 313;
 				DEVELOPMENT_TEAM = 4H68W59Z24;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = MeetVapShareExtension/Info.plist;
@@ -782,7 +782,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 24.2;
+				MARKETING_VERSION = 24.3;
 				OTHER_SWIFT_FLAGS = "$(inherited) -D EXPO_CONFIGURATION_DEBUG";
 				PRODUCT_BUNDLE_IDENTIFIER = com.meetvap.app.ShareExtension;
 				PRODUCT_NAME = MeetVapShareExtension;
@@ -803,7 +803,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "iPhone Distribution";
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 312;
+				CURRENT_PROJECT_VERSION = 313;
 				DEVELOPMENT_TEAM = "";
 				"DEVELOPMENT_TEAM[sdk=iphoneos*]" = 4H68W59Z24;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -814,7 +814,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 24.2;
+				MARKETING_VERSION = 24.3;
 				OTHER_SWIFT_FLAGS = "$(inherited) -D EXPO_CONFIGURATION_RELEASE";
 				PRODUCT_BUNDLE_IDENTIFIER = com.meetvap.app.ShareExtension;
 				PRODUCT_NAME = MeetVapShareExtension;
@@ -834,7 +834,7 @@
 				CODE_SIGN_ENTITLEMENTS = MeetVapScreenShareExtension/MeetVapScreenShareExtension.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 312;
+				CURRENT_PROJECT_VERSION = 313;
 				DEVELOPMENT_TEAM = 4H68W59Z24;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = MeetVapScreenShareExtension/Info.plist;
@@ -844,7 +844,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 24.2;
+				MARKETING_VERSION = 24.3;
 				OTHER_SWIFT_FLAGS = "$(inherited) -D EXPO_CONFIGURATION_DEBUG";
 				PRODUCT_BUNDLE_IDENTIFIER = com.meetvap.app.ScreenShareExtension;
 				PRODUCT_NAME = MeetVapScreenShareExtension;
@@ -865,7 +865,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "iPhone Distribution";
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 312;
+				CURRENT_PROJECT_VERSION = 313;
 				DEVELOPMENT_TEAM = "";
 				"DEVELOPMENT_TEAM[sdk=iphoneos*]" = 4H68W59Z24;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -876,7 +876,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 24.2;
+				MARKETING_VERSION = 24.3;
 				OTHER_SWIFT_FLAGS = "$(inherited) -D EXPO_CONFIGURATION_RELEASE";
 				PRODUCT_BUNDLE_IDENTIFIER = com.meetvap.app.ScreenShareExtension;
 				PRODUCT_NAME = MeetVapScreenShareExtension;

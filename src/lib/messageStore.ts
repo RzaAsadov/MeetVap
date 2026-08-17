@@ -9,8 +9,37 @@ type MessageDatabaseExecutor = Pick<SQLite.SQLiteDatabase, 'getAllAsync' | 'runA
 let databasePromise: Promise<SQLite.SQLiteDatabase> | null = null;
 let databaseWriteQueue: Promise<void> = Promise.resolve();
 let mediaDatabaseWriteQueue: Promise<void> = Promise.resolve();
+let activeDatabaseName = 'meetvap_messages.db';
 const COUNTER_ROW_ID = 'default';
 const APP_VERSION = `${Constants.expoConfig?.version ?? Constants.nativeApplicationVersion ?? 'unknown'}:${Constants.nativeBuildVersion ?? '0'}`;
+
+export async function configureMessageDatabase(databaseName: string) {
+  const normalizedName = /^[a-zA-Z0-9_-]+\.db$/.test(databaseName) ? databaseName : 'meetvap_messages.db';
+  if (activeDatabaseName === normalizedName) return;
+  await Promise.all([databaseWriteQueue.catch(() => undefined), mediaDatabaseWriteQueue.catch(() => undefined)]);
+  const currentPromise = databasePromise;
+  databasePromise = null;
+  if (currentPromise) {
+    const database = await currentPromise.catch(() => null);
+    await database?.closeAsync().catch(() => undefined);
+  }
+  activeDatabaseName = normalizedName;
+}
+
+export function getActiveMessageDatabaseName() {
+  return activeDatabaseName;
+}
+
+export async function deleteMessageDatabase(databaseName: string) {
+  if (databaseName === activeDatabaseName) {
+    await Promise.all([databaseWriteQueue.catch(() => undefined), mediaDatabaseWriteQueue.catch(() => undefined)]);
+    const current = databasePromise ? await databasePromise.catch(() => null) : null;
+    databasePromise = null;
+    await current?.closeAsync().catch(() => undefined);
+    activeDatabaseName = 'meetvap_messages.db';
+  }
+  await SQLite.deleteDatabaseAsync(databaseName).catch(() => undefined);
+}
 
 export type LocalUsageStats = {
   fileStorageBytes: number;
@@ -609,7 +638,7 @@ async function getDatabase() {
 }
 
 async function openDatabase() {
-  const database = await SQLite.openDatabaseAsync('meetvap_messages.db');
+  const database = await SQLite.openDatabaseAsync(activeDatabaseName);
 
   await database.execAsync(`
     pragma journal_mode = WAL;

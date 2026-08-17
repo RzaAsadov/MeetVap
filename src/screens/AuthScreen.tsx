@@ -8,7 +8,8 @@ import { PrimaryButton } from '../components/PrimaryButton';
 import { TextField } from '../components/TextField';
 import { getLanguagePreferenceFlag, getLanguagePreferenceLabel, LANGUAGE_PREFERENCES, t } from '../i18n';
 import { checkUsernameAvailability } from '../lib/backend';
-import { LoginHostUnavailableError } from '../lib/loginServerResolution';
+import { AccountLimitError } from '../lib/accountRegistry';
+import { LoginAliasResolutionError, LoginHostUnavailableError } from '../lib/loginServerResolution';
 import { containsMeetVapKeyword, isProhibitedMeetVapUsername } from '../lib/prohibitedNames';
 import { useAppStore } from '../store/useAppStore';
 import { colors } from '../theme/colors';
@@ -16,12 +17,12 @@ import { useThemeColors } from '../theme/useThemeColors';
 import { spacing } from '../theme/spacing';
 import { RootStackParamList } from '../types/navigation';
 
-type Props = NativeStackScreenProps<RootStackParamList, 'Auth'>;
+type Props = NativeStackScreenProps<RootStackParamList, 'Auth' | 'AddAccount'>;
 
 // NEW: 'welcome' is the entry step shown before login/register.
 type AuthMode = 'welcome' | 'login' | 'register';
 
-export function AuthScreen(_props: Props) {
+export function AuthScreen({ navigation, route }: Props) {
   const insets = useSafeAreaInsets();
   const scrollRef = useRef<ScrollView>(null);
   useThemeColors();
@@ -45,6 +46,7 @@ export function AuthScreen(_props: Props) {
   const [hasAcceptedTerms, setAcceptedTerms] = useState(false);
   const [isLanguageModalVisible, setLanguageModalVisible] = useState(false);
   const [unreachableHostname, setUnreachableHostname] = useState<string | null>(null);
+  const [aliasResolutionError, setAliasResolutionError] = useState<LoginAliasResolutionError | null>(null);
 
   async function handleSubmit() {
     if (mode === 'register' && registerStep === 'credentials') {
@@ -82,12 +84,23 @@ export function AuthScreen(_props: Props) {
     try {
       if (mode === 'login') {
         await signInWithPassword(username.trim(), password);
+        if (route.name === 'AddAccount') {
+          navigation.navigate('MainTabs');
+        }
       } else {
         await registerWithPassword(displayName.trim(), normalizeUsername(username), password);
       }
     } catch (error) {
+      if (error instanceof AccountLimitError) {
+        Alert.alert(t('accountLimitTitle'), t('accountLimitReached'));
+        return;
+      }
       if (error instanceof LoginHostUnavailableError) {
         setUnreachableHostname(error.hostname);
+        return;
+      }
+      if (error instanceof LoginAliasResolutionError) {
+        setAliasResolutionError(error);
         return;
       }
       Alert.alert(t('authenticationFailed'), error instanceof Error ? error.message : t('pleaseTryAgain'));
@@ -403,6 +416,27 @@ export function AuthScreen(_props: Props) {
                 <Text style={styles.hostModalSecondaryText}>{t('close')}</Text>
               </Pressable>
               <Pressable onPress={() => { setUnreachableHostname(null); void handleSubmit(); }} style={styles.hostModalPrimary}>
+                <Ionicons color={colors.white} name="refresh" size={18} />
+                <Text style={styles.hostModalPrimaryText}>{t('retry')}</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+      <Modal animationType="fade" transparent visible={!!aliasResolutionError} onRequestClose={() => setAliasResolutionError(null)}>
+        <View style={styles.hostModalBackdrop}>
+          <View style={styles.hostModal}>
+            <View style={styles.hostModalIcon}>
+              <Ionicons color={colors.danger} name="globe-outline" size={30} />
+            </View>
+            <Text style={styles.modalTitle}>{t('serverAliasNotFound')}</Text>
+            <Text style={styles.hostModalBody}>{aliasResolutionError?.message}</Text>
+            <Text selectable style={styles.hostModalHostname}>@{aliasResolutionError?.alias}</Text>
+            <View style={styles.hostModalActions}>
+              <Pressable onPress={() => setAliasResolutionError(null)} style={styles.hostModalSecondary}>
+                <Text style={styles.hostModalSecondaryText}>{t('editUsername')}</Text>
+              </Pressable>
+              <Pressable onPress={() => { setAliasResolutionError(null); void handleSubmit(); }} style={styles.hostModalPrimary}>
                 <Ionicons color={colors.white} name="refresh" size={18} />
                 <Text style={styles.hostModalPrimaryText}>{t('retry')}</Text>
               </Pressable>

@@ -34,6 +34,7 @@ export const appVersionsSchema = z.object({
 });
 
 const operationalConfigSchema = z.object({
+  serverInstanceId: z.string().trim().min(3).max(160).regex(/^[A-Za-z0-9._:-]+$/).optional(),
   serverRole: z.enum(['main', 'child']).default('main'),
   mainServerHost: z.string().url().refine((value) => new URL(value).protocol === 'https:', 'mainServerHost must use HTTPS').optional(),
   mainServerKey: z.string()
@@ -216,8 +217,17 @@ function isBindMountReplacementError(error: unknown) {
   return error instanceof Error && 'code' in error && ['EBUSY', 'EPERM', 'EXDEV'].includes(String(error.code));
 }
 
-export function getClientPolicy() {
+export function getServerInstanceId(publicApiUrl?: string) {
+  if (operationalConfig.serverInstanceId) return operationalConfig.serverInstanceId;
+  if (publicApiUrl) {
+    try { return new URL(publicApiUrl).hostname.toLowerCase(); } catch { /* Fall through. */ }
+  }
+  return operationalConfig.serverRole === 'main' ? 'meetvap-main' : `meetvap-child-${operationalConfig.mainServerHost ?? 'unknown'}`;
+}
+
+export function getClientPolicy(publicApiUrl?: string) {
   return {
+    serverInstanceId: getServerInstanceId(publicApiUrl),
     appVersions: {
       android: {
         latest: operationalConfig.appVersions.android.latest,

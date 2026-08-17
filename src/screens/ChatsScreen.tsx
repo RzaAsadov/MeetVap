@@ -5,7 +5,7 @@ import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { LinearGradient } from 'expo-linear-gradient';
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, FlatList, Modal, Platform, Pressable, Share, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, FlatList, Modal, Platform, Pressable, ScrollView, Share, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { Avatar } from '../components/Avatar';
 import { HelpWebViewModal } from '../components/HelpWebViewModal';
@@ -13,6 +13,7 @@ import { PremiumUserBadge } from '../components/PremiumUserBadge';
 import { ScreenBackground } from '../components/ScreenBackground';
 import { t, type AppLanguage } from '../i18n';
 import { createMeeting } from '../lib/backend';
+import { MAX_SAVED_ACCOUNTS } from '../lib/accountRegistry';
 import { getActiveMeetingSession, setActiveMeetingSession } from '../lib/activeMeetingSession';
 import { buildReportReason, getReportContextNotice } from '../lib/reporting';
 import { buildSharedContactMessage } from '../lib/shareLinks';
@@ -76,6 +77,8 @@ export function ChatsScreen() {
   useThemeColors();
   const navigation = useNavigation<Navigation>();
   const blockedUsers = useAppStore((state) => state.blockedUsers);
+  const accounts = useAppStore((state) => state.accounts);
+  const activeAccountId = useAppStore((state) => state.activeAccountId);
   const contacts = useAppStore((state) => state.contacts);
   const conversations = useAppStore((state) => state.conversations);
   const conversationsFilter = useAppStore((state) => state.conversationsFilter);
@@ -87,6 +90,7 @@ export function ChatsScreen() {
   const language = useAppStore((state) => state.language);
   const subscriptionStatus = useAppStore((state) => state.subscriptionStatus);
   const serverUrl = useAppStore((state) => state.serverUrl);
+  const unreadConversationIds = useAppStore((state) => state.unreadConversationIds);
   const unviewedStatusAuthorIdsFromStore = useAppStore((state) => state.unviewedStatusAuthorIds);
   const user = useAppStore((state) => state.user);
   const addUserToContacts = useAppStore((state) => state.addUserToContacts);
@@ -101,6 +105,8 @@ export function ChatsScreen() {
   const loadMessages = useAppStore((state) => state.loadMessages);
   const refreshStatusSummary = useAppStore((state) => state.refreshStatusSummary);
   const markAllConversationsReadNow = useAppStore((state) => state.markAllConversationsReadNow);
+  const switchAccount = useAppStore((state) => state.switchAccount);
+  const removeAccount = useAppStore((state) => state.removeAccount);
   const reportTarget = useAppStore((state) => state.reportTarget);
   const revokeGroupAdmin = useAppStore((state) => state.revokeGroupAdmin);
   const unblockUserById = useAppStore((state) => state.unblockUserById);
@@ -116,6 +122,8 @@ export function ChatsScreen() {
   const [isMeetTypeMenuVisible, setMeetTypeMenuVisible] = useState(false);
   const [isShareMyContactModalVisible, setShareMyContactModalVisible] = useState(false);
   const [isSubscriptionInfoVisible, setSubscriptionInfoVisible] = useState(false);
+  const [isAccountSwitcherVisible, setAccountSwitcherVisible] = useState(false);
+  const [switchingAccountId, setSwitchingAccountId] = useState<string | null>(null);
   const [isSupportModalVisible, setSupportModalVisible] = useState(false);
   const debouncedSearchRef = useRef('');
   const hasLoadedFocusedConversationsRef = useRef(false);
@@ -185,20 +193,26 @@ export function ChatsScreen() {
   useLayoutEffect(() => {
     navigation.setOptions({
       headerLeft: () => (
-        <Pressable
-          accessibilityLabel={t('subscriptionDetailsTitle')}
-          onPress={() => setSubscriptionInfoVisible(true)}
-          style={({ pressed }) => [styles.brandHeader, pressed && styles.headerMenuButtonPressed]}
-        >
-          <Text style={styles.brandHeaderTitle}>MeetVap</Text>
-          {canUsePremiumFeatures ? <Text style={styles.brandHeaderPremium}>Premium</Text> : null}
-        </Pressable>
+        <View style={styles.brandHeaderRow}>
+          <Pressable
+            accessibilityLabel={t('subscriptionDetailsTitle')}
+            onPress={() => setSubscriptionInfoVisible(true)}
+            style={({ pressed }) => [styles.brandHeader, pressed && styles.headerMenuButtonPressed]}
+          >
+            <Text style={styles.brandHeaderTitle}>MeetVap</Text>
+            {canUsePremiumFeatures ? <Text style={styles.brandHeaderPremium}>Premium</Text> : null}
+          </Pressable>
+          <Pressable
+            accessibilityLabel={t('switchAccount')}
+            onPress={() => setAccountSwitcherVisible(true)}
+            style={({ pressed }) => [styles.accountSwitcherButton, pressed && styles.headerMenuButtonPressed]}
+          >
+            <Ionicons color={colors.white} name="chevron-down" size={18} />
+          </Pressable>
+        </View>
       ),
       headerRight: () => (
         <View style={styles.headerActions}>
-          <Pressable accessibilityLabel={t('shareMyContact')} onPress={() => setShareMyContactModalVisible(true)} style={styles.headerMenuButton}>
-            <Ionicons color={colors.white} name="share-social-outline" size={22} />
-          </Pressable>
           <Pressable accessibilityLabel={t('contacts')} onPress={() => navigation.navigate('Contacts')} style={styles.headerMenuButton}>
             <Ionicons color={colors.white} name="book-outline" size={23} />
           </Pressable>
@@ -209,6 +223,36 @@ export function ChatsScreen() {
       ),
     });
   }, [canUsePremiumFeatures, language, navigation]);
+
+  async function selectAccount(accountId: string) {
+    const target = accounts.find((account) => account.accountId === accountId);
+    if (target?.authState !== 'authenticated') {
+      setAccountSwitcherVisible(false);
+      navigation.navigate('AddAccount');
+      return;
+    }
+    if (accountId === activeAccountId) {
+      setAccountSwitcherVisible(false);
+      return;
+    }
+    setSwitchingAccountId(accountId);
+    try {
+      await switchAccount(accountId);
+      setAccountSwitcherVisible(false);
+      navigation.navigate('MainTabs', { screen: 'Chats' });
+    } catch (error) {
+      Alert.alert(t('accountSwitchFailed'), error instanceof Error ? error.message : t('pleaseTryAgain'));
+    } finally {
+      setSwitchingAccountId(null);
+    }
+  }
+
+  function confirmRemoveAccount(accountId: string, displayName: string) {
+    Alert.alert(t('removeAccount'), t('removeAccountConfirmation', { name: displayName }), [
+      { text: t('cancel'), style: 'cancel' },
+      { text: t('remove'), style: 'destructive', onPress: () => void removeAccount(accountId) },
+    ]);
+  }
 
   useEffect(() => {
     void getStoredFavoriteConversationIds().then(setFavoriteConversationIds).catch(() => undefined);
@@ -835,6 +879,78 @@ export function ChatsScreen() {
           </Pressable>
         </Pressable>
       </Modal>
+      <Modal animationType="fade" transparent visible={isAccountSwitcherVisible} onRequestClose={() => setAccountSwitcherVisible(false)}>
+        <Pressable onPress={() => setAccountSwitcherVisible(false)} style={styles.menuBackdrop}>
+          <Pressable onPress={(event) => event.stopPropagation()} style={styles.accountSwitcherCard}>
+            <View style={styles.accountSwitcherHeader}>
+              <Text style={styles.accountSwitcherTitle}>{t('accounts')}</Text>
+              <Pressable accessibilityLabel={t('close')} onPress={() => setAccountSwitcherVisible(false)} style={styles.accountSwitcherClose}>
+                <Ionicons color={colors.textSecondary} name="close" size={22} />
+              </Pressable>
+            </View>
+            <ScrollView contentContainerStyle={styles.accountList} showsVerticalScrollIndicator={false}>
+            {accounts.map((account) => {
+              const isActive = account.accountId === activeAccountId;
+              const isSwitching = switchingAccountId === account.accountId;
+              let hostname = account.serverUrl;
+              try { hostname = new URL(account.serverUrl).hostname; } catch { /* Keep the saved URL. */ }
+              return (
+                <Pressable
+                  disabled={!!switchingAccountId}
+                  key={account.accountId}
+                  onPress={() => void selectAccount(account.accountId)}
+                  style={({ pressed }) => [styles.accountRow, isActive && styles.accountRowActive, pressed && styles.menuActionPressed]}
+                >
+                  <Avatar label={account.displayName || account.username} size={46} uri={account.avatarUrl} />
+                  <View style={styles.accountRowText}>
+                    <Text numberOfLines={1} style={styles.accountName}>{account.displayName || account.username}</Text>
+                    <Text numberOfLines={1} style={styles.accountUsername}>@{account.username} · {hostname}</Text>
+                    {account.authState !== 'authenticated' ? (
+                      <Text style={styles.accountWarning}>{t(account.authState === 'suspended' ? 'accountSuspended' : 'accountNeedsSignIn')}</Text>
+                    ) : null}
+                  </View>
+                  {(isActive ? unreadConversationIds.length : account.unreadConversationIds?.length ?? 0) > 0 ? (
+                    <View style={styles.accountUnreadBadge}>
+                      <Text style={styles.accountUnreadBadgeText}>
+                        {Math.min(99, isActive ? unreadConversationIds.length : account.unreadConversationIds?.length ?? 0)}
+                      </Text>
+                    </View>
+                  ) : null}
+                  {isSwitching ? <ActivityIndicator color={colors.primary} /> : isActive ? (
+                    <Ionicons color={colors.primary} name="checkmark-circle" size={23} />
+                  ) : null}
+                  <Pressable
+                    accessibilityLabel={t('removeAccount')}
+                    hitSlop={8}
+                    onPress={(event) => {
+                      event.stopPropagation();
+                      confirmRemoveAccount(account.accountId, account.displayName || account.username);
+                    }}
+                    style={styles.accountRemoveButton}
+                  >
+                    <Ionicons color={colors.danger} name="trash-outline" size={19} />
+                  </Pressable>
+                </Pressable>
+              );
+            })}
+            </ScrollView>
+            <Pressable
+              onPress={() => {
+                if (accounts.length >= MAX_SAVED_ACCOUNTS) {
+                  Alert.alert(t('accountLimitTitle'), t('accountLimitReached'));
+                  return;
+                }
+                setAccountSwitcherVisible(false);
+                navigation.navigate('AddAccount');
+              }}
+              style={({ pressed }) => [styles.addAccountButton, pressed && styles.menuActionPressed]}
+            >
+              <Ionicons color={colors.primary} name="person-add-outline" size={22} />
+              <Text style={styles.addAccountText}>{t('addAccount')}</Text>
+            </Pressable>
+          </Pressable>
+        </Pressable>
+      </Modal>
       {renderMeetTypeMenu()}
       <Modal animationType="fade" transparent visible={isSubscriptionInfoVisible} onRequestClose={() => setSubscriptionInfoVisible(false)}>
         <Pressable onPress={() => setSubscriptionInfoVisible(false)} style={styles.menuBackdrop}>
@@ -1270,6 +1386,115 @@ function createStyles() {
     marginLeft: 8,
     minHeight: 42,
     minWidth: 116,
+  },
+  brandHeaderRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+  },
+  accountSwitcherButton: {
+    alignItems: 'center',
+    height: 38,
+    justifyContent: 'center',
+    marginLeft: -12,
+    width: 34,
+  },
+  accountSwitcherCard: {
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
+    borderRadius: 16,
+    borderWidth: 1,
+    maxHeight: '78%',
+    maxWidth: 440,
+    overflow: 'hidden',
+    padding: spacing.md,
+    width: '100%',
+  },
+  accountList: {
+    paddingBottom: spacing.xs,
+  },
+  accountSwitcherHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingBottom: spacing.sm,
+  },
+  accountSwitcherTitle: {
+    color: colors.textPrimary,
+    fontSize: 20,
+    fontWeight: '800',
+  },
+  accountSwitcherClose: {
+    alignItems: 'center',
+    height: 36,
+    justifyContent: 'center',
+    width: 36,
+  },
+  accountRow: {
+    alignItems: 'center',
+    borderColor: 'transparent',
+    borderRadius: 8,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: spacing.sm,
+    minHeight: 66,
+    padding: spacing.sm,
+  },
+  accountRowActive: {
+    backgroundColor: 'rgba(64, 158, 255, 0.10)',
+    borderColor: 'rgba(64, 158, 255, 0.34)',
+  },
+  accountRowText: {
+    flex: 1,
+  },
+  accountName: {
+    color: colors.textPrimary,
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  accountUsername: {
+    color: colors.textSecondary,
+    fontSize: 12,
+    marginTop: 2,
+  },
+  accountWarning: {
+    color: colors.danger,
+    fontSize: 11,
+    marginTop: 2,
+  },
+  accountUnreadBadge: {
+    alignItems: 'center',
+    backgroundColor: colors.primary,
+    borderRadius: 10,
+    justifyContent: 'center',
+    minHeight: 20,
+    minWidth: 20,
+    paddingHorizontal: 5,
+  },
+  accountUnreadBadgeText: {
+    color: colors.white,
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  accountRemoveButton: {
+    alignItems: 'center',
+    height: 36,
+    justifyContent: 'center',
+    width: 32,
+  },
+  addAccountButton: {
+    alignItems: 'center',
+    borderTopColor: colors.border,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    gap: spacing.md,
+    marginTop: spacing.sm,
+    minHeight: 52,
+    paddingHorizontal: spacing.sm,
+  },
+  addAccountText: {
+    color: colors.primary,
+    fontSize: 16,
+    fontWeight: '800',
   },
   brandHeaderTitle: {
     color: colors.white,

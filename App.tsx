@@ -81,6 +81,7 @@ export default function App() {
   const user = useAppStore((state) => state.user);
   const [isInitialCallUrlCheckPending, setInitialCallUrlCheckPending] = useState(Platform.OS === 'ios');
   const [isInitialNotificationResponseCheckPending, setInitialNotificationResponseCheckPending] = useState(true);
+  const [pendingNativeMessageUrl, setPendingNativeMessageUrl] = useState<string | null>(null);
   const [migrationAttempt, setMigrationAttempt] = useState(0);
   const [messageMigration, setMessageMigration] = useState<StartupMigrationState>({
     status: 'checking',
@@ -158,7 +159,7 @@ export default function App() {
       try {
         const parsed = new URL(url);
         return (parsed.protocol === 'meetvap:' || parsed.protocol === 'com.meetvap.app:') &&
-          (parsed.hostname === 'incoming-call' || parsed.hostname === 'chats');
+          (parsed.hostname === 'incoming-call' || parsed.hostname === 'chats' || parsed.hostname === 'message');
       } catch {
         return false;
       }
@@ -202,14 +203,27 @@ export default function App() {
         return;
       }
 
-      beginCallOnlyAccessFromUrl(url);
+      const parsed = new URL(url);
+      if (parsed.hostname === 'message' && useAppStore.getState().isBootstrapping) {
+        if (!isCancelled) {
+          setPendingNativeMessageUrl(url);
+        }
+        return;
+      }
+
+      if (parsed.hostname !== 'message') {
+        beginCallOnlyAccessFromUrl(url);
+      }
       const storedServerUrl = useAppStore.getState().serverUrl ?? await getServerUrl().catch(() => null);
       await handleIncomingCallUrl(url, storedServerUrl);
     };
 
     const subscription = Linking.addEventListener('url', (event) => {
       if (isCallLaunchUrl(event.url)) {
-        beginCallOnlyAccessFromUrl(event.url);
+        const parsed = new URL(event.url);
+        if (parsed.hostname !== 'message') {
+          beginCallOnlyAccessFromUrl(event.url);
+        }
         setInitialCallUrlCheckPending(true);
       }
 
@@ -236,6 +250,18 @@ export default function App() {
       subscription.remove();
     };
   }, []);
+
+  useEffect(() => {
+    if (isBootstrapping || !pendingNativeMessageUrl) {
+      return;
+    }
+
+    const url = pendingNativeMessageUrl;
+    setPendingNativeMessageUrl(null);
+    void getServerUrl()
+      .catch(() => null)
+      .then((storedServerUrl) => handleIncomingCallUrl(url, useAppStore.getState().serverUrl ?? storedServerUrl));
+  }, [isBootstrapping, pendingNativeMessageUrl]);
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (nextState) => {
@@ -374,7 +400,10 @@ export default function App() {
           flushPendingNavigation();
           notifyAppLockRouteChanged();
         }}
-        onStateChange={notifyAppLockRouteChanged}
+        onStateChange={() => {
+          flushPendingNavigation();
+          notifyAppLockRouteChanged();
+        }}
         ref={navigationRef}
         theme={navigationTheme}
       >

@@ -20,6 +20,7 @@ const recentSessionMetadataWrites = new Map<string, { signature: string; written
 
 export const LIVEKIT_POOL_CAPABILITY = 'livekit-pool';
 export const APP_ATTESTATION_CAPABILITY = 'app-attestation';
+export const MULTI_ACCOUNT_CAPABILITY = 'multi-account';
 
 type ClientPlatform = 'android' | 'ios';
 

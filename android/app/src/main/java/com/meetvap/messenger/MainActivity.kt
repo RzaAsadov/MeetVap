@@ -31,6 +31,7 @@ class MainActivity : ReactActivity() {
     // This is required for expo-splash-screen.
     setTheme(R.style.AppTheme);
     super.onCreate(null)
+    MessageIntentStore.remember(intent)
     applyIncomingCallWindowFlags(intent)
     updatePictureInPictureParams()
   }
@@ -38,6 +39,7 @@ class MainActivity : ReactActivity() {
   override fun onNewIntent(intent: Intent) {
     super.onNewIntent(intent)
     setIntent(intent)
+    MessageIntentStore.remember(intent)
     applyIncomingCallWindowFlags(intent)
   }
 

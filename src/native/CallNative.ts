@@ -17,6 +17,7 @@ type CallNativeModule = {
   peekPendingAnsweredCallKitCallId?: () => Promise<string | null>;
   peekPendingAnsweredCallKitUrl?: () => Promise<string | null>;
   consumePendingIncomingCallUrl?: () => Promise<string | null>;
+  consumePendingMessageUrl?: () => Promise<string | null>;
   peekPendingIncomingCallUrl?: () => Promise<string | null>;
   canUseFullScreenIncomingCall?: () => Promise<boolean>;
   openFullScreenIncomingCallSettings?: () => void;
@@ -27,11 +28,13 @@ type CallNativeModule = {
   isMultitaskingCameraAccessSupported?: () => Promise<boolean>;
   enterPictureInPicture?: () => Promise<boolean>;
   closePictureInPicture?: () => Promise<boolean>;
-  cancelMessageNotifications?: (conversationId?: string | null) => void;
+  cancelMessageNotifications?: (conversationId?: string | null, serverInstanceId?: string | null, accountUserId?: string | null) => void;
   clearQuickReplyCredentials?: () => void;
   isPictureInPictureAvailable?: () => Promise<boolean>;
   setPictureInPictureEnabled?: (enabled: boolean) => void;
   setQuickReplyCredentials?: (serverUrl: string, authToken: string) => void;
+  setQuickReplyAccounts?: (accountsJson: string) => void;
+  setVisibleMessageConversation?: (conversationId?: string | null) => void;
   setMediaViewerOrientationUnlocked?: (unlocked: boolean) => void;
   setCallAudioRoute?: (speaker: boolean) => void;
   getCallAudioRoutes?: () => Promise<CallAudioRoute[]>;
@@ -161,8 +164,27 @@ export function setNativeQuickReplyCredentials(serverUrl: string, authToken: str
   getCallNativeModule()?.setQuickReplyCredentials?.(serverUrl, authToken);
 }
 
+export function setNativeQuickReplyAccounts(accounts: { accountUserId: string; authToken: string; isActive: boolean; serverInstanceId: string; serverUrl: string }[]) {
+  const nativeModule = getCallNativeModule();
+  if (nativeModule?.setQuickReplyAccounts) {
+    nativeModule.setQuickReplyAccounts(JSON.stringify(accounts));
+    return;
+  }
+  const first = accounts[0];
+  if (first) nativeModule?.setQuickReplyCredentials?.(first.serverUrl, first.authToken);
+  else nativeModule?.clearQuickReplyCredentials?.();
+}
+
 export function clearNativeQuickReplyCredentials() {
   getCallNativeModule()?.clearQuickReplyCredentials?.();
+}
+
+export function setNativeVisibleMessageConversation(conversationId: string | null) {
+  if (Platform.OS !== 'android') {
+    return;
+  }
+
+  getCallNativeModule()?.setVisibleMessageConversation?.(conversationId);
 }
 
 export async function waitForNativeCallKitAudioActivation() {
@@ -207,6 +229,14 @@ export async function peekNativePendingAnsweredCallKitUrl() {
 
 export async function consumeNativePendingIncomingCallUrl() {
   return getCallNativeModule()?.consumePendingIncomingCallUrl?.().catch(() => null) ?? null;
+}
+
+export async function consumeNativePendingMessageUrl() {
+  if (Platform.OS !== 'android') {
+    return null;
+  }
+
+  return getCallNativeModule()?.consumePendingMessageUrl?.().catch(() => null) ?? null;
 }
 
 export async function peekNativePendingIncomingCallUrl() {
@@ -469,12 +499,16 @@ export function cancelNativeAndroidIncomingCall(callId: string | null | undefine
   getCallNativeModule()?.cancelIncomingCall?.(callId);
 }
 
-export function cancelNativeMessageNotifications(conversationId: string | null | undefined) {
+export function cancelNativeMessageNotifications(
+  conversationId: string | null | undefined,
+  serverInstanceId?: string | null,
+  accountUserId?: string | null,
+) {
   if (!conversationId) {
     return;
   }
 
-  getCallNativeModule()?.cancelMessageNotifications?.(conversationId);
+  getCallNativeModule()?.cancelMessageNotifications?.(conversationId, serverInstanceId, accountUserId);
 }
 
 export async function registerIosVoipPushToken() {

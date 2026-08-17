@@ -3,6 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system/legacy';
 
 import { CallLog, Conversation, Message, SubscriptionStatus } from '../types/domain';
+import { clearAccountSubscription, clearAccountToken, clearAccountUser, clearSavedAccountRegistry, getAccountScopedStorageKey, getAccountSubscription, getAccountToken, getAccountUser, getActiveAccount, setAccountSubscription, setAccountToken, setAccountUser, updateSavedAccountUser } from './accountRegistry';
 import { removePartialMediaDownloadsForMessages } from './mediaCache';
 import { ensureMessageDatabaseReady, getConversationsFromDatabase, getLatestMessagesByConversationIdsFromDatabase, getMessagesByIdsFromDatabase, getMessagesFromDatabase, getOlderMessagesFromDatabase, getRecentMessagesFromDatabase, removeAllConversationRecordsFromDatabase, removeAllMediaDownloadRecords, removeAllMessagesFromDatabase, removeConversationRecordsFromDatabase, removeMessageRecordsFromDatabase, removeMessagesFromDatabase, replaceConversationsInDatabase, saveMessagesToDatabase, upsertConversationsInDatabase, upsertMessagesToDatabase } from './messageStore';
 
@@ -32,6 +33,17 @@ const SUBSCRIPTION_EXPIRY_NOTICE_SEEN_PREFIX = 'messenger.subscriptionExpiryNoti
 const VOICE_CALL_TIP_DISMISSED_PREFIX = 'messenger.voiceCallTipDismissed.';
 const BACKGROUND_LOCATION_DISCLOSURE_VERSION_KEY = 'messenger.backgroundLocationDisclosureVersion';
 
+function scoped(key: string) {
+  return getAccountScopedStorageKey(key);
+}
+
+function isAuthUser(value: unknown): value is import('../types/domain').AuthUser {
+  return !!value && typeof value === 'object' &&
+    'id' in value && typeof value.id === 'string' &&
+    'username' in value && typeof value.username === 'string' &&
+    'displayName' in value && typeof value.displayName === 'string';
+}
+
 export const DEFAULT_SERVER_URL = 'https://mm.meetvap.com';
 export type ErasePinAlertConfig = {
   message: string;
@@ -46,6 +58,8 @@ export type StoredConversationSyncCursor = {
 };
 
 export async function getServerUrl() {
+  const activeAccount = await getActiveAccount();
+  if (activeAccount) return activeAccount.serverUrl;
   const storedUrl = await SecureStore.getItemAsync(SERVER_URL_KEY);
 
   return storedUrl || DEFAULT_SERVER_URL;
@@ -62,65 +76,64 @@ export async function clearServerUrl() {
 }
 
 export async function getAuthToken() {
-  return SecureStore.getItemAsync(AUTH_TOKEN_KEY);
+  return getAccountToken();
 }
 
 export async function setAuthToken(token: string) {
-  await SecureStore.setItemAsync(AUTH_TOKEN_KEY, token);
+  await setAccountToken(token);
 }
 
 export async function clearAuthToken() {
-  await SecureStore.deleteItemAsync(AUTH_TOKEN_KEY);
+  await clearAccountToken();
 }
 
 export async function getStoredUser<T>() {
-  const raw = await SecureStore.getItemAsync(USER_KEY);
-  return raw ? (JSON.parse(raw) as T) : null;
+  return getAccountUser<T>();
 }
 
 export async function setStoredUser<T>(user: T) {
-  await SecureStore.setItemAsync(USER_KEY, JSON.stringify(user));
+  await setAccountUser(user);
+  if (isAuthUser(user)) await updateSavedAccountUser(user);
 }
 
 export async function clearStoredUser() {
-  await SecureStore.deleteItemAsync(USER_KEY);
+  await clearAccountUser();
 }
 
 export async function getStoredSubscriptionStatus() {
-  const raw = await SecureStore.getItemAsync(SUBSCRIPTION_STATUS_KEY);
-  return raw ? (JSON.parse(raw) as SubscriptionStatus) : null;
+  return getAccountSubscription();
 }
 
 export async function setStoredSubscriptionStatus(status: SubscriptionStatus) {
-  await SecureStore.setItemAsync(SUBSCRIPTION_STATUS_KEY, JSON.stringify(status));
+  await setAccountSubscription(status);
 }
 
 export async function clearStoredSubscriptionStatus() {
-  await SecureStore.deleteItemAsync(SUBSCRIPTION_STATUS_KEY);
+  await clearAccountSubscription();
 }
 
 export async function getStoredPremiumTrialIntroSeen(userId: string) {
-  return AsyncStorage.getItem(`${PREMIUM_TRIAL_INTRO_SEEN_PREFIX}${userId}`);
+  return AsyncStorage.getItem(scoped(`${PREMIUM_TRIAL_INTRO_SEEN_PREFIX}${userId}`));
 }
 
 export async function setStoredPremiumTrialIntroSeen(userId: string) {
-  await AsyncStorage.setItem(`${PREMIUM_TRIAL_INTRO_SEEN_PREFIX}${userId}`, 'true');
+  await AsyncStorage.setItem(scoped(`${PREMIUM_TRIAL_INTRO_SEEN_PREFIX}${userId}`), 'true');
 }
 
 export async function getStoredSubscriptionExpiryNoticeSeen(userId: string, noticeKey: string) {
-  return AsyncStorage.getItem(`${SUBSCRIPTION_EXPIRY_NOTICE_SEEN_PREFIX}${userId}.${noticeKey}`);
+  return AsyncStorage.getItem(scoped(`${SUBSCRIPTION_EXPIRY_NOTICE_SEEN_PREFIX}${userId}.${noticeKey}`));
 }
 
 export async function setStoredSubscriptionExpiryNoticeSeen(userId: string, noticeKey: string) {
-  await AsyncStorage.setItem(`${SUBSCRIPTION_EXPIRY_NOTICE_SEEN_PREFIX}${userId}.${noticeKey}`, 'true');
+  await AsyncStorage.setItem(scoped(`${SUBSCRIPTION_EXPIRY_NOTICE_SEEN_PREFIX}${userId}.${noticeKey}`), 'true');
 }
 
 export async function getStoredVoiceCallTipDismissed(userId: string) {
-  return AsyncStorage.getItem(`${VOICE_CALL_TIP_DISMISSED_PREFIX}${userId}`);
+  return AsyncStorage.getItem(scoped(`${VOICE_CALL_TIP_DISMISSED_PREFIX}${userId}`));
 }
 
 export async function setStoredVoiceCallTipDismissed(userId: string) {
-  await AsyncStorage.setItem(`${VOICE_CALL_TIP_DISMISSED_PREFIX}${userId}`, 'true');
+  await AsyncStorage.setItem(scoped(`${VOICE_CALL_TIP_DISMISSED_PREFIX}${userId}`), 'true');
 }
 
 export async function getStoredMessages(conversationId: string) {
@@ -145,12 +158,12 @@ export async function getStoredLatestMessagesByConversationIds(conversationIds: 
 
 export async function setStoredMessages(conversationId: string, messages: Message[]) {
   await saveMessagesToDatabase(conversationId, messages);
-  await AsyncStorage.removeItem(`${MESSAGE_CACHE_PREFIX}${conversationId}`);
+  await AsyncStorage.removeItem(scoped(`${MESSAGE_CACHE_PREFIX}${conversationId}`));
 }
 
 export async function upsertStoredMessages(conversationId: string, messages: Message[]) {
   await upsertMessagesToDatabase(conversationId, messages);
-  await AsyncStorage.removeItem(`${MESSAGE_CACHE_PREFIX}${conversationId}`);
+  await AsyncStorage.removeItem(scoped(`${MESSAGE_CACHE_PREFIX}${conversationId}`));
 }
 
 export async function removeStoredMessageRecords(conversationId: string, messageIds: string[]) {
@@ -161,7 +174,7 @@ export async function removeStoredMessages(conversationId: string) {
   const messages = await getMessagesFromDatabase(conversationId).catch(() => []);
   await removeLocalMessageMediaFiles(messages);
   await removeMessagesFromDatabase(conversationId).catch(() => undefined);
-  await AsyncStorage.removeItem(`${MESSAGE_CACHE_PREFIX}${conversationId}`);
+  await AsyncStorage.removeItem(scoped(`${MESSAGE_CACHE_PREFIX}${conversationId}`));
 }
 
 export async function getStoredConversations() {
@@ -171,13 +184,13 @@ export async function getStoredConversations() {
     return databaseConversations;
   }
 
-  const raw = await AsyncStorage.getItem(CONVERSATIONS_KEY);
+  const raw = await AsyncStorage.getItem(scoped(CONVERSATIONS_KEY));
   const legacyConversations = raw ? (JSON.parse(raw) as Conversation[]) : [];
 
   if (legacyConversations.length > 0) {
     try {
       await replaceConversationsInDatabase(legacyConversations);
-      await AsyncStorage.removeItem(CONVERSATIONS_KEY);
+      await AsyncStorage.removeItem(scoped(CONVERSATIONS_KEY));
     } catch {
       // Keep the legacy snapshot available if the one-time migration fails.
     }
@@ -188,7 +201,7 @@ export async function getStoredConversations() {
 
 export async function setStoredConversations(conversations: Conversation[]) {
   await replaceConversationsInDatabase(dedupeStoredConversations(conversations));
-  await AsyncStorage.removeItem(CONVERSATIONS_KEY);
+  await AsyncStorage.removeItem(scoped(CONVERSATIONS_KEY));
 }
 
 export async function upsertStoredConversations(conversations: Conversation[]) {
@@ -206,12 +219,12 @@ function dedupeStoredConversations(conversations: Conversation[]) {
 export async function clearStoredConversations() {
   await Promise.all([
     removeAllConversationRecordsFromDatabase(),
-    AsyncStorage.removeItem(CONVERSATIONS_KEY),
+    AsyncStorage.removeItem(scoped(CONVERSATIONS_KEY)),
   ]);
 }
 
 export async function getDeletedConversationAfter(conversationId: string) {
-  return AsyncStorage.getItem(`${DELETED_CHAT_PREFIX}${conversationId}`);
+  return AsyncStorage.getItem(scoped(`${DELETED_CHAT_PREFIX}${conversationId}`));
 }
 
 export async function getDeletedConversationAfters(conversationIds: string[]) {
@@ -222,13 +235,13 @@ export async function getDeletedConversationAfters(conversationIds: string[]) {
   }
 
   const values = await AsyncStorage.multiGet(
-    uniqueConversationIds.map((conversationId) => `${DELETED_CHAT_PREFIX}${conversationId}`),
+    uniqueConversationIds.map((conversationId) => scoped(`${DELETED_CHAT_PREFIX}${conversationId}`)),
   );
   const deletedAfterByConversationId = new Map<string, string>();
 
   values.forEach(([key, value]) => {
     if (value) {
-      deletedAfterByConversationId.set(key.slice(DELETED_CHAT_PREFIX.length), value);
+      deletedAfterByConversationId.set(key.slice(key.lastIndexOf(DELETED_CHAT_PREFIX) + DELETED_CHAT_PREFIX.length), value);
     }
   });
 
@@ -236,15 +249,15 @@ export async function getDeletedConversationAfters(conversationIds: string[]) {
 }
 
 export async function setDeletedConversationAfter(conversationId: string, timestampIso: string) {
-  await AsyncStorage.setItem(`${DELETED_CHAT_PREFIX}${conversationId}`, timestampIso);
+  await AsyncStorage.setItem(scoped(`${DELETED_CHAT_PREFIX}${conversationId}`), timestampIso);
 }
 
 export async function clearDeletedConversationAfter(conversationId: string) {
-  await AsyncStorage.removeItem(`${DELETED_CHAT_PREFIX}${conversationId}`);
+  await AsyncStorage.removeItem(scoped(`${DELETED_CHAT_PREFIX}${conversationId}`));
 }
 
 export async function getStoredConversationSyncCursor(conversationId: string): Promise<StoredConversationSyncCursor> {
-  const raw = await AsyncStorage.getItem(`${CONVERSATION_SYNC_CURSOR_PREFIX}${conversationId}`);
+  const raw = await AsyncStorage.getItem(scoped(`${CONVERSATION_SYNC_CURSOR_PREFIX}${conversationId}`));
 
   if (!raw) {
     return {};
@@ -259,11 +272,11 @@ export async function getStoredConversationSyncCursor(conversationId: string): P
 
 export async function getStoredConversationSyncCursors(conversationIds: string[]) {
   const uniqueConversationIds = Array.from(new Set(conversationIds));
-  const values = await AsyncStorage.multiGet(uniqueConversationIds.map((conversationId) => `${CONVERSATION_SYNC_CURSOR_PREFIX}${conversationId}`));
+  const values = await AsyncStorage.multiGet(uniqueConversationIds.map((conversationId) => scoped(`${CONVERSATION_SYNC_CURSOR_PREFIX}${conversationId}`)));
   const cursors: Record<string, StoredConversationSyncCursor> = {};
 
   values.forEach(([key, raw]) => {
-    const conversationId = key.slice(CONVERSATION_SYNC_CURSOR_PREFIX.length);
+    const conversationId = key.slice(key.lastIndexOf(CONVERSATION_SYNC_CURSOR_PREFIX) + CONVERSATION_SYNC_CURSOR_PREFIX.length);
 
     if (!raw) {
       cursors[conversationId] = {};
@@ -281,7 +294,7 @@ export async function getStoredConversationSyncCursors(conversationIds: string[]
 }
 
 export async function setStoredConversationSyncCursor(conversationId: string, cursor: StoredConversationSyncCursor) {
-  await AsyncStorage.setItem(`${CONVERSATION_SYNC_CURSOR_PREFIX}${conversationId}`, JSON.stringify(cursor));
+  await AsyncStorage.setItem(scoped(`${CONVERSATION_SYNC_CURSOR_PREFIX}${conversationId}`), JSON.stringify(cursor));
 }
 
 export async function setStoredConversationSyncCursors(cursors: Record<string, StoredConversationSyncCursor>) {
@@ -292,26 +305,26 @@ export async function setStoredConversationSyncCursors(cursors: Record<string, S
   }
 
   await AsyncStorage.multiSet(entries.map(([conversationId, cursor]) => [
-    `${CONVERSATION_SYNC_CURSOR_PREFIX}${conversationId}`,
+    scoped(`${CONVERSATION_SYNC_CURSOR_PREFIX}${conversationId}`),
     JSON.stringify(cursor),
   ]));
 }
 
 export async function getStoredConversationMediaCacheCursor(conversationId: string) {
-  return AsyncStorage.getItem(`${CONVERSATION_MEDIA_CACHE_CURSOR_PREFIX}${conversationId}`);
+  return AsyncStorage.getItem(scoped(`${CONVERSATION_MEDIA_CACHE_CURSOR_PREFIX}${conversationId}`));
 }
 
 export async function setStoredConversationMediaCacheCursor(conversationId: string, cursor: string) {
-  await AsyncStorage.setItem(`${CONVERSATION_MEDIA_CACHE_CURSOR_PREFIX}${conversationId}`, cursor);
+  await AsyncStorage.setItem(scoped(`${CONVERSATION_MEDIA_CACHE_CURSOR_PREFIX}${conversationId}`), cursor);
 }
 
 export async function getStoredCallLogs() {
-  const raw = await AsyncStorage.getItem(CALL_LOGS_KEY);
+  const raw = await AsyncStorage.getItem(scoped(CALL_LOGS_KEY));
   return raw ? (JSON.parse(raw) as CallLog[]) : [];
 }
 
 export async function setStoredCallLogs(callLogs: CallLog[]) {
-  await AsyncStorage.setItem(CALL_LOGS_KEY, JSON.stringify(callLogs.slice(0, 150)));
+  await AsyncStorage.setItem(scoped(CALL_LOGS_KEY), JSON.stringify(callLogs.slice(0, 150)));
 }
 
 export async function getStoredDarkMode() {
@@ -357,16 +370,16 @@ export async function setStoredBackgroundLocationDisclosureVersion(version: numb
 }
 
 export async function getStoredFavoriteConversationIds() {
-  const raw = await AsyncStorage.getItem(FAVORITE_CONVERSATIONS_KEY);
+  const raw = await AsyncStorage.getItem(scoped(FAVORITE_CONVERSATIONS_KEY));
   return raw ? (JSON.parse(raw) as string[]) : [];
 }
 
 export async function setStoredFavoriteConversationIds(conversationIds: string[]) {
-  await AsyncStorage.setItem(FAVORITE_CONVERSATIONS_KEY, JSON.stringify(Array.from(new Set(conversationIds))));
+  await AsyncStorage.setItem(scoped(FAVORITE_CONVERSATIONS_KEY), JSON.stringify(Array.from(new Set(conversationIds))));
 }
 
 export async function getStoredPlayedVoiceMessageIds() {
-  const raw = await AsyncStorage.getItem(PLAYED_VOICE_MESSAGES_KEY);
+  const raw = await AsyncStorage.getItem(scoped(PLAYED_VOICE_MESSAGES_KEY));
   const values = raw ? (JSON.parse(raw) as unknown) : [];
 
   return Array.isArray(values)
@@ -375,7 +388,7 @@ export async function getStoredPlayedVoiceMessageIds() {
 }
 
 export async function setStoredPlayedVoiceMessageIds(messageIds: string[]) {
-  await AsyncStorage.setItem(PLAYED_VOICE_MESSAGES_KEY, JSON.stringify(Array.from(new Set(messageIds)).slice(-2000)));
+  await AsyncStorage.setItem(scoped(PLAYED_VOICE_MESSAGES_KEY), JSON.stringify(Array.from(new Set(messageIds)).slice(-2000)));
 }
 
 export async function getStoredRecentEmojis() {
@@ -520,6 +533,7 @@ export async function eraseLocalChatData() {
 }
 
 export async function eraseLocalAppData() {
+  await clearSavedAccountRegistry();
   await Promise.allSettled([
     AsyncStorage.clear(),
     SecureStore.deleteItemAsync(SERVER_URL_KEY),

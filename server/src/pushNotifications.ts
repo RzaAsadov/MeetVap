@@ -6,7 +6,7 @@ import jwt from 'jsonwebtoken';
 import { countUnreadConversationsForUser } from './conversationList';
 import { relayPushToMainServer } from './childPushRelay';
 import { config } from './config';
-import { operationalConfig } from './operationalConfig';
+import { getServerInstanceId, operationalConfig } from './operationalConfig';
 import { prisma } from './prisma';
 
 const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
@@ -14,6 +14,8 @@ const INCOMING_CALL_CHANNEL_ID = 'incoming-calls-ringtone';
 const INCOMING_CALL_FCM_SOUND = 'ringtone';
 
 export type StoredPushToken = {
+  accountServerInstanceId?: string;
+  accountServerUrl?: string;
   deliveryReceiptUrl?: string;
   id?: string;
   installationId?: string | null;
@@ -21,6 +23,7 @@ export type StoredPushToken = {
   platform?: string | null;
   provider: string;
   token: string;
+  updatedAt?: Date | string;
   userId?: string | null;
   quickReplyToken?: string;
 };
@@ -341,9 +344,10 @@ function createQuickReplyToken(conversationId: string, userId?: string | null) {
 }
 
 export async function sendMessagePush(input: MessagePush) {
+  const selectedTokens = selectPreferredMessagePushTokens(input.tokens);
   const relayInput = {
     ...input,
-    tokens: input.tokens.map((item) => ({
+    tokens: selectedTokens.map((item) => ({
       ...item,
       quickReplyToken: item.quickReplyToken ?? createQuickReplyToken(input.conversationId, item.userId),
     })),
@@ -369,15 +373,16 @@ export async function sendMessagePush(input: MessagePush) {
     };
   };
 
-  const expoTokens = input.tokens.filter((item) => item.provider === 'expo');
-  const fcmTokens = input.tokens.filter((item) => item.provider === 'fcm');
-  const apnsTokens = input.tokens.filter((item) => item.provider === 'apns');
+  const expoTokens = selectedTokens.filter((item) => item.provider === 'expo');
+  const fcmTokens = selectedTokens.filter((item) => item.provider === 'fcm');
+  const apnsTokens = selectedTokens.filter((item) => item.provider === 'apns');
   const apnsBadgeCountByUserId = await getApnsBadgeCountByUserId(apnsTokens);
-  const prefetchData = {
+  const prefetchDataForToken = (item: StoredPushToken) => ({
     conversationId: input.conversationId,
     messageId: input.messageId,
     type: 'message-prefetch',
-  };
+    ...getDeliveryReceiptData(item),
+  });
 
   const messageTtlSeconds = operationalConfig.pushNotifications.messageTtlHours * 60 * 60;
   const [visibleResults] = await Promise.all([
@@ -417,28 +422,69 @@ export async function sendMessagePush(input: MessagePush) {
       sendExpoPushNotifications(expoTokens.map((item) => ({
         channelId: 'messages',
         contentAvailable: true,
-        data: prefetchData,
+        data: prefetchDataForToken(item),
         priority: 'normal',
         to: item.token,
         tokenId: item.id,
         ttlSeconds: messageTtlSeconds,
       }))),
-      sendFcmNotifications(fcmTokens, {
+      ...fcmTokens.map((item) => sendFcmNotifications([item], {
         body: '',
         channelId: 'messages',
-        data: prefetchData,
+        data: prefetchDataForToken(item),
         dataOnly: true,
         priority: 'high',
         title: '',
         ttlMs: messageTtlSeconds * 1000,
-      }),
-      sendApnsBackgroundNotifications(apnsTokens, {
-        data: prefetchData,
-      }),
+      })),
+      ...apnsTokens.map((item) => sendApnsBackgroundNotifications([item], {
+        data: prefetchDataForToken(item),
+      })),
     ]),
   ]);
 
   return mergePushDispatchResults(visibleResults);
+}
+
+export function selectPreferredMessagePushTokens<T extends StoredPushToken>(tokens: T[]) {
+  const selected = new Map<string, T>();
+  const unscoped: T[] = [];
+
+  tokens.forEach((token) => {
+    if (!['apns', 'expo', 'fcm'].includes(token.provider)) return;
+    if (!token.userId || !token.installationId) {
+      unscoped.push(token);
+      return;
+    }
+
+    const key = `${token.userId}\u0000${token.installationId}`;
+    const current = selected.get(key);
+
+    if (!current || compareMessagePushTokenPreference(token, current) > 0) {
+      selected.set(key, token);
+    }
+  });
+
+  return [...selected.values(), ...unscoped];
+}
+
+function compareMessagePushTokenPreference(next: StoredPushToken, current: StoredPushToken) {
+  const nextRank = getMessagePushProviderRank(next);
+  const currentRank = getMessagePushProviderRank(current);
+
+  if (nextRank !== currentRank) return nextRank - currentRank;
+  return getPushTokenUpdatedAt(next) - getPushTokenUpdatedAt(current);
+}
+
+function getMessagePushProviderRank(token: StoredPushToken) {
+  if (token.platform === 'android') return token.provider === 'fcm' ? 3 : token.provider === 'expo' ? 2 : 1;
+  if (token.platform === 'ios') return token.provider === 'apns' ? 3 : token.provider === 'expo' ? 2 : 1;
+  return token.provider === 'expo' ? 1 : 2;
+}
+
+function getPushTokenUpdatedAt(token: StoredPushToken) {
+  if (token.updatedAt instanceof Date) return token.updatedAt.getTime();
+  return typeof token.updatedAt === 'string' ? Date.parse(token.updatedAt) || 0 : 0;
 }
 
 async function getApnsBadgeCountByUserId(tokens: StoredPushToken[]) {
@@ -840,16 +886,17 @@ function getApnsDispatchResult(
   };
 }
 
-function dedupePushTokens<T extends { token: string }>(tokens: T[]) {
+function dedupePushTokens<T extends { token: string; userId?: string | null }>(tokens: T[]) {
   const seen = new Set<string>();
   const deduped: T[] = [];
 
   tokens.forEach((item) => {
-    if (seen.has(item.token)) {
+    const identity = `${item.token}\u0000${item.userId ?? ''}`;
+    if (seen.has(identity)) {
       return;
     }
 
-    seen.add(item.token);
+    seen.add(identity);
     deduped.push(item);
   });
 
@@ -857,7 +904,11 @@ function dedupePushTokens<T extends { token: string }>(tokens: T[]) {
 }
 
 function getDeliveryReceiptData(item: StoredPushToken): Record<string, string> {
-  const data: Record<string, string> = {};
+  const data: Record<string, string> = {
+    serverInstanceId: item.accountServerInstanceId ?? getServerInstanceId(config.PUBLIC_API_URL),
+    ...(item.accountServerUrl || config.PUBLIC_API_URL ? { accountServerUrl: item.accountServerUrl ?? config.PUBLIC_API_URL! } : {}),
+    ...(item.userId ? { accountUserId: item.userId } : {}),
+  };
   if (item.deliveryReceiptUrl) {
     data.deliveryReceiptUrl = item.deliveryReceiptUrl;
   }

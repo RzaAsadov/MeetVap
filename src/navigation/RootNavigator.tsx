@@ -1,4 +1,5 @@
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import { useEffect } from 'react';
 import { Platform } from 'react-native';
 
 import { AddContactScreen } from '../screens/AddContactScreen';
@@ -25,17 +26,25 @@ import { useAppStore } from '../store/useAppStore';
 import { colors } from '../theme/colors';
 import { useThemeColors } from '../theme/useThemeColors';
 import { RootStackParamList } from '../types/navigation';
+import { notifyNavigationAccountRendered } from './navigationRef';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
 export function RootNavigator() {
   useThemeColors();
   useAppStore((state) => state.language);
+  const activeAccountId = useAppStore((state) => state.activeAccountId);
   const user = useAppStore((state) => state.user);
+  const navigationAccountId = user ? activeAccountId ?? user.id : null;
+
+  useEffect(() => {
+    notifyNavigationAccountRendered(navigationAccountId);
+  }, [navigationAccountId]);
 
   return (
     <>
     <Stack.Navigator
+      key={navigationAccountId ?? 'signed-out'}
       screenOptions={{
         headerBackButtonDisplayMode: 'minimal',
         headerBackTitle: '',
@@ -82,6 +91,7 @@ export function RootNavigator() {
               title: '',
             }}
           />
+          <Stack.Screen component={AuthScreen} name="AddAccount" />
           <Stack.Screen
             component={SubscriptionScreen}
             name="Subscription"

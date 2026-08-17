@@ -2324,6 +2324,64 @@ conversationRoutes.get('/:conversationId/messages', async (req, res, next) => {
   }
 });
 
+conversationRoutes.get('/:conversationId/messages/:messageId', async (req, res, next) => {
+  try {
+    const currentUser = getAuthedUser(req);
+    await assertConversationMember(req.params.conversationId, currentUser.id);
+    await assertGroupInviteAccepted(req.params.conversationId, currentUser.id);
+    const message = await prisma.message.findFirst({
+      include: {
+        media: true,
+        receipts: {
+          select: {
+            status: true,
+            userId: true,
+          },
+        },
+        sender: {
+          select: {
+            avatarUrl: true,
+            displayName: true,
+            hideFromSearch: true,
+            hideNickname: true,
+            id: true,
+            lastSeenAt: true,
+            showLastSeen: true,
+            username: true,
+          },
+        },
+      },
+      where: {
+        conversationId: req.params.conversationId,
+        deletedAt: null,
+        deletions: {
+          none: { userId: currentUser.id },
+        },
+        id: req.params.messageId,
+      },
+    });
+
+    if (!message) {
+      throw new HttpError(404, 'Message not found');
+    }
+
+    const members = await prisma.conversationMember.findMany({
+      where: { conversationId: req.params.conversationId },
+    });
+    const aliasName = members.find((member) => member.userId === message.senderId)?.aliasName;
+
+    res.json({
+      message: serializeMessage(
+        message,
+        getMessageStatusForViewer(message, currentUser.id, members),
+        aliasName,
+      ),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 conversationRoutes.get('/:conversationId/pins', async (req, res, next) => {
   try {
     const currentUser = getAuthedUser(req);

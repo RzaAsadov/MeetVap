@@ -8,9 +8,12 @@ RCT_EXTERN_METHOD(getAppBuildNumber:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
 RCT_EXTERN_METHOD(setQuickReplyCredentials:(NSString *)serverUrl
                   authToken:(NSString *)authToken)
+RCT_EXTERN_METHOD(setQuickReplyAccounts:(NSString *)accountsJson)
 RCT_EXTERN_METHOD(clearQuickReplyCredentials)
 RCT_EXTERN_METHOD(setMediaViewerOrientationUnlocked:(BOOL)unlocked)
-RCT_EXTERN_METHOD(cancelMessageNotifications:(NSString * _Nullable)conversationId)
+RCT_EXTERN_METHOD(cancelMessageNotifications:(NSString * _Nullable)conversationId
+                  serverInstanceId:(NSString * _Nullable)serverInstanceId
+                  accountUserId:(NSString * _Nullable)accountUserId)
 RCT_EXTERN_METHOD(waitForCallKitAudioActivation:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
 RCT_EXTERN_METHOD(answerIncomingCallKitCall:(NSString *)callId

@@ -922,5 +922,11 @@ export const es: Record<string, TranslationValue> = {
   welcomeHeroTitle: "Mensajería privada, bien hecha",
   welcomeHeroSubtitle: "Habla y llama con confianza — MeetVap mantiene tus conversaciones solo tuyas.",
   welcomeNewUserCta: "Soy nuevo aquí",
-  welcomeExistingUserCta: "Ya tengo una cuenta"  
+  welcomeExistingUserCta: "Ya tengo una cuenta",
+  accounts: 'Cuentas', switchAccount: 'Cambiar cuenta', addAccount: 'Añadir cuenta', removeAccount: 'Eliminar cuenta',
+  removeAccountConfirmation: ({ name }) => `¿Eliminar ${name} de este dispositivo? Los datos locales de esta cuenta dejarán de estar disponibles.`,
+  accountSwitchFailed: 'No se pudo cambiar de cuenta', accountNeedsSignIn: 'Inicia sesión de nuevo', accountSuspended: 'Cuenta suspendida',
+  accountLimitTitle: 'Límite de cuentas alcanzado', accountLimitReached: 'Puedes guardar hasta 5 cuentas en este dispositivo. Elimina una antes de añadir otra.',
+  endCallBeforeSwitchingAccount: 'Finaliza la llamada activa antes de cambiar de cuenta.', stopLiveLocationBeforeSwitchingAccount: 'Detén la ubicación en vivo antes de cambiar de cuenta.',
+  serverAliasNotFound: 'Alias del servidor no disponible', editUsername: 'Editar usuario',
 };

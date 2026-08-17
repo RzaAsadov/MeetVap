@@ -1,23 +1,26 @@
-import Constants from 'expo-constants';
 import * as Device from 'expo-device';
 import * as Notifications from 'expo-notifications';
 import * as TaskManager from 'expo-task-manager';
-import { useEffect } from 'react';
+import { useEffect, useMemo } from 'react';
 import { Alert, AppState, Platform } from 'react-native';
 
 import { t, type AppLanguage } from '../i18n';
 import { beginCallOnlyAccess } from '../lib/appLockAccess';
 import { endCall, markConversationRead, registerPushToken, ringCall } from '../lib/backend';
 import { prefetchConversationMessages } from '../lib/backgroundPrefetch';
-import { getVisibleChatRoomConversationId, navigateToChat, navigateToChats, navigateToIncomingCall } from '../navigation/navigationRef';
-import { canUseNativeFullScreenIncomingCalls, clearNativeQuickReplyCredentials, consumeNativePendingIncomingCallUrl, endIosCallKitCall, openNativeFullScreenIncomingCallSettings, registerIosVoipPushToken, setNativeQuickReplyCredentials } from '../native/CallNative';
-import { getAuthToken, getServerUrl, getStoredDecoyOffline, getStoredUser } from '../lib/storage';
+import { navigateToChat, navigateToChats, navigateToIncomingCall, waitForNavigationAccount } from '../navigation/navigationRef';
+import { canUseNativeFullScreenIncomingCalls, consumeNativePendingIncomingCallUrl, consumeNativePendingMessageUrl, endIosCallKitCall, openNativeFullScreenIncomingCallSettings, registerIosVoipPushToken } from '../native/CallNative';
+import { getServerUrl, getStoredDecoyOffline } from '../lib/storage';
 import { dismissMessageNotificationsForConversation } from '../lib/messageNotifications';
 import { logMessageDeliveryDiagnostic } from '../lib/messageDeliveryDiagnostics';
 import { isIncomingCallUrlExpired } from '../lib/incomingCallExpiry';
 import { useAppStore } from '../store/useAppStore';
+import { getAccountSession, getActiveAccount, getActiveAccountIdSync, listSavedAccounts, noteAccountUnreadConversation } from '../lib/accountRegistry';
+import { syncNativeAccountCredentials } from '../lib/nativeAccountCredentials';
 
 type IncomingCallNotificationData = {
+  accountServerUrl?: unknown;
+  accountUserId?: unknown;
   autoJoin?: unknown;
   callId?: unknown;
   conversationId?: unknown;
@@ -27,13 +30,18 @@ type IncomingCallNotificationData = {
   messageId?: unknown;
   mode?: unknown;
   participantNames?: unknown;
+  presentationSource?: unknown;
   title?: unknown;
   type?: unknown;
+  serverInstanceId?: unknown;
 };
 
 const MESSAGE_PREFETCH_TASK = 'meetvap-message-prefetch';
 const handledIncomingCallUrls = new Set<string>();
+const handledNotificationResponseKeys = new Set<string>();
+const handlingIncomingCallUrls = new Map<string, Promise<void>>();
 let didPromptFullScreenIncomingCallSettings = false;
+let activePushRegistration: Promise<void> | null = null;
 
 Notifications.setNotificationHandler({
   handleNotification: async (notification) => {
@@ -68,8 +76,13 @@ Notifications.setNotificationHandler({
       const data = notificationData;
       const conversationId = typeof data?.conversationId === 'string' ? data.conversationId : null;
       const isMessagePush = data?.type === 'message' || data?.type === 'message-prefetch';
+      const targetsActiveAccount = doesNotificationTargetActiveAccount(data);
 
-      if (isMessagePush && conversationId) {
+      if (isMessagePush && conversationId && !targetsActiveAccount) {
+        void noteNotificationAccountUnread(data, conversationId);
+      }
+
+      if (isMessagePush && conversationId && targetsActiveAccount) {
         void useAppStore.getState().loadMessages(conversationId, { hydrate: false })
           .catch((error) => {
             logMessageDeliveryDiagnostic('foreground-push-message-sync-failed', {
@@ -80,17 +93,20 @@ Notifications.setNotificationHandler({
           });
       }
 
-      const isOtherChatMessage = data?.type === 'message' &&
+      // The local notification scheduled by realtime is the sole foreground
+      // presenter for the active account. Remote presentation is reserved for
+      // inactive accounts, which have no connected socket.
+      const shouldPresentMessage = data?.type === 'message' &&
         !!conversationId &&
-        getVisibleChatRoomConversationId() !== conversationId;
+        (data.presentationSource === 'realtime' || !targetsActiveAccount);
 
-      if (isOtherChatMessage) {
-          return {
-            shouldPlaySound: true,
-            shouldSetBadge: true,
-            shouldShowBanner: true,
-            shouldShowList: true,
-          };
+      if (shouldPresentMessage) {
+        return {
+          shouldPlaySound: true,
+          shouldSetBadge: true,
+          shouldShowBanner: true,
+          shouldShowList: true,
+        };
       }
 
       return {
@@ -120,6 +136,15 @@ if (!TaskManager.isTaskDefined(MESSAGE_PREFETCH_TASK)) {
 
         const payload = getNotificationTaskData(data);
         await acknowledgePushDelivery(payload);
+        if (!(await isNotificationForActiveAccount(payload))) {
+          if (
+            (payload.type === 'message' || payload.type === 'message-prefetch') &&
+            typeof payload.conversationId === 'string'
+          ) {
+            await noteNotificationAccountUnread(payload, payload.conversationId);
+          }
+          return Notifications.BackgroundNotificationTaskResult.NoData;
+        }
 
         if (payload.type === 'incoming-call' && typeof payload.callId === 'string') {
           if (isExpiredIncomingCall(payload)) {
@@ -166,6 +191,10 @@ export function PushNotificationBridge() {
   const serverUrl = useAppStore((state) => state.serverUrl);
   const unreadConversationCount = useAppStore((state) => state.unreadConversationIds.length);
   const user = useAppStore((state) => state.user);
+  const accounts = useAppStore((state) => state.accounts);
+  const accountRegistrationKey = useMemo(() => accounts.map((account) => (
+    `${account.accountId}:${account.authState}:${account.serverInstanceId}:${account.serverUrl}:${account.userId}`
+  )).join('|'), [accounts]);
 
   useEffect(() => {
     void syncNativeQuickReplyCredentials();
@@ -179,14 +208,14 @@ export function PushNotificationBridge() {
     return () => {
       subscription.remove();
     };
-  }, [serverUrl, user]);
+  }, [accountRegistrationKey, serverUrl, user]);
 
   useEffect(() => {
     if (!serverUrl || !user) {
       return;
     }
 
-    void registerForPushNotifications(serverUrl, language).catch((error) => {
+    const register = () => registerForPushNotificationsOnce(language).catch((error) => {
       logMessageDeliveryDiagnostic('push-token-registration-failed', {
         language,
         message: error instanceof Error ? error.message : String(error),
@@ -194,11 +223,35 @@ export function PushNotificationBridge() {
         userId: user.id,
       });
     });
-  }, [language, serverUrl, user?.id]);
+
+    void register();
+    const appStateSubscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') void register();
+    });
+    const pushTokenSubscription = Notifications.addPushTokenListener((token) => {
+      if (typeof token.data !== 'string') return;
+      void registerPushTokenForSavedAccounts({
+        locale: language,
+        platform: Platform.OS,
+        provider: token.type === 'ios' ? 'apns' : 'fcm',
+        token: token.data,
+      }).catch((error) => {
+        logMessageDeliveryDiagnostic('rotated-push-token-registration-failed', {
+          message: error instanceof Error ? error.message : String(error),
+          platform: Platform.OS,
+        });
+      });
+    });
+
+    return () => {
+      appStateSubscription.remove();
+      pushTokenSubscription.remove();
+    };
+  }, [accountRegistrationKey, language, serverUrl, user]);
 
   useEffect(() => {
-    void syncApplicationIconBadge(unreadConversationCount);
-  }, [unreadConversationCount]);
+    void syncApplicationIconBadge();
+  }, [accounts, unreadConversationCount]);
 
   useEffect(() => {
     let isMounted = true;
@@ -234,6 +287,35 @@ export function PushNotificationBridge() {
       isMounted = false;
       subscription.remove();
     };
+  }, [serverUrl]);
+
+  useEffect(() => {
+    let isDraining = false;
+
+    const drainPendingNativeMessage = async () => {
+      if (isDraining) {
+        return;
+      }
+
+      isDraining = true;
+      try {
+        const url = await consumeNativePendingMessageUrl();
+        if (url) {
+          await handleIncomingCallUrl(url, useAppStore.getState().serverUrl ?? serverUrl);
+        }
+      } finally {
+        isDraining = false;
+      }
+    };
+
+    void drainPendingNativeMessage();
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
+        void drainPendingNativeMessage();
+      }
+    });
+
+    return () => subscription.remove();
   }, [serverUrl]);
 
   useEffect(() => {
@@ -284,24 +366,12 @@ export function PushNotificationBridge() {
 
   useEffect(() => {
     const subscription = Notifications.addNotificationResponseReceivedListener((response) => {
-      void acknowledgePushDelivery(getNotificationTaskData(response.notification.request.content.data));
-      void handleNotificationData(
-        response.notification.request.content.data as IncomingCallNotificationData,
-        response.actionIdentifier,
-        serverUrl,
-        response.userText,
-      );
+      void processNotificationResponse(response, serverUrl);
     });
 
     void Notifications.getLastNotificationResponseAsync().then((response) => {
       if (response) {
-        void acknowledgePushDelivery(getNotificationTaskData(response.notification.request.content.data));
-        void handleNotificationData(
-          response.notification.request.content.data as IncomingCallNotificationData,
-          response.actionIdentifier,
-          serverUrl,
-          response.userText,
-        );
+        void processNotificationResponse(response, serverUrl);
       }
     });
 
@@ -313,31 +383,29 @@ export function PushNotificationBridge() {
   return null;
 }
 
-async function syncApplicationIconBadge(count = useAppStore.getState().unreadConversationIds.length) {
+async function syncApplicationIconBadge() {
   if (Platform.OS !== 'ios') {
     return;
   }
 
+  const state = useAppStore.getState();
+  const count = state.accounts.reduce((total, account) => (
+    total + (
+      account.accountId === state.activeAccountId
+        ? state.unreadConversationIds.length
+        : account.unreadConversationIds?.length ?? 0
+    )
+  ), 0);
   await Notifications.setBadgeCountAsync(Math.max(0, count)).catch(() => undefined);
 }
 
 async function syncNativeQuickReplyCredentials() {
-  const [serverUrl, token, isDecoyOffline, user] = await Promise.all([
-    getServerUrl(),
-    getAuthToken(),
-    getStoredDecoyOffline(),
-    getStoredUser<unknown>(),
-  ]);
-
-  if (serverUrl && token && user && !isDecoyOffline) {
-    setNativeQuickReplyCredentials(serverUrl, token);
-    return;
-  }
-
-  clearNativeQuickReplyCredentials();
+  const isDecoyOffline = await getStoredDecoyOffline();
+  if (isDecoyOffline) return;
+  await syncNativeAccountCredentials();
 }
 
-async function registerForPushNotifications(serverUrl: string, locale: AppLanguage) {
+async function registerForPushNotifications(locale: AppLanguage) {
   if (!Device.isDevice) {
     return;
   }
@@ -393,7 +461,7 @@ async function registerForPushNotifications(serverUrl: string, locale: AppLangua
     const voipToken = await registerIosVoipPushTokenWithTimeout();
 
     if (voipToken) {
-      await registerPushToken(serverUrl, {
+      await registerPushTokenForSavedAccounts({
         locale,
         platform: 'ios',
         provider: 'apns_voip',
@@ -413,22 +481,123 @@ async function registerForPushNotifications(serverUrl: string, locale: AppLangua
 
   const nativeToken = await Notifications.getDevicePushTokenAsync();
 
-  await registerPushToken(serverUrl, {
+  await registerPushTokenForSavedAccounts({
     locale,
     platform: Platform.OS,
     provider: nativeToken.type === 'ios' ? 'apns' : 'fcm',
     token: nativeToken.data,
   });
 
-  const projectId = Constants.expoConfig?.extra?.eas?.projectId ?? Constants.easConfig?.projectId;
-  const expoToken = await Notifications.getExpoPushTokenAsync(projectId ? { projectId } : undefined);
+}
 
-  await registerPushToken(serverUrl, {
-    locale,
-    platform: Platform.OS,
-    provider: 'expo',
-    token: expoToken.data,
+function registerForPushNotificationsOnce(locale: AppLanguage) {
+  if (activePushRegistration) return activePushRegistration;
+  activePushRegistration = registerForPushNotifications(locale).finally(() => {
+    activePushRegistration = null;
   });
+  return activePushRegistration;
+}
+
+async function registerPushTokenForSavedAccounts(input: { locale: AppLanguage; platform: string; provider: 'apns' | 'apns_voip' | 'expo' | 'fcm'; token: string }) {
+  const accounts = await listSavedAccounts();
+  const sessions = (await Promise.all(accounts.map((account) => getAccountSession(account.accountId))))
+    .filter((session): session is NonNullable<typeof session> => !!session && session.authState === 'authenticated');
+  const results = await Promise.allSettled(sessions.map((session) => (
+    registerPushToken(session.serverUrl, input, session.token)
+  )));
+  const failures = results.flatMap((result, index) => result.status === 'rejected'
+    ? [{ accountId: sessions[index].accountId, reason: result.reason, serverUrl: sessions[index].serverUrl }]
+    : []);
+
+  failures.forEach((failure) => {
+    logMessageDeliveryDiagnostic('account-push-token-registration-failed', {
+      accountId: failure.accountId,
+      message: failure.reason instanceof Error ? failure.reason.message : String(failure.reason),
+      provider: input.provider,
+      serverUrl: failure.serverUrl,
+    });
+  });
+
+  if (failures.length > 0) {
+    throw failures[0].reason instanceof Error
+      ? failures[0].reason
+      : new Error('Push token registration failed for one or more accounts');
+  }
+}
+
+function doesNotificationTargetActiveAccount(data: IncomingCallNotificationData) {
+  if (typeof data.accountUserId !== 'string') return true;
+  const active = useAppStore.getState();
+  const account = active.accounts.find((item) => item.accountId === active.activeAccountId);
+  return !!account && doesNotificationMatchAccount(data, account);
+}
+
+async function isNotificationForActiveAccount(data: IncomingCallNotificationData) {
+  if (typeof data.accountUserId !== 'string') return true;
+  const active = await getActiveAccount();
+  return !!active && doesNotificationMatchAccount(data, active);
+}
+
+async function activateNotificationAccount(data: IncomingCallNotificationData) {
+  if (typeof data.accountUserId !== 'string') return null;
+  const account = (await listSavedAccounts()).find((item) => doesNotificationMatchAccount(data, item));
+  if (!account) return null;
+  if (getActiveAccountIdSync() !== account.accountId) {
+    await useAppStore.getState().switchAccount(account.accountId);
+  }
+  await waitForNavigationAccount(account.accountId);
+  return account.serverUrl;
+}
+
+async function processNotificationResponse(
+  response: Notifications.NotificationResponse,
+  fallbackServerUrl: string | null,
+) {
+  const responseKey = `${response.notification.request.identifier}:${response.actionIdentifier}`;
+  if (handledNotificationResponseKeys.has(responseKey)) return;
+  if (handledNotificationResponseKeys.size >= 100) handledNotificationResponseKeys.clear();
+  handledNotificationResponseKeys.add(responseKey);
+
+  const data = getNotificationTaskData(response.notification.request.content.data);
+
+  try {
+    await acknowledgePushDelivery(data);
+    const targetServerUrl = await activateNotificationAccount(data) ?? fallbackServerUrl;
+    await handleNotificationData(data, response.actionIdentifier, targetServerUrl, response.userText);
+  } catch (error) {
+    logMessageDeliveryDiagnostic('notification-response-failed', {
+      message: error instanceof Error ? error.message : String(error),
+      notificationId: response.notification.request.identifier,
+    });
+  } finally {
+    await Notifications.clearLastNotificationResponseAsync().catch(() => undefined);
+  }
+}
+
+function normalizeAccountServerUrl(value: string) {
+  return value.trim().toLowerCase().replace(/\/+$/, '');
+}
+
+function doesNotificationMatchAccount(
+  data: IncomingCallNotificationData,
+  account: { serverInstanceId: string; serverUrl: string; userId: string },
+) {
+  if (typeof data.accountUserId !== 'string' || account.userId !== data.accountUserId) return false;
+  const matchesInstance = typeof data.serverInstanceId === 'string' && account.serverInstanceId === data.serverInstanceId;
+  const matchesUrl = typeof data.accountServerUrl === 'string' &&
+    normalizeAccountServerUrl(account.serverUrl) === normalizeAccountServerUrl(data.accountServerUrl);
+  return matchesInstance || matchesUrl;
+}
+
+async function noteNotificationAccountUnread(data: IncomingCallNotificationData, conversationId: string) {
+  if (typeof data.accountUserId !== 'string') return;
+  const accounts = await noteAccountUnreadConversation({
+    accountServerUrl: typeof data.accountServerUrl === 'string' ? data.accountServerUrl : undefined,
+    accountUserId: data.accountUserId,
+    conversationId,
+    serverInstanceId: typeof data.serverInstanceId === 'string' ? data.serverInstanceId : undefined,
+  });
+  useAppStore.setState({ accounts });
 }
 
 async function registerIosVoipPushTokenWithTimeout() {
@@ -594,12 +763,43 @@ async function handleNotificationData(
 }
 
 export async function handleIncomingCallUrl(url: string, serverUrl: string | null) {
+  const existing = handlingIncomingCallUrls.get(url);
+  if (existing) {
+    return existing;
+  }
+
+  const operation = handleIncomingCallUrlOnce(url, serverUrl);
+  handlingIncomingCallUrls.set(url, operation);
+
+  try {
+    await operation;
+  } finally {
+    if (handlingIncomingCallUrls.get(url) === operation) {
+      handlingIncomingCallUrls.delete(url);
+    }
+  }
+}
+
+async function handleIncomingCallUrlOnce(url: string, serverUrl: string | null) {
   try {
     if (handledIncomingCallUrls.has(url)) {
       return;
     }
 
     const parsed = new URL(url);
+    const accountUserId = parsed.searchParams.get('accountUserId');
+    const serverInstanceId = parsed.searchParams.get('serverInstanceId');
+    const accountServerUrl = parsed.searchParams.get('accountServerUrl');
+    const hasAccountRoute = !!accountUserId && (!!serverInstanceId || !!accountServerUrl);
+    const routedServerUrl = await activateNotificationAccount({
+      accountServerUrl,
+      accountUserId,
+      serverInstanceId,
+    }).catch(() => null);
+    if (hasAccountRoute && !routedServerUrl) {
+      return;
+    }
+    const effectiveServerUrl = routedServerUrl ?? serverUrl;
 
     if (
       (parsed.protocol !== 'meetvap:' && parsed.protocol !== 'com.meetvap.app:') ||
@@ -614,8 +814,14 @@ export async function handleIncomingCallUrl(url: string, serverUrl: string | nul
     const conversationId = parsed.searchParams.get('conversationId');
 
     if (parsed.hostname === 'message' && conversationId) {
+      void Promise.allSettled([
+        useAppStore.getState().loadConversations('', 'all', { refresh: true }),
+        useAppStore.getState().loadMessages(conversationId, { hydrate: false }),
+      ]);
       navigateToChat({
         conversationId,
+        openReason: 'notification',
+        targetMessageId: parsed.searchParams.get('messageId') || undefined,
         title: parsed.searchParams.get('title') || 'Chat',
       });
       return;
@@ -641,8 +847,8 @@ export async function handleIncomingCallUrl(url: string, serverUrl: string | nul
 
     if (parsed.searchParams.get('action') === 'decline') {
       endIosCallKitCall(callId);
-      if (serverUrl) {
-        await endCall(serverUrl, callId).catch(() => undefined);
+      if (effectiveServerUrl) {
+        await endCall(effectiveServerUrl, callId).catch(() => undefined);
       }
       await useAppStore.getState().recordCallLog({
         conversationId,
@@ -678,8 +884,8 @@ export async function handleIncomingCallUrl(url: string, serverUrl: string | nul
       title: parsed.searchParams.get('title') || 'Incoming call',
     });
 
-    if (serverUrl) {
-      void ringCall(serverUrl, callId).catch(() => undefined);
+    if (effectiveServerUrl) {
+      void ringCall(effectiveServerUrl, callId).catch(() => undefined);
     }
   } catch {
     // Ignore URLs that do not belong to the incoming-call route.

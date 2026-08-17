@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client';
 import QRCode from 'qrcode';
 import { io, Socket } from 'socket.io-client';
-import { Ban, Bell, BellOff, BookUser, Camera, Check, CheckCheck, Contact, Copy, Download, Eye, File, Flag, Image, Link, LoaderCircle, Maximize2, MessageCircle, MessageCirclePlus, Mic, MicOff, Minimize2, MoreVertical, Paperclip, Pause, Pencil, Phone, PhoneCall, PhoneIncoming, PhoneOff, PhoneOutgoing, Pin, Play, Plus, Reply, ScreenShare, Search, Send, Settings as SettingsIcon, Share2, Shield, Smile, Star, Trash2, Type, UserPlus, Users, Video, Volume2, VolumeX, X } from 'lucide-react';
+import { Ban, Bell, BellOff, BookUser, Camera, Check, CheckCheck, ChevronDown, Contact, Copy, Download, Eye, File, Flag, Image, Link, LoaderCircle, Maximize2, MessageCircle, MessageCirclePlus, Mic, MicOff, Minimize2, MoreVertical, Paperclip, Pause, Pencil, Phone, PhoneCall, PhoneIncoming, PhoneOff, PhoneOutgoing, Pin, Play, Plus, Reply, ScreenShare, Search, Send, Settings as SettingsIcon, Share2, Shield, Smile, Star, Trash2, Type, UserPlus, Users, Video, Volume2, VolumeX, X } from 'lucide-react';
 import { Room, RoomEvent, Track, VideoPreset, VideoPresets, VideoQuality } from 'livekit-client';
 import type { LocalTrack, LocalVideoTrack, RemoteTrack, RemoteTrackPublication, ScreenShareCaptureOptions, TrackPublishOptions, VideoCaptureOptions } from 'livekit-client';
 
@@ -180,6 +180,7 @@ const translations = {
     read: 'Read',
     pin: 'Pin',
     reply: 'Reply',
+    scrollToEnd: 'Scroll to the end',
     report: 'Report',
     select: 'Select',
     selectedMessages: 'Selected messages',
@@ -372,6 +373,7 @@ const translations = {
     read: 'Okundu',
     pin: 'Sabitle',
     reply: 'Yanıtla',
+    scrollToEnd: 'Sona git',
     report: 'Bildir',
     select: 'Seç',
     selectedMessages: 'Seçilen mesajlar',
@@ -564,6 +566,7 @@ const translations = {
     read: 'Прочитано',
     pin: 'Закрепить',
     reply: 'Ответить',
+    scrollToEnd: 'В конец чата',
     report: 'Пожаловаться',
     select: 'Выбрать',
     selectedMessages: 'Выбранные сообщения',
@@ -1380,6 +1383,8 @@ function App() {
   const [isGroupMemberPickerOpen, setGroupMemberPickerOpen] = useState(false);
   const [selectedGroupMemberIds, setSelectedGroupMemberIds] = useState<Set<string>>(() => new Set());
   const [replyingTo, setReplyingTo] = useState<Message | null>(null);
+  const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
+  const [isScrollToEndVisible, setScrollToEndVisible] = useState(false);
   const [forwardingMessage, setForwardingMessage] = useState<Message | null>(null);
   const [pinnedMessages, setPinnedMessages] = useState<PinnedMessage[]>([]);
   const [isPinnedMessagesOpen, setPinnedMessagesOpen] = useState(false);
@@ -1436,6 +1441,11 @@ function App() {
   const composerTextareaRef = useRef<HTMLTextAreaElement>(null);
   const messagesContainerRef = useRef<HTMLElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messageElementsRef = useRef(new Map<string, HTMLDivElement>());
+  const selectedConversationIdRef = useRef<string | null>(selectedConversationId);
+  const shouldStickToMessagesEndRef = useRef(true);
+  const suppressNextMessagesAutoScrollRef = useRef(false);
+  const messageHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const voiceChunksRef = useRef<Blob[]>([]);
   const voiceRecordingStartedAtRef = useRef(0);
@@ -1910,24 +1920,82 @@ function App() {
     });
   }, []);
 
+  const updateMessagesScrollPosition = useCallback(() => {
+    const container = messagesContainerRef.current;
+
+    if (!container) {
+      return;
+    }
+
+    const distanceFromEnd = container.scrollHeight - container.scrollTop - container.clientHeight;
+    const isNearEnd = distanceFromEnd <= 96;
+
+    shouldStickToMessagesEndRef.current = isNearEnd;
+    setScrollToEndVisible(!isNearEnd);
+  }, []);
+
+  const scrollMessagesToEnd = useCallback((behavior: ScrollBehavior = 'smooth') => {
+    shouldStickToMessagesEndRef.current = true;
+    setScrollToEndVisible(false);
+    messagesContainerRef.current?.scrollTo({
+      behavior,
+      top: messagesContainerRef.current.scrollHeight,
+    });
+  }, []);
+
+  const scrollToMessageElement = useCallback((messageId: string) => {
+    const element = messageElementsRef.current.get(messageId);
+
+    if (!element) {
+      return false;
+    }
+
+    shouldStickToMessagesEndRef.current = false;
+    element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    setHighlightedMessageId(messageId);
+
+    if (messageHighlightTimerRef.current) {
+      clearTimeout(messageHighlightTimerRef.current);
+    }
+    messageHighlightTimerRef.current = setTimeout(() => {
+      messageHighlightTimerRef.current = null;
+      setHighlightedMessageId((current) => current === messageId ? null : current);
+    }, 1_800);
+    return true;
+  }, []);
+
+  useEffect(() => {
+    selectedConversationIdRef.current = selectedConversationId;
+    shouldStickToMessagesEndRef.current = true;
+    suppressNextMessagesAutoScrollRef.current = false;
+    setScrollToEndVisible(false);
+    setHighlightedMessageId(null);
+  }, [selectedConversationId]);
+
+  useEffect(() => () => {
+    if (messageHighlightTimerRef.current) {
+      clearTimeout(messageHighlightTimerRef.current);
+    }
+  }, []);
+
   useEffect(() => {
     if (activePanelTab !== 'chats' || !selectedConversationId || isLoading) {
       return undefined;
     }
 
-    const frame = requestAnimationFrame(() => {
-      const container = messagesContainerRef.current;
+    if (suppressNextMessagesAutoScrollRef.current) {
+      suppressNextMessagesAutoScrollRef.current = false;
+      return undefined;
+    }
 
-      if (container) {
-        container.scrollTop = container.scrollHeight;
-        return;
-      }
+    if (!shouldStickToMessagesEndRef.current) {
+      return undefined;
+    }
 
-      messagesEndRef.current?.scrollIntoView({ block: 'end' });
-    });
+    const frame = requestAnimationFrame(() => scrollMessagesToEnd('auto'));
 
     return () => cancelAnimationFrame(frame);
-  }, [activePanelTab, isLoading, messages.length, selectedConversationId]);
+  }, [activePanelTab, isLoading, messages.length, scrollMessagesToEnd, selectedConversationId]);
 
   useEffect(() => {
     const textarea = composerTextareaRef.current;
@@ -2289,6 +2357,47 @@ function App() {
       };
     });
   }, [user?.id]);
+
+  const jumpToRepliedMessage = useCallback(async (messageId: string) => {
+    const conversationId = selectedConversationIdRef.current;
+
+    if (!conversationId) {
+      return;
+    }
+
+    if (scrollToMessageElement(messageId)) {
+      return;
+    }
+
+    try {
+      const response = await authedRequest<{ message: Message }>(
+        `/conversations/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(messageId)}`,
+      );
+
+      if (selectedConversationIdRef.current !== conversationId) {
+        return;
+      }
+
+      suppressNextMessagesAutoScrollRef.current = true;
+      mergeConversationMessages(conversationId, [response.message]);
+
+      let attemptsRemaining = 12;
+      const scrollWhenRendered = () => {
+        if (selectedConversationIdRef.current !== conversationId || scrollToMessageElement(messageId)) {
+          return;
+        }
+
+        attemptsRemaining -= 1;
+        if (attemptsRemaining > 0) {
+          requestAnimationFrame(scrollWhenRendered);
+        }
+      };
+
+      requestAnimationFrame(scrollWhenRendered);
+    } catch {
+      // Deleted or locally removed reply targets are intentionally unavailable.
+    }
+  }, [authedRequest, mergeConversationMessages, scrollToMessageElement]);
 
   const updateConversationPreviewFromMessage = useCallback((message: Message) => {
     setConversations((current) => {
@@ -5953,7 +6062,8 @@ function App() {
             <button onClick={() => setDismissedGroupInviteId(null)}>{t('reviewInvitation')}</button>
           </section>
         ) : activePanelTab === 'chats' ? (
-        <section className="messages" ref={messagesContainerRef}>
+        <div className="messages-stage">
+        <section className="messages" onScroll={updateMessagesScrollPosition} ref={messagesContainerRef}>
           {latestPinnedMessage ? (
             <button className="pinned-banner" onClick={() => {
               setPinnedSearchQuery('');
@@ -5972,11 +6082,19 @@ function App() {
             ) : (
               <div
                 key={row.message.id}
-                className={`message ${row.message.senderId === user?.id ? 'mine' : ''} ${selectedMessageIds.has(row.message.id) ? 'selected' : ''} ${isMessageSelectionActive ? 'selecting' : ''}`}
+                className={`message ${row.message.senderId === user?.id ? 'mine' : ''} ${selectedMessageIds.has(row.message.id) ? 'selected' : ''} ${isMessageSelectionActive ? 'selecting' : ''} ${highlightedMessageId === row.message.id ? 'reply-target-highlighted' : ''}`}
+                data-message-id={row.message.id}
                 onClick={isMessageSelectionActive ? () => toggleSelectedMessage(row.message.id) : undefined}
                 onContextMenu={(event) => {
                   event.preventDefault();
                   setContextMenu({ kind: 'message', message: row.message, x: event.clientX, y: event.clientY });
+                }}
+                ref={(element) => {
+                  if (element) {
+                    messageElementsRef.current.set(row.message.id, element);
+                  } else {
+                    messageElementsRef.current.delete(row.message.id);
+                  }
                 }}
               >
                 {isMessageSelectionActive ? (
@@ -5993,6 +6111,7 @@ function App() {
                   onContentReady={(message) => void acknowledgeWebMessageContent(message.conversationId, [message], true).catch(() => undefined)}
                   t={t}
                   token={token}
+                  onReplyClick={(messageId) => void jumpToRepliedMessage(messageId)}
                 />
                 {attachmentUploadsByMessageId[row.message.id] ? (
                   <AttachmentUploadProgress
@@ -6009,6 +6128,13 @@ function App() {
           ))}
           <div ref={messagesEndRef} />
         </section>
+        {isScrollToEndVisible ? (
+          <button className="scroll-to-end-button" onClick={() => scrollMessagesToEnd()} title={t('scrollToEnd')}>
+            <ChevronDown aria-hidden size={20} />
+            <span>{t('scrollToEnd')}</span>
+          </button>
+        ) : null}
+        </div>
         ) : (
           <section className="empty-main-panel">
             <strong>{getMainPanelTitle(activePanelTab, selectedConversation, selectedPeer, t)}</strong>
@@ -7801,6 +7927,7 @@ function MessageContent({
   message,
   onOpenMedia,
   onContentReady,
+  onReplyClick,
   t,
   token,
 }: {
@@ -7808,16 +7935,20 @@ function MessageContent({
   message: Message;
   onOpenMedia?: (viewer: MediaViewerState) => void;
   onContentReady?: (message: Message) => void;
+  onReplyClick?: (messageId: string) => void;
   t: (key: TranslationKey) => string;
   token: string | null;
 }) {
   const previewUrl = getLocalPreviewUrl(message);
   const replyPreview = getReplyPreview(message);
+  const replyElement = replyPreview
+    ? <MessageReplyPreview onClick={onReplyClick} reply={replyPreview} />
+    : null;
 
   if (message.kind === 'CALL') {
     return (
       <>
-        {replyPreview ? <MessageReplyPreview reply={replyPreview} /> : null}
+        {replyElement}
         <p>{message.body || 'Call'}</p>
       </>
     );
@@ -7826,7 +7957,7 @@ function MessageContent({
   if (message.kind === 'IMAGE' && message.media) {
     return (
       <>
-        {replyPreview ? <MessageReplyPreview reply={replyPreview} /> : null}
+        {replyElement}
         <AuthenticatedImageMedia cacheConfig={cacheConfig} caption={message.body} media={message.media} onContentReady={() => onContentReady?.(message)} onOpenMedia={onOpenMedia} previewUrl={previewUrl} token={token} />
       </>
     );
@@ -7835,7 +7966,7 @@ function MessageContent({
   if (message.kind === 'VIDEO' && message.media) {
     return (
       <>
-        {replyPreview ? <MessageReplyPreview reply={replyPreview} /> : null}
+        {replyElement}
         <AuthenticatedVideoMedia cacheConfig={cacheConfig} caption={message.body} media={message.media} onContentReady={() => onContentReady?.(message)} onOpenMedia={onOpenMedia} previewUrl={previewUrl} token={token} />
       </>
     );
@@ -7844,7 +7975,7 @@ function MessageContent({
   if (message.kind === 'VOICE' && message.media) {
     return (
       <>
-        {replyPreview ? <MessageReplyPreview reply={replyPreview} /> : null}
+        {replyElement}
         <AuthenticatedVoiceMedia
           cacheConfig={cacheConfig}
           media={message.media}
@@ -7860,7 +7991,7 @@ function MessageContent({
   if (message.kind === 'FILE' && message.media) {
     return (
       <>
-        {replyPreview ? <MessageReplyPreview reply={replyPreview} /> : null}
+        {replyElement}
         <AuthenticatedFileMedia media={message.media} onContentReady={() => onContentReady?.(message)} token={token} />
       </>
     );
@@ -7868,7 +7999,7 @@ function MessageContent({
 
   return (
     <>
-      {replyPreview ? <MessageReplyPreview reply={replyPreview} /> : null}
+      {replyElement}
       <p>{renderLinkedMessageText(message.body)}</p>
     </>
   );
@@ -7921,12 +8052,36 @@ function extractLinksFromText(body: string): Array<{ href: string; text: string 
   return links;
 }
 
-function MessageReplyPreview({ reply }: { reply: { body?: string; kind?: string; senderName?: string } }) {
-  return (
-    <div className="message-reply-preview">
+function MessageReplyPreview({
+  onClick,
+  reply,
+}: {
+  onClick?: (messageId: string) => void;
+  reply: { body?: string; id?: string; kind?: string; senderName?: string };
+}) {
+  const targetMessageId = reply.id;
+  const content = (
+    <>
       {reply.senderName ? <strong>{reply.senderName}</strong> : null}
       <span>{reply.body || reply.kind || 'Message'}</span>
-    </div>
+    </>
+  );
+
+  if (!onClick || !targetMessageId) {
+    return <div className="message-reply-preview">{content}</div>;
+  }
+
+  return (
+    <button
+      className="message-reply-preview clickable"
+      onClick={(event) => {
+        event.stopPropagation();
+        onClick(targetMessageId);
+      }}
+      type="button"
+    >
+      {content}
+    </button>
   );
 }
 
@@ -9752,11 +9907,13 @@ function getReplyPreview(message: Message) {
     return null;
   }
 
+  const id = 'id' in replyTo && typeof replyTo.id === 'string' ? replyTo.id : undefined;
+
   const body = 'body' in replyTo && typeof replyTo.body === 'string' ? replyTo.body : undefined;
   const kind = 'kind' in replyTo && typeof replyTo.kind === 'string' ? replyTo.kind : undefined;
   const senderName = 'senderName' in replyTo && typeof replyTo.senderName === 'string' ? replyTo.senderName : undefined;
 
-  return { body, kind, senderName };
+  return { body, id, kind, senderName };
 }
 
 function getPastedGalleryFile(clipboardData: DataTransfer) {

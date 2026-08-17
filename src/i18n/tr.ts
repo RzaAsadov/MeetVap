@@ -922,5 +922,11 @@ export const tr: Record<string, TranslationValue> = {
   welcomeHeroTitle: "Özel mesajlaşma, doğru şekilde",
   welcomeHeroSubtitle: "Güvenle konuş ve ara — MeetVap sohbetlerini yalnızca sana ait tutar.",
   welcomeNewUserCta: "Yani bir hesap oluştur",
-  welcomeExistingUserCta: "Zaten bir hesabım var"  
+  welcomeExistingUserCta: "Zaten bir hesabım var",
+  accounts: 'Hesaplar', switchAccount: 'Hesap değiştir', addAccount: 'Hesap ekle', removeAccount: 'Hesabı kaldır',
+  removeAccountConfirmation: ({ name }) => `${name} bu cihazdan kaldırılsın mı? Bu hesabın yerel verilerine artık erişilemez.`,
+  accountSwitchFailed: 'Hesap değiştirilemedi', accountNeedsSignIn: 'Tekrar giriş yap', accountSuspended: 'Hesap askıya alındı',
+  accountLimitTitle: 'Hesap sınırına ulaşıldı', accountLimitReached: 'Bu cihazda en fazla 5 hesap tutabilirsiniz. Yeni hesap eklemeden önce bir hesabı kaldırın.',
+  endCallBeforeSwitchingAccount: 'Hesap değiştirmeden önce aktif aramayı bitirin.', stopLiveLocationBeforeSwitchingAccount: 'Hesap değiştirmeden önce canlı konum paylaşımını durdurun.',
+  serverAliasNotFound: 'Sunucu takma adı kullanılamıyor', editUsername: 'Kullanıcı adını düzenle',
 };

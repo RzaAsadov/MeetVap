@@ -3,6 +3,7 @@ import * as VideoThumbnails from 'expo-video-thumbnails';
 
 import { getMediaDownloadRecord, listPendingMediaDownloads, removeMediaDownloadRecord, saveMediaDownloadRecord } from './messageStore';
 import { waitForForegroundIdle } from './foregroundWorkScheduler';
+import { getActiveAccountSync } from './accountRegistry';
 
 const MAX_CONCURRENT_MEDIA_DOWNLOADS = 2;
 const CHUNK_SIZE_BYTES = 1024 * 1024;
@@ -248,6 +249,30 @@ export function subscribeToMediaDownloadProgress(listener: (progress: MediaDownl
 
 export function getMediaDownloadProgress(messageId: string) {
   return progressByMessageId.get(messageId) ?? null;
+}
+
+export async function prepareMediaCacheForAccountSwitch() {
+  await Promise.allSettled([...activeDownloadTasks.values()].map((task) => task.pauseAsync()));
+  await Promise.allSettled([...activeDownloads.values(), ...activeThumbnailRequests.values()]);
+  activeDownloads.clear();
+  activeDownloadTasks.clear();
+  activeThumbnailRequests.clear();
+  rememberedThumbnailUris.clear();
+  downloadQueue.splice(0, downloadQueue.length);
+  thumbnailQueue.splice(0, thumbnailQueue.length);
+  progressByMessageId.clear();
+  canceledMessageIds.clear();
+  pausedMessageIds.clear();
+  resumeRequestedMessageIds.clear();
+}
+
+export async function deleteAccountMediaCache(accountId: string, usesLegacyPaths: boolean) {
+  if (!FileSystem.documentDirectory) return;
+  const suffix = usesLegacyPaths ? '' : `/${accountId}`;
+  await Promise.all([
+    FileSystem.deleteAsync(`${FileSystem.documentDirectory}${DOCUMENT_MEDIA_DIRECTORY_NAME}${suffix}`, { idempotent: true }),
+    FileSystem.deleteAsync(`${FileSystem.documentDirectory}${VIDEO_THUMBNAIL_DIRECTORY_NAME}${suffix}`, { idempotent: true }),
+  ]).catch(() => undefined);
 }
 
 export function pauseMediaDownload(messageId: string) {
@@ -654,7 +679,12 @@ function getRebasedDocumentMediaUri(uri: string) {
     return null;
   }
 
-  const relativeMediaPath = uri.slice(markerIndex + marker.length);
+  let relativeMediaPath = uri.slice(markerIndex + marker.length);
+  const account = getActiveAccountSync();
+
+  if (account && account.databaseName !== 'meetvap_messages.db' && !relativeMediaPath.startsWith(`${account.accountId}/`)) {
+    relativeMediaPath = `${account.accountId}/${relativeMediaPath}`;
+  }
 
   return relativeMediaPath ? `${FileSystem.documentDirectory}${DOCUMENT_MEDIA_DIRECTORY_NAME}/${relativeMediaPath}` : null;
 }
@@ -664,7 +694,7 @@ function getDocumentMediaCacheDirectory() {
     throw new Error('Document directory is unavailable');
   }
 
-  return `${FileSystem.documentDirectory}${DOCUMENT_MEDIA_DIRECTORY_NAME}`;
+  return `${FileSystem.documentDirectory}${DOCUMENT_MEDIA_DIRECTORY_NAME}${getAccountMediaPathSuffix()}`;
 }
 
 function getDocumentVideoThumbnailCacheDirectory() {
@@ -672,7 +702,12 @@ function getDocumentVideoThumbnailCacheDirectory() {
     throw new Error('Document directory is unavailable');
   }
 
-  return `${FileSystem.documentDirectory}${VIDEO_THUMBNAIL_DIRECTORY_NAME}`;
+  return `${FileSystem.documentDirectory}${VIDEO_THUMBNAIL_DIRECTORY_NAME}${getAccountMediaPathSuffix()}`;
+}
+
+function getAccountMediaPathSuffix() {
+  const account = getActiveAccountSync();
+  return account && account.databaseName !== 'meetvap_messages.db' ? `/${account.accountId}` : '';
 }
 
 async function getVideoThumbnailCacheUri(input: {

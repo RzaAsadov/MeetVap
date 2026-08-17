@@ -220,6 +220,7 @@ fi
 sed \
   -e "s#__MAIN_SERVER_HOST__#$MAIN_SERVER_HOST#g" \
   -e "s#__MAIN_SERVER_KEY__#$MAIN_SERVER_KEY#g" \
+  -e "s#__SERVER_DOMAIN__#$SERVER_DOMAIN#g" \
   "$CONFIG_TEMPLATE" > generated/config.json
 
 cat > generated/admin-config.json <<EOF

@@ -176,7 +176,7 @@ async function processMessagePushJob(jobId: string) {
 }
 
 async function loadRecipientTokens(payload: z.infer<typeof payloadSchema>): Promise<StoredPushToken[]> {
-  return prisma.devicePushToken.findMany({
+  const tokens = await prisma.devicePushToken.findMany({
     select: {
       id: true,
       installationId: true,
@@ -184,6 +184,7 @@ async function loadRecipientTokens(payload: z.infer<typeof payloadSchema>): Prom
       platform: true,
       provider: true,
       token: true,
+      updatedAt: true,
       userId: true,
     },
     where: {
@@ -202,6 +203,8 @@ async function loadRecipientTokens(payload: z.infer<typeof payloadSchema>): Prom
       userId: { not: payload.senderId },
     },
   });
+
+  return tokens;
 }
 
 function addReceiptUrls(requestId: string, tokens: StoredPushToken[]) {

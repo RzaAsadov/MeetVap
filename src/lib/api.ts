@@ -5,6 +5,7 @@ import { MASK_HEADER, MASK_VERSION, maskPayload, unmaskPayload } from './payload
 import { notifyAuthSuspension } from './authSuspensionEvents';
 
 type RequestOptions = RequestInit & {
+  authToken?: string | null;
   maskBody?: boolean;
   serverUrl: string;
 };
@@ -20,8 +21,8 @@ const MEETVAP_PROHIBITED_NAME_MESSAGE = 'Using "MeetVap" is prohibited by system
 const OBJECTIONABLE_CONTENT_MESSAGE = 'This content is not allowed by MeetVap community rules';
 
 export async function apiRequest<T>(path: string, options: RequestOptions): Promise<T> {
-  const { maskBody: _maskBody, serverUrl, ...fetchOptions } = options;
-  const token = await getAuthToken();
+  const { authToken, maskBody: _maskBody, serverUrl, ...fetchOptions } = options;
+  const token = authToken === undefined ? await getAuthToken() : authToken;
   await initializeClientInstallationId();
   const headers = new Headers(options.headers);
   Object.entries(getClientRequestHeaders()).forEach(([key, value]) => {

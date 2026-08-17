@@ -2444,6 +2444,27 @@ export function CallRoomScreen({ navigation, route }: Props) {
     }
 
     const activeRoute = routes.find((item) => item.isActive);
+    const explicitExternalRouteDisappeared = hasExplicitCallAudioRouteSelection &&
+      explicitCallAudioRoute &&
+      (explicitCallAudioRoute.type === 'bluetooth' || explicitCallAudioRoute.type === 'wired') &&
+      !routes.some((item) => item.id === explicitCallAudioRoute?.id);
+
+    if (explicitExternalRouteDisappeared) {
+      logCallDebug('call-audio-explicit-external-route-disconnected', {
+        activeRouteId: activeRoute?.id,
+        activeRouteType: activeRoute?.type,
+        disconnectedRouteId: explicitCallAudioRoute?.id,
+        disconnectedRouteType: explicitCallAudioRoute?.type,
+      });
+      callAudioRouteSelectionVersion += 1;
+      hasExplicitCallAudioRouteSelection = false;
+      explicitCallAudioRoute = null;
+      requestedCallAudioRouteIdRef.current = null;
+    }
+
+    if (activeRoute?.type === 'speaker' || activeRoute?.type === 'earpiece') {
+      setSpeakerOn(activeRoute.type === 'speaker');
+    }
     const preferredExternalRoute = routes.find((item) => item.type === 'bluetooth') ??
       routes.find((item) => item.type === 'wired');
     const explicitExternalRoute = hasExplicitCallAudioRouteSelection &&

@@ -76,6 +76,7 @@ const EMPTY_CONVERSATIONS: Conversation[] = [];
 const CHAT_SCROLL_DIAGNOSTICS_ENABLED = false;
 const CHAT_LIFECYCLE_DIAGNOSTICS_ENABLED = false;
 const HOUR_MS = 60 * 60 * 1000;
+const VOICE_PLAYBACK_TAP_GUARD_MS = 450;
 const EMOJI_GROUPS = [
   { icon: 'happy-outline' as const, key: 'smileys', labelKey: 'emojiSmileys', emojis: ['😀', '😃', '😄', '😁', '😆', '😅', '😂', '🤣', '😊', '😇', '🙂', '🙃', '😉', '😍', '😘', '😋', '😎', '🤩', '🥳', '😏', '😢', '😭', '😤', '😡', '🤔', '🤗', '🤫', '😴', '😱', '🥰'] },
   { icon: 'hand-left-outline' as const, key: 'people', labelKey: 'emojiPeople', emojis: ['👍', '👎', '👌', '✌️', '🤞', '🤟', '🤘', '👏', '🙌', '🫶', '🙏', '💪', '👋', '🤝', '👀', '🧠', '👑', '💃', '🕺', '🏃', '🚶', '👨‍💻', '👩‍💻', '🧑‍🚀'] },
@@ -90,6 +91,9 @@ export function useChatRoomController({ navigation, route }: Props) {
   useMemo(() => refreshChatRoomStyles(), [isDarkMode]);
   const playerRef = useRef<ReturnType<typeof createAudioPlayer> | null>(null);
   const voicePlaybackRef = useRef<{ hasFinished: boolean; interval?: ReturnType<typeof setInterval>; messageId: string; player: ReturnType<typeof createAudioPlayer> } | null>(null);
+  const voicePlaybackOperationVersionRef = useRef(0);
+  const voicePlaybackPendingMessageIdRef = useRef<string | null>(null);
+  const voicePlaybackLastTapRef = useRef<{ at: number; messageId: string } | null>(null);
   const processedSharedItemsKeyRef = useRef<string | null>(null);
   const promptedGroupInviteIdRef = useRef<string | null>(null);
   const user = useAppStore((state) => state.user);
@@ -828,11 +832,11 @@ export function useChatRoomController({ navigation, route }: Props) {
     }
 
     if (!serverUrl) {
+      // Account switches briefly clear the active server while the target
+      // session and message database are activated. Keep the screen protected
+      // during that transition, but do not report a network/privacy failure.
+      // This effect runs again with the activated account's server URL.
       setScreenCaptureProtectionRequirement(protectionReason, true);
-      if (!hasShownScreenshotPrivacyWarningRef.current && isActive()) {
-        hasShownScreenshotPrivacyWarningRef.current = true;
-        Alert.alert(t('privacy'), t('screenshotPrivacyCheckFailed'));
-      }
       return;
     }
 
@@ -2566,22 +2570,71 @@ export function useChatRoomController({ navigation, route }: Props) {
       return;
     }
 
-    if (voicePlaybackRef.current?.messageId === message.id && playingVoiceId === message.id) {
+    const now = Date.now();
+    const lastTap = voicePlaybackLastTapRef.current;
+
+    if (
+      lastTap?.messageId === message.id &&
+      now - lastTap.at < VOICE_PLAYBACK_TAP_GUARD_MS
+    ) {
+      return;
+    }
+
+    voicePlaybackLastTapRef.current = { at: now, messageId: message.id };
+
+    if (voicePlaybackPendingMessageIdRef.current === message.id) {
+      return;
+    }
+
+    const currentPlayback = voicePlaybackRef.current;
+
+    if (
+      currentPlayback?.messageId === message.id &&
+      !currentPlayback.hasFinished &&
+      (currentPlayback.player.currentStatus.playing || playingVoiceId === message.id)
+    ) {
       stopActiveVoicePlayback();
       return;
     }
 
     if (voicePlaybackRef.current?.messageId !== message.id || voicePlaybackRef.current.hasFinished) {
       stopActiveVoicePlayback();
+      const operationVersion = voicePlaybackOperationVersionRef.current + 1;
+      voicePlaybackOperationVersionRef.current = operationVersion;
+      voicePlaybackPendingMessageIdRef.current = message.id;
       let player: ReturnType<typeof createAudioPlayer>;
 
       try {
         await restorePlaybackAudioMode();
+
+        if (voicePlaybackOperationVersionRef.current !== operationVersion) {
+          return;
+        }
+
         const playableUri = await getPlayableVoiceUri(message);
+
+        if (voicePlaybackOperationVersionRef.current !== operationVersion) {
+          return;
+        }
+
         player = createAudioPlayer({ uri: playableUri }, { downloadFirst: false });
+
+        if (voicePlaybackOperationVersionRef.current !== operationVersion) {
+          player.remove();
+          return;
+        }
       } catch (error) {
-        Alert.alert(t('voicePlaybackFailed'), error instanceof Error ? error.message : t('voicePlaybackTryAgain'));
+        if (voicePlaybackOperationVersionRef.current === operationVersion) {
+          Alert.alert(t('voicePlaybackFailed'), error instanceof Error ? error.message : t('voicePlaybackTryAgain'));
+        }
         return;
+      } finally {
+        if (
+          voicePlaybackOperationVersionRef.current === operationVersion &&
+          voicePlaybackPendingMessageIdRef.current === message.id
+        ) {
+          voicePlaybackPendingMessageIdRef.current = null;
+        }
       }
 
       voicePlaybackRef.current = {
@@ -2605,10 +2658,17 @@ export function useChatRoomController({ navigation, route }: Props) {
 
     try {
       await restorePlaybackAudioMode();
+
+      if (voicePlaybackRef.current !== playback) {
+        return;
+      }
+
       player.play();
     } catch (error) {
-      clearVoicePlayback();
-      Alert.alert(t('voicePlaybackFailed'), error instanceof Error ? error.message : t('voicePlaybackTryAgain'));
+      if (voicePlaybackRef.current === playback) {
+        clearVoicePlayback();
+        Alert.alert(t('voicePlaybackFailed'), error instanceof Error ? error.message : t('voicePlaybackTryAgain'));
+      }
       return;
     }
 
@@ -2642,6 +2702,8 @@ export function useChatRoomController({ navigation, route }: Props) {
   }
 
   function stopActiveVoicePlayback() {
+    voicePlaybackOperationVersionRef.current += 1;
+    voicePlaybackPendingMessageIdRef.current = null;
     const playback = voicePlaybackRef.current;
 
     if (!playback) {
@@ -2659,6 +2721,9 @@ export function useChatRoomController({ navigation, route }: Props) {
   }
 
   function clearVoicePlayback() {
+    voicePlaybackOperationVersionRef.current += 1;
+    voicePlaybackPendingMessageIdRef.current = null;
+
     if (voicePlaybackRef.current?.interval) {
       clearInterval(voicePlaybackRef.current.interval);
     }

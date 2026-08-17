@@ -85,6 +85,7 @@ button {
   min-height: 0;
   min-width: 0;
   overflow: hidden;
+  position: relative;
 }
 
 .topbar,
@@ -199,13 +200,44 @@ button {
   color: #ff7272;
 }
 
+.messages-stage {
+  min-height: 0;
+  min-width: 0;
+  position: relative;
+}
+
 .messages {
   background: #0b141a;
   display: flex;
   flex-direction: column;
+  height: 100%;
   min-height: 0;
   overflow: auto;
   padding: 18px;
+}
+
+.scroll-to-end-button {
+  align-items: center;
+  background: #20364a;
+  border: 1px solid #3d5872;
+  border-radius: 8px;
+  bottom: 14px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.38);
+  color: #edf5ff;
+  display: inline-flex;
+  font-size: 13px;
+  font-weight: 800;
+  gap: 6px;
+  left: 50%;
+  min-height: 40px;
+  padding: 0 12px;
+  position: absolute;
+  transform: translateX(-50%);
+  z-index: 4;
+}
+
+.scroll-to-end-button:hover {
+  background: #294760;
 }
 
 .date-divider {
@@ -283,6 +315,19 @@ button {
   box-shadow: 0 0 0 2px #45a3ff;
 }
 
+.message.reply-target-highlighted {
+  animation: reply-target-highlight 1.8s ease-out;
+}
+
+@keyframes reply-target-highlight {
+  0%, 38% {
+    box-shadow: 0 0 0 3px #45a3ff, 0 0 24px rgba(69, 163, 255, 0.62);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(69, 163, 255, 0);
+  }
+}
+
 .message-select-box {
   align-items: center;
   background: #101d2a;
@@ -327,6 +372,20 @@ button {
   margin: 0 0 8px;
   max-width: 100%;
   padding: 7px 9px;
+}
+
+button.message-reply-preview {
+  border-bottom: 0;
+  border-right: 0;
+  border-top: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  width: 100%;
+}
+
+.message-reply-preview.clickable:hover {
+  background: rgba(69, 163, 255, 0.18);
 }
 
 .message-reply-preview strong,

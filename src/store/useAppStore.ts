@@ -4,7 +4,7 @@ import { AppState as NativeAppState, Appearance } from 'react-native';
 
 import { ApiError } from '../lib/api';
 import { AppLanguage, isLanguagePreference, LanguagePreference, resolveLanguage, setI18nLanguage, t } from '../i18n';
-import { acknowledgeBulkMessageDeletions, acknowledgeBulkMessageEdits, acknowledgeBulkMessageStatusUpdates, acknowledgeMessageContent, acknowledgeMessageDeletions, acknowledgeMessageEdits, acknowledgeMessageStatusUpdates, addContact, addGroupAdmins as addGroupAdminsRequest, addGroupMembers as addGroupMembersRequest, blockUser, bulkDeleteConversations, createDirectConversation, createForwardedMessage, createGroupConversation, createMediaMessage, createScheduledMessage, createStatus as createStatusRequest, createTextMessage, createVoiceMessage, createVoiceRoomConversation, declineGroupInvite as declineGroupInviteRequest, deleteAccount as deleteAccountRequest, deleteCallMessageByCallId as deleteCallMessageByCallIdRequest, deleteContact as deleteContactRequest, deleteConversation as deleteConversationRequest, deleteConversationForAnyone as deleteConversationForAnyoneRequest, deleteGroup as deleteGroupRequest, deleteMessage as deleteMessageRequest, deleteScheduledMessage as deleteScheduledMessageRequest, deleteStatus as deleteStatusRequest, editMessage as editMessageRequest, getCatalogConfig, getHelpConfig, getMe, getStatusSummary, getSubscriptionStatus as getSubscriptionStatusRequest, listBlockedUsers, listBulkMessageDeletions, listBulkMessageStatusUpdates, listContacts, listConversationDeltas, listConversations, listMessageDeletions, listMessageEdits, listMessages, listMessageStatusUpdates, listPendingMessages, listStatuses, login, markAllConversationsRead, markConversationRead, markStatusViewed as markStatusViewedRequest, openDisappearingMessage as openDisappearingMessageRequest, reactToMessage as reactToMessageRequest, register, removeGroupMember as removeGroupMemberRequest, replyToStatus as replyToStatusRequest, reportContent, revokeGroupAdmin as revokeGroupAdminRequest, transferGroupOwnership as transferGroupOwnershipRequest, unblockUser, updateConversationMute as updateConversationMuteRequest, updateDisappearingMessages as updateDisappearingMessagesRequest, updateGroupAlias as updateGroupAliasRequest, updateGroupAvatar as updateGroupAvatarRequest, updateGroupSettings as updateGroupSettingsRequest, updateGroupTitle as updateGroupTitleRequest, updateMyAvatar, updateMyPassword, updateMyProfile, updatePrivacy as updatePrivacyRequest, uploadMediaFile } from '../lib/backend';
+import { acknowledgeBulkMessageDeletions, acknowledgeBulkMessageEdits, acknowledgeBulkMessageStatusUpdates, acknowledgeMessageContent, acknowledgeMessageDeletions, acknowledgeMessageEdits, acknowledgeMessageStatusUpdates, addContact, addGroupAdmins as addGroupAdminsRequest, addGroupMembers as addGroupMembersRequest, blockUser, bulkDeleteConversations, createDirectConversation, createForwardedMessage, createGroupConversation, createMediaMessage, createScheduledMessage, createStatus as createStatusRequest, createTextMessage, createVoiceMessage, createVoiceRoomConversation, declineGroupInvite as declineGroupInviteRequest, deleteAccount as deleteAccountRequest, deleteCallMessageByCallId as deleteCallMessageByCallIdRequest, deleteContact as deleteContactRequest, deleteConversation as deleteConversationRequest, deleteConversationForAnyone as deleteConversationForAnyoneRequest, deleteGroup as deleteGroupRequest, deleteMessage as deleteMessageRequest, deleteScheduledMessage as deleteScheduledMessageRequest, deleteStatus as deleteStatusRequest, editMessage as editMessageRequest, getCatalogConfig, getHelpConfig, getMe, getStatusSummary, getSubscriptionStatus as getSubscriptionStatusRequest, listBlockedUsers, listBulkMessageDeletions, listBulkMessageStatusUpdates, listContacts, listConversationDeltas, listConversations, listMessageDeletions, listMessageEdits, listMessages, listMessageStatusUpdates, listPendingMessages, listStatuses, login, markAllConversationsRead, markConversationRead, markStatusViewed as markStatusViewedRequest, openDisappearingMessage as openDisappearingMessageRequest, reactToMessage as reactToMessageRequest, register, removeGroupMember as removeGroupMemberRequest, replyToStatus as replyToStatusRequest, reportContent, revokeGroupAdmin as revokeGroupAdminRequest, transferGroupOwnership as transferGroupOwnershipRequest, unblockUser, unregisterPushTokens, updateConversationMute as updateConversationMuteRequest, updateDisappearingMessages as updateDisappearingMessagesRequest, updateGroupAlias as updateGroupAliasRequest, updateGroupAvatar as updateGroupAvatarRequest, updateGroupSettings as updateGroupSettingsRequest, updateGroupTitle as updateGroupTitleRequest, updateMyAvatar, updateMyPassword, updateMyProfile, updatePrivacy as updatePrivacyRequest, uploadMediaFile } from '../lib/backend';
 import type { ConversationMuteDurationMinutes } from '../lib/conversationMute';
 import type { ConversationListFilter } from '../lib/conversationList';
 import type { DisappearingMessagesDurationMinutes } from '../lib/disappearingMessages';
@@ -12,14 +12,18 @@ import type { ConversationDeltaCursor, MessageDeletionUpdate, MessageEdit, Messa
 import { formatConversationActivityTime } from '../lib/format';
 import { addForegroundChatActivityListener, isForegroundChatActive } from '../lib/foregroundChatActivity';
 import { isHighPriorityUiActivityActive, scheduleAfterForegroundIdle } from '../lib/foregroundWorkScheduler';
-import { downloadRemoteMediaFile, getMessageMediaCacheUri, isLocalMediaFileComplete, removePartialMediaDownloadsForMessages, resolveCachedMessageMediaUri, resolveLocalMediaFileUri, sanitizeCacheFileName } from '../lib/mediaCache';
+import { deleteAccountMediaCache, downloadRemoteMediaFile, getMessageMediaCacheUri, isLocalMediaFileComplete, prepareMediaCacheForAccountSwitch, removePartialMediaDownloadsForMessages, resolveCachedMessageMediaUri, resolveLocalMediaFileUri, sanitizeCacheFileName } from '../lib/mediaCache';
 import { logMessageDeliveryDiagnostic, refreshRemoteMessageDeliveryDiagnostics, shouldCollectMessageDeliveryDiagnostics } from '../lib/messageDeliveryDiagnostics';
 import { dismissAllMessageNotifications, dismissMessageNotificationsForConversation } from '../lib/messageNotifications';
-import { clearAuthToken, clearDeletedConversationAfter, clearStoredConversations, clearStoredSubscriptionStatus, clearStoredUser, eraseLocalAppData, eraseLocalChatData, getAuthToken, getDeletedConversationAfter, getDeletedConversationAfters, getServerUrl, getStoredAutoDownloadMedia, getStoredCallLogs, getStoredConversationMediaCacheCursor, getStoredConversationSyncCursors, getStoredConversations, getStoredDarkMode, getStoredDecoyOffline, getStoredErasePinDeletePeers, getStoredLanguage, getStoredLatestMessagesByConversationIds, getStoredMessages, getStoredMessagesByIds, getStoredOlderMessages, getStoredRecentMessages, getStoredSubscriptionStatus, getStoredUser, removeStoredConversationRecords, removeStoredMessageRecords, removeStoredMessages, setAuthToken, setDeletedConversationAfter, setServerUrl, setStoredAutoDownloadMedia, setStoredCallLogs, setStoredConversationMediaCacheCursor, setStoredConversationSyncCursors, setStoredDarkMode, setStoredDecoyOffline, setStoredLanguage, setStoredSubscriptionStatus, setStoredUser, upsertStoredConversations, upsertStoredMessages } from '../lib/storage';
-import { resolveLoginServer } from '../lib/loginServerResolution';
+import { clearAuthToken, clearDeletedConversationAfter, clearStoredConversations, clearStoredSubscriptionStatus, clearStoredUser, DEFAULT_SERVER_URL, eraseLocalChatData, getAuthToken, getDeletedConversationAfter, getDeletedConversationAfters, getServerUrl, getStoredAutoDownloadMedia, getStoredCallLogs, getStoredConversationMediaCacheCursor, getStoredConversationSyncCursors, getStoredConversations, getStoredDarkMode, getStoredDecoyOffline, getStoredErasePinDeletePeers, getStoredLanguage, getStoredLatestMessagesByConversationIds, getStoredMessages, getStoredMessagesByIds, getStoredOlderMessages, getStoredRecentMessages, getStoredSubscriptionStatus, getStoredUser, removeStoredConversationRecords, removeStoredMessageRecords, removeStoredMessages, setDeletedConversationAfter, setServerUrl, setStoredAutoDownloadMedia, setStoredCallLogs, setStoredConversationMediaCacheCursor, setStoredConversationSyncCursors, setStoredDarkMode, setStoredDecoyOffline, setStoredLanguage, setStoredSubscriptionStatus, setStoredUser, upsertStoredConversations, upsertStoredMessages } from '../lib/storage';
+import { getServerInstanceId, resolveLoginServer } from '../lib/loginServerResolution';
+import { activateSavedAccount, getAccountSession, getActiveAccount, initializeAccountRegistry, listSavedAccounts, markActiveAccountAuthState, removeSavedAccount, resolveSavedAccountServerIdentity, saveAuthenticatedAccount, setActiveAccountUnreadConversationIds, type SavedAccount } from '../lib/accountRegistry';
+import { configureMessageDatabase, deleteMessageDatabase, listActiveLiveLocationShares } from '../lib/messageStore';
+import { syncNativeAccountCredentials } from '../lib/nativeAccountCredentials';
 import { createBypassSubscriptionStatus, createEmptySubscriptionStatus, hasPremiumAccess, isSubscriptionBypassed } from '../lib/subscriptionAccess';
-import { clearNativeQuickReplyCredentials, setNativeQuickReplyCredentials } from '../native/CallNative';
-import { setActiveCallSession } from '../lib/activeCallSession';
+import { clearNativeQuickReplyCredentials } from '../native/CallNative';
+import { getActiveCallSession, setActiveCallSession } from '../lib/activeCallSession';
+import { getActiveMeetingSession } from '../lib/activeMeetingSession';
 import { AuthUser, CallLog, Conversation, Message, SubscriptionStatus } from '../types/domain';
 
 
@@ -322,6 +326,8 @@ function clearUploadProgress(messageId: string) {
 }
 
 export type AppState = {
+  accounts: SavedAccount[];
+  activeAccountId: string | null;
   isBootstrapping: boolean;
   autoDownloadMedia: boolean;
   isCheckingSubscription: boolean;
@@ -374,6 +380,8 @@ export type AppState = {
   setDecoyOfflineMode: (isDecoyOffline: boolean) => Promise<void>;
   saveServerUrl: (serverUrl: string) => Promise<void>;
   signInWithPassword: (username: string, password: string) => Promise<void>;
+  switchAccount: (accountId: string) => Promise<void>;
+  removeAccount: (accountId: string) => Promise<void>;
   registerWithPassword: (displayName: string, username: string, password: string) => Promise<void>;
   deleteAccountForever: (password: string) => Promise<void>;
   wipeChatsOnlyData: (preservePeerConversationIds?: string[]) => Promise<void>;
@@ -454,6 +462,8 @@ export type AppState = {
 };
 
 export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((set) => ({
+  accounts: [],
+  activeAccountId: null,
   autoDownloadMedia: true,
   appDomains: [],
   blockedUsers: [],
@@ -498,6 +508,13 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
   user: null,
 
   async bootstrap() {
+    await initializeAccountRegistry(DEFAULT_SERVER_URL);
+    let activeAccount = await getActiveAccount();
+    if (activeAccount && activeAccount.serverIdentityResolved !== true) {
+      const serverInstanceId = await getServerInstanceId(activeAccount.serverUrl);
+      activeAccount = await resolveSavedAccountServerIdentity(activeAccount.accountId, serverInstanceId);
+    }
+    if (activeAccount) await configureMessageDatabase(activeAccount.databaseName);
     const [serverUrl, storedUser, token, storedConversations, storedDarkMode, storedLanguage, storedSubscriptionStatus, storedDecoyOffline, autoDownloadMedia] = await Promise.all([
       getServerUrl(),
       getStoredUser<AuthUser>(),
@@ -527,6 +544,8 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
     setI18nLanguage(language);
 
     set({
+      accounts: await listSavedAccounts(),
+      activeAccountId: activeAccount?.accountId ?? null,
       autoDownloadMedia,
       callLogs,
       conversations: visibleStoredConversations,
@@ -574,7 +593,7 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
     }
 
     if (serverUrl && token && storedUser && !storedDecoyOffline) {
-      setNativeQuickReplyCredentials(serverUrl, token);
+      void syncNativeAccountCredentials();
       void getMe(serverUrl)
         .then(async (response) => {
           await setStoredUser(response.user);
@@ -588,10 +607,21 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
         })
         .catch(async (error) => {
           if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
+            const failedAccountId = useAppStore.getState().activeAccountId;
+            await markActiveAccountAuthState(error.status === 403 ? 'suspended' : 'reauth-required');
             isLocalSessionResetting = true;
             discardReceivedMessageBatch();
             await Promise.all([clearAuthToken(), clearStoredUser(), clearStoredSubscriptionStatus()]);
-            clearNativeQuickReplyCredentials();
+            void syncNativeAccountCredentials();
+            const fallback = (await listSavedAccounts()).find((account) => (
+              account.accountId !== failedAccountId && account.authState === 'authenticated'
+            ));
+
+            if (fallback) {
+              await useAppStore.getState().switchAccount(fallback.accountId).catch(() => undefined);
+              return;
+            }
+
             set({
               appDomains: [],
               blockedUsers: [],
@@ -615,14 +645,17 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
               unreadConversationIds: [],
               unviewedStatusAuthorIds: [],
               user: null,
+              accounts: await listSavedAccounts(),
             });
             return;
           }
 
           set({ connectionNotice: t('noConnectionMessagesSync'), connectionStatus: 'offline', isCheckingSubscription: false });
         });
-    } else {
+    } else if (storedDecoyOffline) {
       clearNativeQuickReplyCredentials();
+    } else {
+      void syncNativeAccountCredentials();
     }
   },
 
@@ -717,7 +750,7 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
     ]);
 
     if (serverUrl && token && user) {
-      setNativeQuickReplyCredentials(serverUrl, token);
+      void syncNativeAccountCredentials();
     }
 
     set({
@@ -739,7 +772,7 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
     const token = await getAuthToken();
 
     if (token) {
-      setNativeQuickReplyCredentials(serverUrl, token);
+      void syncNativeAccountCredentials();
     }
 
     set({
@@ -751,19 +784,22 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
   },
 
   async signInWithPassword(username, password) {
+    if (getActiveCallSession() || getActiveMeetingSession()) throw new Error(t('endCallBeforeSwitchingAccount'));
+    if ((await listActiveLiveLocationShares()).length > 0) throw new Error(t('stopLiveLocationBeforeSwitchingAccount'));
     const resolved = await resolveLoginServer(username);
     const serverUrl = resolved.serverUrl;
     const response = await login(serverUrl, { password, username: resolved.username });
+    const serverInstanceId = await getServerInstanceId(serverUrl);
+    await drainSessionWork();
+    const account = await saveAuthenticatedAccount({ serverInstanceId, serverUrl, token: response.token, user: response.user });
+    await configureMessageDatabase(account.databaseName);
 
     await Promise.all([
-      clearStoredConversations(),
       setStoredCallLogs([]),
-      setServerUrl(serverUrl),
-      setAuthToken(response.token),
-      setStoredUser(response.user),
+      setStoredSubscriptionStatus(createEmptySubscriptionStatus()),
     ]);
     isLocalSessionResetting = false;
-    setNativeQuickReplyCredentials(serverUrl, response.token);
+    void syncNativeAccountCredentials();
 
     locallyClearedAfterByConversation.clear();
     resolvedLocalClearBoundaryConversationIds.clear();
@@ -771,6 +807,8 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
     olderLocalMessagesExhaustedBeforeByConversation.clear();
     setActiveCallSession(null);
     set({
+      accounts: await listSavedAccounts(),
+      activeAccountId: account.accountId,
       appDomains: [],
       blockedUsers: [],
       blockedUsersLastFetchedAt: 0,
@@ -805,7 +843,98 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
     }
   },
 
+  async switchAccount(accountId) {
+    const current = useAppStore.getState();
+    if (current.activeAccountId === accountId) return;
+    if (getActiveCallSession() || getActiveMeetingSession()) throw new Error(t('endCallBeforeSwitchingAccount'));
+    if ((await listActiveLiveLocationShares()).length > 0) throw new Error(t('stopLiveLocationBeforeSwitchingAccount'));
+    await setActiveAccountUnreadConversationIds(current.unreadConversationIds);
+    await drainSessionWork();
+    set({ connectionNotice: null, connectionStatus: 'unknown', serverUrl: null });
+    const session = await activateSavedAccount(accountId);
+    if (!session) throw new Error(t('accountNeedsSignIn'));
+    resetSessionWork();
+    await configureMessageDatabase(session.databaseName);
+    const [conversations, subscriptionStatus, callLogs] = await Promise.all([
+      getStoredConversations(),
+      getStoredSubscriptionStatus(),
+      getStoredCallLogs(),
+    ]);
+    const visibleConversations = sortConversationsByActivity(dedupeConversations(conversations.filter(isVisibleConversation)));
+    void syncNativeAccountCredentials();
+    // resetSessionWork blocks realtime writes while the account database is
+    // changing. Release that guard before exposing the activated account;
+    // otherwise every subsequent socket message is silently discarded.
+    isLocalSessionResetting = false;
+    set({
+      accounts: await setActiveAccountUnreadConversationIds(getUnreadConversationIds(visibleConversations)),
+      activeAccountId: accountId,
+      appDomains: [],
+      blockedUsers: [],
+      blockedUsersLastFetchedAt: 0,
+      callLogs,
+      catalogUrl: null,
+      connectionNotice: null,
+      connectionStatus: 'unknown',
+      contacts: [],
+      conversations: visibleConversations,
+      conversationsNextOffset: visibleConversations.length,
+      conversationsQuery: '',
+      conversationsLastFetchedAt: visibleConversations.length ? Date.now() : 0,
+      hasLoadedConversations: visibleConversations.length > 0,
+      hasMoreConversations: visibleConversations.length >= CONVERSATION_PAGE_SIZE,
+      hasUnviewedStatuses: false,
+      helpUrl: null,
+      messagesByConversation: {},
+      serverUrl: session.serverUrl,
+      statusGroups: [],
+      statusSummaryLastFetchedAt: 0,
+      subscriptionStatus,
+      unreadConversationIds: getUnreadConversationIds(visibleConversations),
+      unviewedStatusAuthorIds: [],
+      uploadProgressByMessageId: {},
+      user: session.user,
+    });
+    void useAppStore.getState().loadConversations('', 'all', { refresh: true }).catch(() => undefined);
+    void useAppStore.getState().loadContacts().catch(() => undefined);
+    void useAppStore.getState().refreshSubscriptionStatus().catch(() => undefined);
+  },
+
+  async removeAccount(accountId) {
+    const wasActive = useAppStore.getState().activeAccountId === accountId;
+    const removedAccount = useAppStore.getState().accounts.find((account) => account.accountId === accountId);
+    const removedSession = await getAccountSession(accountId);
+    if (removedSession) void unregisterPushTokens(removedSession.serverUrl, removedSession.token).catch(() => undefined);
+    if (wasActive) await drainSessionWork();
+    const accounts = await removeSavedAccount(accountId);
+    if (!wasActive) {
+      set({ accounts });
+      return;
+    }
+    const next = accounts[0];
+    if (next) {
+      await useAppStore.getState().switchAccount(next.accountId);
+      if (removedAccount) {
+        await deleteMessageDatabase(removedAccount.databaseName);
+        await deleteAccountMediaCache(removedAccount.accountId, removedAccount.databaseName === 'meetvap_messages.db');
+      }
+      return;
+    }
+    if (removedAccount) {
+      await deleteMessageDatabase(removedAccount.databaseName);
+      await deleteAccountMediaCache(removedAccount.accountId, removedAccount.databaseName === 'meetvap_messages.db');
+    }
+    await clearLocalSession();
+    resetSessionWork();
+    set({
+      accounts: [], activeAccountId: null, conversations: [], contacts: [], messagesByConversation: {},
+      serverUrl: DEFAULT_SERVER_URL, subscriptionStatus: null, unreadConversationIds: [], user: null,
+    });
+  },
+
   async registerWithPassword(displayName, username, password) {
+    if (getActiveCallSession() || getActiveMeetingSession()) throw new Error(t('endCallBeforeSwitchingAccount'));
+    if ((await listActiveLiveLocationShares()).length > 0) throw new Error(t('stopLiveLocationBeforeSwitchingAccount'));
     const { serverUrl } = useAppStore.getState();
 
     if (!serverUrl) {
@@ -813,15 +942,13 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
     }
 
     const response = await register(serverUrl, { displayName, password, username });
-
-    await Promise.all([
-      clearStoredConversations(),
-      setStoredCallLogs([]),
-      setAuthToken(response.token),
-      setStoredUser(response.user),
-    ]);
+    const serverInstanceId = await getServerInstanceId(serverUrl);
+    await drainSessionWork();
+    const account = await saveAuthenticatedAccount({ serverInstanceId, serverUrl, token: response.token, user: response.user });
+    await configureMessageDatabase(account.databaseName);
+    await Promise.all([setStoredCallLogs([]), setStoredSubscriptionStatus(createEmptySubscriptionStatus())]);
     isLocalSessionResetting = false;
-    setNativeQuickReplyCredentials(serverUrl, response.token);
+    void syncNativeAccountCredentials();
 
     locallyClearedAfterByConversation.clear();
     resolvedLocalClearBoundaryConversationIds.clear();
@@ -829,6 +956,8 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
     olderLocalMessagesExhaustedBeforeByConversation.clear();
     setActiveCallSession(null);
     set({
+      accounts: await listSavedAccounts(),
+      activeAccountId: account.accountId,
       appDomains: [],
       blockedUsers: [],
       blockedUsersLastFetchedAt: 0,
@@ -870,6 +999,11 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
     }
 
     await deleteAccountRequest(serverUrl, password);
+    const activeAccountId = useAppStore.getState().activeAccountId;
+    if (activeAccountId) {
+      await useAppStore.getState().removeAccount(activeAccountId);
+      return;
+    }
     await clearLocalSession();
     set({
       appDomains: [],
@@ -2854,11 +2988,13 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
   },
 
   async signOut() {
+    const activeAccountId = useAppStore.getState().activeAccountId;
+    if (activeAccountId) {
+      await useAppStore.getState().removeAccount(activeAccountId);
+      return;
+    }
     await clearLocalSession();
-    locallyClearedAfterByConversation.clear();
-    resolvedLocalClearBoundaryConversationIds.clear();
-    olderLocalMessageRequests.clear();
-    olderLocalMessagesExhaustedBeforeByConversation.clear();
+    resetSessionWork();
 
     set({
       appDomains: [],
@@ -2897,6 +3033,56 @@ async function clearLocalSession() {
     clearStoredUser(),
   ]);
   clearNativeQuickReplyCredentials();
+}
+
+function resetSessionWork() {
+  isLocalSessionResetting = true;
+  discardReceivedMessageBatch();
+  conversationsRequest = null;
+  messageRequests.clear();
+  messageCacheRequests.clear();
+  olderLocalMessageRequests.clear();
+  olderLocalMessagesExhaustedBeforeByConversation.clear();
+  locallyClearedAfterByConversation.clear();
+  resolvedLocalClearBoundaryConversationIds.clear();
+  uploadControllers.forEach((controller) => controller.abort());
+  uploadControllers.clear();
+  incomingMediaCacheQueue.splice(0, incomingMediaCacheQueue.length);
+  queuedIncomingMediaCacheIds.clear();
+  conversationMaintenanceGeneration += 1;
+  pendingConversationMaintenanceCancel?.();
+  pendingConversationMaintenanceCancel = null;
+  if (deliveredReceiptBatchTimer) clearTimeout(deliveredReceiptBatchTimer);
+  if (readReceiptBatchTimer) clearTimeout(readReceiptBatchTimer);
+  deliveredReceiptBatchTimer = null;
+  readReceiptBatchTimer = null;
+  pendingDeliveredReceiptBatches.clear();
+  pendingReadReceiptBatches.clear();
+  pendingReadCallIdsByConversation.clear();
+  deliverySyncConversationIds.clear();
+  deletionSyncConversationIds.clear();
+  deltaSyncConversationIds.clear();
+  statusUpdateSyncConversationIds.clear();
+  localReadThroughByConversation.clear();
+  locallyDeletedMessageIdsByConversation.clear();
+  locallyDeletedMessageKeysByConversation.clear();
+  uploadProgressSnapshots.clear();
+  persistedConversationRefs = new Map();
+  persistedConversationUserId = null;
+  setActiveCallSession(null);
+}
+
+async function drainSessionWork() {
+  uploadControllers.forEach((controller) => controller.abort());
+  const pending = [
+    ...(conversationsRequest ? [conversationsRequest.promise] : []),
+    ...messageRequests.values(),
+    ...messageCacheRequests.values(),
+    ...olderLocalMessageRequests.values(),
+  ];
+  if (pending.length > 0) await Promise.allSettled(pending);
+  await prepareMediaCacheForAccountSwitch();
+  await storedConversationsPersistPromise?.catch(() => undefined);
 }
 
 function requestConversationMessages(conversationId: string, serverUrl: string, options?: { hydrate?: boolean }) {

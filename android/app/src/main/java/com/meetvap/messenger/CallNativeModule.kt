@@ -18,6 +18,7 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
 import android.media.AudioAttributes
+import android.media.AudioDeviceCallback
 import android.media.MediaScannerConnection
 import android.media.MediaPlayer
 import android.media.AudioDeviceInfo
@@ -107,8 +108,23 @@ class CallNativeModule(private val reactContext: ReactApplicationContext) : Reac
   }
 
   @ReactMethod
+  fun setQuickReplyAccounts(accountsJson: String) {
+    QuickReplyCredentials.replaceFromJson(reactContext.applicationContext, accountsJson)
+  }
+
+  @ReactMethod
   fun clearQuickReplyCredentials() {
     QuickReplyCredentials.clear(reactContext.applicationContext)
+  }
+
+  @ReactMethod
+  fun consumePendingMessageUrl(promise: Promise) {
+    promise.resolve(MessageIntentStore.consume())
+  }
+
+  @ReactMethod
+  fun setVisibleMessageConversation(conversationId: String?) {
+    MessageNotificationContext.setVisibleConversation(conversationId)
   }
 
   @ReactMethod
@@ -192,6 +208,10 @@ class CallNativeModule(private val reactContext: ReactApplicationContext) : Reac
   private var pendingBluetoothScoRouteId: String? = null
   @Volatile
   private var pendingBluetoothScoStartedAtMs = 0L
+  @Volatile
+  private var fallbackBuiltInCallAudioRouteId = "earpiece"
+  @Volatile
+  private var externalRouteRecoveryGeneration = 0L
   private val bluetoothScoReceiver = object : BroadcastReceiver() {
     override fun onReceive(context: Context?, intent: Intent?) {
       if (intent?.action != AudioManager.ACTION_SCO_AUDIO_STATE_UPDATED) {
@@ -216,7 +236,17 @@ class CallNativeModule(private val reactContext: ReactApplicationContext) : Reac
           connectedBluetoothScoRouteId = null
           pendingBluetoothScoRouteId = null
           pendingBluetoothScoStartedAtMs = 0L
+          scheduleDisconnectedExternalRouteRecovery()
         }
+      }
+    }
+  }
+  private val callAudioDeviceCallback = object : AudioDeviceCallback() {
+    override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>) {
+      val selectedRouteId = selectedCallAudioRouteId ?: return
+
+      if (removedDevices.any { callAudioRouteId(it) == selectedRouteId }) {
+        scheduleDisconnectedExternalRouteRecovery()
       }
     }
   }
@@ -234,6 +264,10 @@ class CallNativeModule(private val reactContext: ReactApplicationContext) : Reac
       @Suppress("DEPRECATION")
       reactContext.registerReceiver(bluetoothScoReceiver, IntentFilter(AudioManager.ACTION_SCO_AUDIO_STATE_UPDATED))
     }
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+      val audioManager = reactContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+      audioManager.registerAudioDeviceCallback(callAudioDeviceCallback, mainHandler)
+    }
     reactContext.addActivityEventListener(object : BaseActivityEventListener() {
       override fun onNewIntent(intent: Intent) {
         IncomingCallIntentStore.remember(intent)
@@ -245,6 +279,12 @@ class CallNativeModule(private val reactContext: ReactApplicationContext) : Reac
   override fun invalidate() {
     runCatching {
       reactContext.unregisterReceiver(bluetoothScoReceiver)
+    }
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+      runCatching {
+        val audioManager = reactContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        audioManager.unregisterAudioDeviceCallback(callAudioDeviceCallback)
+      }
     }
     super.invalidate()
   }
@@ -364,6 +404,8 @@ class CallNativeModule(private val reactContext: ReactApplicationContext) : Reac
       connectedBluetoothScoRouteId = null
       pendingBluetoothScoRouteId = null
       pendingBluetoothScoStartedAtMs = 0L
+      fallbackBuiltInCallAudioRouteId = "earpiece"
+      externalRouteRecoveryGeneration += 1
       return
     }
 
@@ -379,6 +421,8 @@ class CallNativeModule(private val reactContext: ReactApplicationContext) : Reac
     connectedBluetoothScoRouteId = null
     pendingBluetoothScoRouteId = null
     pendingBluetoothScoStartedAtMs = 0L
+    fallbackBuiltInCallAudioRouteId = "earpiece"
+    externalRouteRecoveryGeneration += 1
   }
 
   private fun selectCallAudioRouteInternal(routeId: String): Boolean {
@@ -393,6 +437,9 @@ class CallNativeModule(private val reactContext: ReactApplicationContext) : Reac
         return audioManager.setCommunicationDevice(targetDevice).also { selected ->
           if (selected) {
             selectedCallAudioRouteId = routeId
+            if (routeId == "speaker" || routeId == "earpiece") {
+              fallbackBuiltInCallAudioRouteId = routeId
+            }
           }
         }
       }
@@ -400,6 +447,7 @@ class CallNativeModule(private val reactContext: ReactApplicationContext) : Reac
       if (routeId == "earpiece") {
         audioManager.clearCommunicationDevice()
         selectedCallAudioRouteId = routeId
+        fallbackBuiltInCallAudioRouteId = routeId
         return true
       }
 
@@ -440,10 +488,52 @@ class CallNativeModule(private val reactContext: ReactApplicationContext) : Reac
       audioManager.isSpeakerphoneOn = isSpeaker
     }
     selectedCallAudioRouteId = routeId
+    if (routeId == "speaker" || routeId == "earpiece") {
+      fallbackBuiltInCallAudioRouteId = routeId
+    }
     connectedBluetoothScoRouteId = null
     pendingBluetoothScoRouteId = null
     pendingBluetoothScoStartedAtMs = 0L
     return routeId == "earpiece" || isSpeaker || routeId.startsWith("device:")
+  }
+
+  private fun scheduleDisconnectedExternalRouteRecovery() {
+    val selectedRouteId = selectedCallAudioRouteId
+
+    if (selectedRouteId == null || !selectedRouteId.startsWith("device:")) {
+      return
+    }
+
+    val generation = externalRouteRecoveryGeneration + 1
+    externalRouteRecoveryGeneration = generation
+    mainHandler.postDelayed({
+      if (generation != externalRouteRecoveryGeneration || selectedCallAudioRouteId != selectedRouteId) {
+        return@postDelayed
+      }
+
+      val audioManager = reactContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+      val devices = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        audioManager.availableCommunicationDevices
+      } else {
+        getLegacyCallAudioDevices(audioManager)
+      }
+      val selectedDevice = devices.firstOrNull { callAudioRouteId(it) == selectedRouteId }
+      val selectedRouteIsActive = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        audioManager.communicationDevice?.let(::callAudioRouteId) == selectedRouteId
+      } else {
+        selectedDevice != null && (
+          !isBluetoothCallDevice(selectedDevice) || audioManager.isBluetoothScoOn
+        )
+      }
+
+      if (selectedRouteIsActive) {
+        return@postDelayed
+      }
+
+      val fallbackRouteId = fallbackBuiltInCallAudioRouteId
+      Log.i(CALL_AUDIO_TAG, "external-route-disconnected route=$selectedRouteId fallback=$fallbackRouteId")
+      selectCallAudioRouteInternal(fallbackRouteId)
+    }, EXTERNAL_ROUTE_DISCONNECT_GRACE_MS)
   }
 
   private fun createCallAudioRoutes(): com.facebook.react.bridge.WritableArray {
@@ -633,12 +723,12 @@ class CallNativeModule(private val reactContext: ReactApplicationContext) : Reac
   }
 
   @ReactMethod
-  fun cancelMessageNotifications(conversationId: String?) {
+  fun cancelMessageNotifications(conversationId: String?, serverInstanceId: String?, accountUserId: String?) {
     if (conversationId.isNullOrBlank()) {
       return
     }
 
-    MessageNotificationHelper.cancel(reactContext.applicationContext, conversationId)
+    MessageNotificationHelper.cancel(reactContext.applicationContext, conversationId, serverInstanceId, accountUserId)
   }
 
   @ReactMethod
@@ -1497,6 +1587,7 @@ class CallNativeModule(private val reactContext: ReactApplicationContext) : Reac
   companion object {
     private const val CALL_AUDIO_TAG = "MeetVapCallAudio"
     private const val BLUETOOTH_SCO_RETRY_INTERVAL_MS = 3000L
+    private const val EXTERNAL_ROUTE_DISCONNECT_GRACE_MS = 650L
     private const val OUTGOING_RINGBACK_PAUSE_MS = 1000L
     private const val OUTGOING_RINGBACK_STALL_TIMEOUT_MS = 1100L
 

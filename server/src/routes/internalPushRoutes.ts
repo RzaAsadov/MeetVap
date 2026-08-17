@@ -15,6 +15,8 @@ import { notifyServerChildUserRegistered } from '../serverEventMessages';
 export const internalPushRoutes = Router();
 
 const tokenSchema = z.object({
+  accountServerInstanceId: z.string().min(3).max(160).optional(),
+  accountServerUrl: z.string().url().max(2048).optional(),
   deliveryReceiptUrl: z.string().url().max(2048).optional(),
   id: z.string().max(128).optional(),
   installationId: z.string().max(256).nullable().optional(),
@@ -403,10 +405,11 @@ function getCompletedRelayStatus(result: PushDispatchResult) {
   return 'FAILED';
 }
 
-function assertDeliveryReceiptOrigins(tokens: Array<{ deliveryReceiptUrl?: string }>, expectedHostname: string) {
+function assertDeliveryReceiptOrigins(tokens: Array<{ accountServerUrl?: string; deliveryReceiptUrl?: string }>, expectedHostname: string) {
   const expectedOrigin = new URL(expectedHostname).origin;
   const hasInvalidOrigin = tokens.some((token) => (
-    token.deliveryReceiptUrl && new URL(token.deliveryReceiptUrl).origin !== expectedOrigin
+    (token.deliveryReceiptUrl && new URL(token.deliveryReceiptUrl).origin !== expectedOrigin) ||
+    (token.accountServerUrl && new URL(token.accountServerUrl).origin !== expectedOrigin)
   ));
   if (hasInvalidOrigin) {
     throw new HttpError(400, 'Push delivery receipt URL must use the child server hostname');

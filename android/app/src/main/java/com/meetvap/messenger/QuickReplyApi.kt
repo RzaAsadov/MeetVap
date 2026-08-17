@@ -11,15 +11,14 @@ import java.util.UUID
 import org.json.JSONObject
 
 object QuickReplyApi {
-  private const val DEFAULT_SERVER_URL = "https://mm.meetvap.com"
   private const val MASK_HEADER = "x-meetvap-mask"
   private const val MASK_KEY = "meetvap:first-api-mask:v1:2026-05"
   private const val MASK_VERSION = "v1"
 
-  fun sendTextMessage(context: Context, conversationId: String, body: String, quickReplyToken: String? = null): Boolean {
+  fun sendTextMessage(context: Context, conversationId: String, body: String, quickReplyToken: String? = null, serverInstanceId: String? = null, accountUserId: String? = null): Boolean {
     if (!quickReplyToken.isNullOrBlank()) {
-      val serverUrl = QuickReplyCredentials.load(context)?.serverUrl ?: DEFAULT_SERVER_URL
-      val endpoint = "$serverUrl/conversations/quick-reply"
+      val credentials = QuickReplyCredentials.load(context, serverInstanceId, accountUserId) ?: return false
+      val endpoint = "${credentials.serverUrl}/conversations/quick-reply"
       val payload = JSONObject()
         .put("body", body)
         .put("token", quickReplyToken)
@@ -27,7 +26,7 @@ object QuickReplyApi {
       return executeJsonPost(endpoint, null, payload)
     }
 
-    val credentials = QuickReplyCredentials.load(context) ?: run {
+    val credentials = QuickReplyCredentials.load(context, serverInstanceId, accountUserId) ?: run {
       return false
     }
     val encodedConversationId = URLEncoder.encode(conversationId, "UTF-8")
@@ -43,8 +42,8 @@ object QuickReplyApi {
     return executeJsonPost(endpoint, credentials.authToken, payload)
   }
 
-  fun markConversationRead(context: Context, conversationId: String): Boolean {
-    val credentials = QuickReplyCredentials.load(context) ?: run {
+  fun markConversationRead(context: Context, conversationId: String, serverInstanceId: String? = null, accountUserId: String? = null): Boolean {
+    val credentials = QuickReplyCredentials.load(context, serverInstanceId, accountUserId) ?: run {
       return false
     }
     val encodedConversationId = URLEncoder.encode(conversationId, "UTF-8")

@@ -18,7 +18,19 @@ class MeetVapFirebaseMessagingService : ExpoFirebaseMessagingService() {
     }
 
     if (data["type"] == "message") {
-      if (!MainActivity.isAppInForeground) {
+      val targetAccountIsActive = QuickReplyCredentials.targetAccountIsActive(
+        applicationContext,
+        data["serverInstanceId"],
+        data["accountUserId"],
+        data["accountServerUrl"],
+      )
+      if (MainActivity.isAppInForeground) {
+        when (targetAccountIsActive) {
+          true -> return // Realtime owns the active account.
+          false -> MessageNotificationHelper.show(applicationContext, data)
+          null -> super.onMessageReceived(remoteMessage)
+        }
+      } else {
         MessageNotificationHelper.show(applicationContext, data)
       }
       return

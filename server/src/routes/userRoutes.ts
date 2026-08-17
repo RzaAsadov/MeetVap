@@ -4,7 +4,7 @@ import path from 'path';
 
 import { getAuthedUser, hashPassword, invalidateUserAuthCache, requireAuth, verifyPassword } from '../auth';
 import { getAvatarMediaId, isAvatarMediaReferenced } from '../avatarMedia';
-import { getClientMetadataWriteData, getRequestClientMetadata } from '../clientCompatibility';
+import { getClientMetadataWriteData, getRequestClientMetadata, hasClientCapability, MULTI_ACCOUNT_CAPABILITY } from '../clientCompatibility';
 import { deleteUserWithChildSync, enqueueChildUserSync } from '../childUserSync';
 import { config } from '../config';
 import { HttpError } from '../httpError';
@@ -19,6 +19,7 @@ import { removeVideoThumbnail } from '../videoThumbnails';
 import { deleteAccountSchema, registerPushTokenSchema, updateAvatarSchema, updatePasswordSchema, updatePrivacySchema, updateProfileSchema, userRelationshipSchema, userSearchSchema } from '../validators';
 
 export const userRoutes = Router();
+const MULTI_ACCOUNT_SESSION_INFERENCE_MIN_BUILD = 312;
 const uploadDir = path.resolve(config.UPLOAD_DIR);
 const diagnosticDataDir = path.resolve(process.cwd(), 'diagdata');
 const rootConfigPaths = [
@@ -807,37 +808,112 @@ userRoutes.post('/push-token', requireAuth, async (req, res, next) => {
     const input = registerPushTokenSchema.parse(req.body);
     const provider = normalizePushTokenProvider(input.provider, input.platform);
     const clientMetadata = getRequestClientMetadata(req, input.platform);
-    const existingToken = await prisma.devicePushToken.findUnique({
-      select: { userId: true },
-      where: { token: input.token },
-    });
+    const hasAnotherAccountSession = clientMetadata.installationId &&
+      (clientMetadata.appBuildNumber ?? 0) >= MULTI_ACCOUNT_SESSION_INFERENCE_MIN_BUILD
+      ? await prisma.session.findFirst({
+          select: { id: true },
+          where: {
+            expiresAt: { gt: new Date() },
+            installationId: clientMetadata.installationId,
+            userId: { not: currentUser.id },
+          },
+        })
+      : null;
+    const supportsMultipleAccounts = hasClientCapability(clientMetadata, MULTI_ACCOUNT_CAPABILITY) || !!hasAnotherAccountSession;
+    const displacedTokens = supportsMultipleAccounts
+      ? []
+      : await prisma.devicePushToken.findMany({
+          distinct: ['userId'],
+          select: { userId: true },
+          where: {
+            provider,
+            token: input.token,
+            userId: { not: currentUser.id },
+          },
+        });
 
-    await prisma.devicePushToken.upsert({
-      create: {
-        ...getClientMetadataWriteData(clientMetadata),
-        locale: input.locale,
-        platform: input.platform,
-        provider,
-        token: input.token,
-        userId: currentUser.id,
-      },
-      update: {
-        ...getClientMetadataWriteData(clientMetadata),
-        locale: input.locale,
-        platform: input.platform,
-        provider,
-        userId: currentUser.id,
-      },
-      where: { token: input.token },
+    await prisma.$transaction(async (tx) => {
+      if (!supportsMultipleAccounts) {
+        await tx.devicePushToken.deleteMany({
+          where: {
+            provider,
+            token: input.token,
+            userId: { not: currentUser.id },
+          },
+        });
+      }
+
+      if (clientMetadata.installationId) {
+        await tx.devicePushToken.deleteMany({
+          where: {
+            installationId: clientMetadata.installationId,
+            provider,
+            token: { not: input.token },
+            userId: currentUser.id,
+          },
+        });
+
+        if (provider === 'fcm' || provider === 'apns') {
+          await tx.devicePushToken.deleteMany({
+            where: {
+              installationId: clientMetadata.installationId,
+              provider: 'expo',
+              userId: currentUser.id,
+            },
+          });
+        }
+      }
+
+      await tx.devicePushToken.upsert({
+        create: {
+          ...getClientMetadataWriteData(clientMetadata),
+          locale: input.locale,
+          platform: input.platform,
+          provider,
+          token: input.token,
+          userId: currentUser.id,
+        },
+        update: {
+          ...getClientMetadataWriteData(clientMetadata),
+          locale: input.locale,
+          platform: input.platform,
+          provider,
+        },
+        where: {
+          userId_token_provider: {
+            provider,
+            token: input.token,
+            userId: currentUser.id,
+          },
+        },
+      });
     });
-    await Promise.all(
-      [...new Set([currentUser.id, existingToken?.userId].filter((userId): userId is string => !!userId))]
-        .map(invalidatePushTokenCacheForUser),
-    );
+    await Promise.all([
+      invalidatePushTokenCacheForUser(currentUser.id),
+      ...displacedTokens.map(({ userId }) => invalidatePushTokenCacheForUser(userId)),
+    ]);
     void enqueueChildUserSync(currentUser.id, 'DEVICE').catch((error) => {
       console.error('Could not queue child device synchronization', { error, userId: currentUser.id });
     });
 
+    res.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+userRoutes.delete('/push-token', requireAuth, async (req, res, next) => {
+  try {
+    const currentUser = getAuthedUser(req);
+    const metadata = getRequestClientMetadata(req);
+    if (!metadata.installationId) throw new HttpError(400, 'Installation identity is required');
+    await prisma.devicePushToken.deleteMany({
+      where: {
+        userId: currentUser.id,
+        installationId: metadata.installationId,
+      },
+    });
+    await invalidatePushTokenCacheForUser(currentUser.id);
     res.json({ ok: true });
   } catch (error) {
     next(error);

@@ -17,6 +17,9 @@ object MessageNotificationHelper {
   const val EXTRA_CONVERSATION_ID = "conversationId"
   const val EXTRA_QUICK_REPLY_TOKEN = "quickReplyToken"
   const val EXTRA_TITLE = "title"
+  const val EXTRA_SERVER_INSTANCE_ID = "serverInstanceId"
+  const val EXTRA_ACCOUNT_SERVER_URL = "accountServerUrl"
+  const val EXTRA_ACCOUNT_USER_ID = "accountUserId"
   const val KEY_REPLY_TEXT = "meetvap.quickReplyText"
   private const val CHANNEL_ID = "messages"
   private const val NOTIFICATION_ID_BASE = 15300
@@ -27,17 +30,21 @@ object MessageNotificationHelper {
     }
     val title = data["title"]?.takeIf { it.isNotBlank() } ?: localizedText("New message", "Yeni mesaj", "Новое сообщение")
     val quickReplyToken = data["quickReplyToken"]?.takeIf { it.isNotBlank() }
+    val serverInstanceId = data["serverInstanceId"]?.takeIf { it.isNotBlank() }
+    val accountServerUrl = data["accountServerUrl"]?.takeIf { it.isNotBlank() }
+    val accountUserId = data["accountUserId"]?.takeIf { it.isNotBlank() }
+    val messageId = data["messageId"]?.takeIf { it.isNotBlank() }
     val body = data["body"]?.takeIf { it.isNotBlank() }
       ?: data["message"]?.takeIf { it.isNotBlank() }
       ?: localizedText("Message", "Mesaj", "Сообщение")
 
     ensureChannel(context)
 
-    val notificationId = notificationId(conversationId)
+    val notificationId = notificationId(conversationId, serverInstanceId, accountUserId)
     val contentIntent = PendingIntent.getActivity(
       context,
       notificationId,
-      toMessageIntent(context, conversationId, title),
+      toMessageIntent(context, conversationId, title, serverInstanceId, accountServerUrl, accountUserId, messageId),
       pendingIntentFlags(),
     )
     val replyIntent = PendingIntent.getBroadcast(
@@ -47,6 +54,9 @@ object MessageNotificationHelper {
         .setAction(ACTION_QUICK_REPLY)
         .putExtra(EXTRA_CONVERSATION_ID, conversationId)
         .putExtra(EXTRA_QUICK_REPLY_TOKEN, quickReplyToken)
+        .putExtra(EXTRA_SERVER_INSTANCE_ID, serverInstanceId)
+        .putExtra(EXTRA_ACCOUNT_SERVER_URL, accountServerUrl)
+        .putExtra(EXTRA_ACCOUNT_USER_ID, accountUserId)
         .putExtra(EXTRA_TITLE, title),
       pendingIntentFlags(mutable = true),
     )
@@ -56,6 +66,9 @@ object MessageNotificationHelper {
       Intent(context, QuickReplyReceiver::class.java)
         .setAction(ACTION_MARK_READ)
         .putExtra(EXTRA_CONVERSATION_ID, conversationId)
+        .putExtra(EXTRA_SERVER_INSTANCE_ID, serverInstanceId)
+        .putExtra(EXTRA_ACCOUNT_SERVER_URL, accountServerUrl)
+        .putExtra(EXTRA_ACCOUNT_USER_ID, accountUserId)
         .putExtra(EXTRA_TITLE, title),
       pendingIntentFlags(),
     )
@@ -87,7 +100,7 @@ object MessageNotificationHelper {
       .setContentText(body)
       .setContentTitle(title)
       .setPriority(Notification.PRIORITY_HIGH)
-      .setSmallIcon(android.R.drawable.sym_action_chat)
+      .setSmallIcon(R.mipmap.ic_launcher_foreground)
       .setVibrate(longArrayOf(0, 250))
       .addAction(android.R.drawable.ic_menu_view, localizedText("Mark read", "Okundu işaretle", "Отметить прочитанным"), markReadIntent)
       .addAction(replyAction)
@@ -96,11 +109,11 @@ object MessageNotificationHelper {
     context.getSystemService(NotificationManager::class.java).notify(notificationId, notification)
   }
 
-  fun cancel(context: Context, conversationId: String) {
-    context.getSystemService(NotificationManager::class.java).cancel(notificationId(conversationId))
+  fun cancel(context: Context, conversationId: String, serverInstanceId: String? = null, accountUserId: String? = null) {
+    context.getSystemService(NotificationManager::class.java).cancel(notificationId(conversationId, serverInstanceId, accountUserId))
   }
 
-  fun showReplySending(context: Context, conversationId: String, title: String) {
+  fun showReplySending(context: Context, conversationId: String, title: String, serverInstanceId: String? = null, accountServerUrl: String? = null, accountUserId: String? = null) {
     ensureChannel(context)
 
     val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -114,8 +127,8 @@ object MessageNotificationHelper {
       .setContentIntent(
         PendingIntent.getActivity(
           context,
-          notificationId(conversationId) + 4,
-          toMessageIntent(context, conversationId, title),
+          notificationId(conversationId, serverInstanceId, accountUserId) + 4,
+          toMessageIntent(context, conversationId, title, serverInstanceId, accountServerUrl, accountUserId),
           pendingIntentFlags(),
         ),
       )
@@ -124,13 +137,13 @@ object MessageNotificationHelper {
       .setOnlyAlertOnce(true)
       .setOngoing(true)
       .setPriority(Notification.PRIORITY_LOW)
-      .setSmallIcon(android.R.drawable.sym_action_chat)
+      .setSmallIcon(R.mipmap.ic_launcher_foreground)
       .build()
 
-    context.getSystemService(NotificationManager::class.java).notify(notificationId(conversationId), notification)
+    context.getSystemService(NotificationManager::class.java).notify(notificationId(conversationId, serverInstanceId, accountUserId), notification)
   }
 
-  fun showReplyFailed(context: Context, conversationId: String, title: String) {
+  fun showReplyFailed(context: Context, conversationId: String, title: String, serverInstanceId: String? = null, accountServerUrl: String? = null, accountUserId: String? = null) {
     ensureChannel(context)
 
     val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -145,8 +158,8 @@ object MessageNotificationHelper {
       .setContentIntent(
         PendingIntent.getActivity(
           context,
-          notificationId(conversationId) + 2,
-          toMessageIntent(context, conversationId, title),
+          notificationId(conversationId, serverInstanceId, accountUserId) + 2,
+          toMessageIntent(context, conversationId, title, serverInstanceId, accountServerUrl, accountUserId),
           pendingIntentFlags(),
         ),
       )
@@ -154,10 +167,10 @@ object MessageNotificationHelper {
       .setContentTitle(title.ifBlank { localizedText("MeetVap", "MeetVap", "MeetVap") })
       .setOngoing(false)
       .setPriority(Notification.PRIORITY_DEFAULT)
-      .setSmallIcon(android.R.drawable.sym_action_chat)
+      .setSmallIcon(R.mipmap.ic_launcher_foreground)
       .build()
 
-    context.getSystemService(NotificationManager::class.java).notify(notificationId(conversationId), notification)
+    context.getSystemService(NotificationManager::class.java).notify(notificationId(conversationId, serverInstanceId, accountUserId), notification)
   }
 
   private fun ensureChannel(context: Context) {
@@ -173,7 +186,8 @@ object MessageNotificationHelper {
     context.getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
   }
 
-  private fun notificationId(conversationId: String) = NOTIFICATION_ID_BASE + (conversationId.hashCode() and 0x0fff)
+  private fun notificationId(conversationId: String, serverInstanceId: String? = null, accountUserId: String? = null) =
+    NOTIFICATION_ID_BASE + ("${serverInstanceId.orEmpty()}:${accountUserId.orEmpty()}:$conversationId".hashCode() and 0x0fff)
 
   private fun pendingIntentFlags(mutable: Boolean = false): Int {
     val mutabilityFlag = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -185,12 +199,24 @@ object MessageNotificationHelper {
     return PendingIntent.FLAG_UPDATE_CURRENT or mutabilityFlag
   }
 
-  private fun toMessageIntent(context: Context, conversationId: String, title: String): Intent {
+  private fun toMessageIntent(
+    context: Context,
+    conversationId: String,
+    title: String,
+    serverInstanceId: String? = null,
+    accountServerUrl: String? = null,
+    accountUserId: String? = null,
+    messageId: String? = null,
+  ): Intent {
     val uri = Uri.Builder()
       .scheme("meetvap")
       .authority("message")
       .appendQueryParameter("conversationId", conversationId)
       .appendQueryParameter("title", title)
+      .appendQueryParameter("serverInstanceId", serverInstanceId)
+      .appendQueryParameter("accountServerUrl", accountServerUrl)
+      .appendQueryParameter("accountUserId", accountUserId)
+      .appendQueryParameter("messageId", messageId)
       .build()
 
     return Intent(Intent.ACTION_VIEW, uri, context, MainActivity::class.java)

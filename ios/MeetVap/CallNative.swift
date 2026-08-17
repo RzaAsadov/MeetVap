@@ -66,6 +66,11 @@ class CallNative: NSObject {
     CallNativeQuickReplyCredentials.shared.save(serverUrl: serverUrl, authToken: authToken)
   }
 
+  @objc(setQuickReplyAccounts:)
+  func setQuickReplyAccounts(_ accountsJson: String) {
+    CallNativeQuickReplyCredentials.shared.replace(accountsJson: accountsJson)
+  }
+
   @objc
   func clearQuickReplyCredentials() {
     CallNativeQuickReplyCredentials.shared.clear()
@@ -78,8 +83,8 @@ class CallNative: NSObject {
     }
   }
 
-  @objc(cancelMessageNotifications:)
-  func cancelMessageNotifications(_ conversationId: String?) {
+  @objc(cancelMessageNotifications:serverInstanceId:accountUserId:)
+  func cancelMessageNotifications(_ conversationId: String?, serverInstanceId: String?, accountUserId: String?) {
     guard let conversationId, !conversationId.isEmpty else {
       return
     }
@@ -90,7 +95,13 @@ class CallNative: NSObject {
         let type = userInfo["type"] as? String
         let notificationConversationId = userInfo["conversationId"] as? String
 
-        return type == "message" && notificationConversationId == conversationId
+        let notificationServerInstanceId = userInfo["serverInstanceId"] as? String
+        let notificationAccountUserId = userInfo["accountUserId"] as? String
+        let matchesAccount = serverInstanceId == nil || accountUserId == nil || (
+          notificationServerInstanceId == serverInstanceId && notificationAccountUserId == accountUserId
+        )
+
+        return type == "message" && notificationConversationId == conversationId && matchesAccount
           ? notification.request.identifier
           : nil
       }
@@ -555,7 +566,9 @@ final class CallNativeOrientationLock {
 }
 
 private struct CallNativeQuickReplyCredentialPayload: Codable {
+  let accountUserId: String?
   let authToken: String
+  let serverInstanceId: String?
   let serverUrl: String
 }
 
@@ -567,11 +580,25 @@ private final class CallNativeQuickReplyCredentials {
 
   func save(serverUrl: String, authToken: String) {
     let payload = CallNativeQuickReplyCredentialPayload(
+      accountUserId: nil,
       authToken: authToken.trimmingCharacters(in: .whitespacesAndNewlines),
+      serverInstanceId: nil,
       serverUrl: serverUrl.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
     )
 
-    guard !payload.authToken.isEmpty, !payload.serverUrl.isEmpty, let data = try? JSONEncoder().encode(payload) else {
+    savePayloads([payload])
+  }
+
+  func replace(accountsJson: String) {
+    guard let data = accountsJson.data(using: .utf8),
+          let payloads = try? JSONDecoder().decode([CallNativeQuickReplyCredentialPayload].self, from: data) else {
+      return
+    }
+    savePayloads(payloads.filter { !$0.authToken.isEmpty && !$0.serverUrl.isEmpty })
+  }
+
+  private func savePayloads(_ payloads: [CallNativeQuickReplyCredentialPayload]) {
+    guard !payloads.isEmpty, let data = try? JSONEncoder().encode(payloads) else {
       clear()
       return
     }
@@ -587,7 +614,7 @@ private final class CallNativeQuickReplyCredentials {
     }
   }
 
-  func load() -> CallNativeQuickReplyCredentialPayload? {
+  func load(serverInstanceId: String? = nil, accountUserId: String? = nil) -> CallNativeQuickReplyCredentialPayload? {
     var query = baseQuery()
     query[kSecReturnData as String] = true
     query[kSecMatchLimit as String] = kSecMatchLimitOne
@@ -599,6 +626,13 @@ private final class CallNativeQuickReplyCredentials {
       return nil
     }
 
+    if let payloads = try? JSONDecoder().decode([CallNativeQuickReplyCredentialPayload].self, from: data) {
+      if let serverInstanceId, let accountUserId,
+         let matched = payloads.first(where: { $0.serverInstanceId == serverInstanceId && $0.accountUserId == accountUserId }) {
+        return matched
+      }
+      return payloads.first
+    }
     return try? JSONDecoder().decode(CallNativeQuickReplyCredentialPayload.self, from: data)
   }
 
@@ -621,7 +655,6 @@ private final class CallNativeQuickReplyHandler: NSObject, NotificationDelegate 
   private let maskHeader = "x-meetvap-mask"
   private let maskKey = "meetvap:first-api-mask:v1:2026-05"
   private let maskVersion = "v1"
-  private let defaultServerUrl = "https://mm.meetvap.com"
   private var isRegistered = false
 
   func start() {
@@ -650,26 +683,30 @@ private final class CallNativeQuickReplyHandler: NSObject, NotificationDelegate 
     }
 
     let quickReplyToken = stringValue(userInfo["quickReplyToken"])?.trimmingCharacters(in: .whitespacesAndNewlines)
+    let serverInstanceId = stringValue(userInfo["serverInstanceId"])
+    let accountUserId = stringValue(userInfo["accountUserId"])
     sendQuickReply(
+      accountUserId: accountUserId,
       body: body,
       conversationId: conversationId,
       notificationIdentifier: response.notification.request.identifier,
-      quickReplyToken: quickReplyToken
+      quickReplyToken: quickReplyToken,
+      serverInstanceId: serverInstanceId
     )
     return true
   }
 
-  private func sendQuickReply(body: String, conversationId: String, notificationIdentifier: String, quickReplyToken: String?) {
-    let credentials = CallNativeQuickReplyCredentials.shared.load()
+  private func sendQuickReply(accountUserId: String?, body: String, conversationId: String, notificationIdentifier: String, quickReplyToken: String?, serverInstanceId: String?) {
+    let credentials = CallNativeQuickReplyCredentials.shared.load(serverInstanceId: serverInstanceId, accountUserId: accountUserId)
     let backgroundTask = beginBackgroundTask()
 
-    if let quickReplyToken, !quickReplyToken.isEmpty {
+    if let quickReplyToken, !quickReplyToken.isEmpty, let credentials {
       post(
         body: [
           "body": body,
           "token": quickReplyToken,
         ],
-        serverUrl: credentials?.serverUrl ?? defaultServerUrl,
+        serverUrl: credentials.serverUrl,
         authToken: nil,
         path: "/conversations/quick-reply"
       ) { [weak self] sent in
@@ -678,6 +715,11 @@ private final class CallNativeQuickReplyHandler: NSObject, NotificationDelegate 
         }
         self?.endBackgroundTask(backgroundTask)
       }
+      return
+    }
+
+    if quickReplyToken != nil && credentials == nil {
+      endBackgroundTask(backgroundTask)
       return
     }
 
@@ -3456,6 +3498,13 @@ private final class CallNativeCallManager: NSObject, PKPushRegistryDelegate, CXP
       URLQueryItem(name: "autoJoin", value: payload.autoJoin ? "true" : "false"),
     ]
 
+    if let serverInstanceId = payload.serverInstanceId {
+      queryItems.append(URLQueryItem(name: "serverInstanceId", value: serverInstanceId))
+    }
+    if let accountUserId = payload.accountUserId {
+      queryItems.append(URLQueryItem(name: "accountUserId", value: accountUserId))
+    }
+
     if let expiresAt = payload.expiresAt {
       queryItems.append(URLQueryItem(
         name: "expiresAt",
@@ -3515,6 +3564,7 @@ private final class CallNativeCallManager: NSObject, PKPushRegistryDelegate, CXP
 }
 
 private struct IncomingCallPayload {
+  let accountUserId: String?
   let callId: String
   let conversationId: String
   let mode: String
@@ -3527,6 +3577,7 @@ private struct IncomingCallPayload {
   let autoJoin: Bool
   let isGroupCall: Bool
   let participantNames: [String]
+  let serverInstanceId: String?
   let ringingReceiptUrl: URL?
   var displayTitle: String {
     if !title.isEmpty {
@@ -3563,6 +3614,7 @@ private struct IncomingCallPayload {
     }
 
     self.callId = callId
+    self.accountUserId = Self.stringValue(dictionary["accountUserId"])
     self.conversationId = conversationId
     self.mode = Self.callMode(dictionary)
     self.locale = Self.stringValue(dictionary["locale"])
@@ -3578,6 +3630,7 @@ private struct IncomingCallPayload {
     self.autoJoin = Self.boolValue(dictionary["autoJoin"])
     self.isGroupCall = Self.boolValue(dictionary["isGroupCall"])
     self.participantNames = Self.stringArray(dictionary["participantNames"])
+    self.serverInstanceId = Self.stringValue(dictionary["serverInstanceId"])
     self.ringingReceiptUrl = Self.stringValue(dictionary["ringingReceiptUrl"]).flatMap(URL.init(string:))
   }
 

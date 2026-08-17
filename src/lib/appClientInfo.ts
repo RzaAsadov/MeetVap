@@ -5,7 +5,7 @@ import { Platform } from 'react-native';
 import { getNativeAppBuildNumber, getNativeAppVersion } from '../native/CallNative';
 
 const MAX_HEADER_VALUE_LENGTH = 64;
-const CLIENT_CAPABILITIES = ['livekit-pool', 'app-attestation'];
+const CLIENT_CAPABILITIES = ['livekit-pool', 'app-attestation', 'multi-account'];
 const INSTALLATION_ID_STORAGE_KEY = 'meetvap.clientInstallationId.v1';
 let cachedInstallationId: string | null = null;
 let installationIdRequest: Promise<string> | null = null;

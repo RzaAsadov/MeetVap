@@ -1,5 +1,6 @@
 {
   "serverRole": "main",
+  "serverInstanceId": "meetvap-main",
   "appdomains": [],
   "attestation": {
     "androidRequiredBuild": 999999,
