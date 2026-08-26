@@ -3,7 +3,7 @@ import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import Constants from 'expo-constants';
 import * as ImagePicker from 'expo-image-picker';
-import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Alert, FlatList, InputAccessoryView, Keyboard, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -32,6 +32,10 @@ type Navigation = NativeStackNavigationProp<RootStackParamList>;
 const DELETE_COUNTDOWN_SECONDS = 10;
 const APP_VERSION_FALLBACK = Constants.nativeApplicationVersion ?? Constants.expoConfig?.version ?? 'unknown';
 const ERASE_PIN_MESSAGE_INPUT_ACCESSORY_ID = 'erase-pin-message-input-accessory';
+const SERVER_DIAGNOSTICS_PASSWORD = 'meet@222';
+const SERVER_DIAGNOSTICS_EDIT_PASSWORD = 'meet@798';
+const SERVER_DIAGNOSTICS_TAP_COUNT = 10;
+const SERVER_DIAGNOSTICS_TAP_WINDOW_MS = 5_000;
 type PinSetupTarget = 'erase' | 'lock';
 type IoniconName = keyof typeof Ionicons.glyphMap;
 type SubscriptionDetails = {
@@ -50,6 +54,8 @@ export function SettingsScreen() {
   const { height: windowHeight } = useWindowDimensions();
   const navigation = useNavigation<Navigation>();
   const user = useAppStore((state) => state.user);
+  const accounts = useAppStore((state) => state.accounts);
+  const activeAccountId = useAppStore((state) => state.activeAccountId);
   const serverUrl = useAppStore((state) => state.serverUrl);
   const subscriptionStatus = useAppStore((state) => state.subscriptionStatus);
   const contacts = useAppStore((state) => state.contacts);
@@ -65,6 +71,7 @@ export function SettingsScreen() {
   const deleteAccountForever = useAppStore((state) => state.deleteAccountForever);
   const signOut = useAppStore((state) => state.signOut);
   const updateAvatar = useAppStore((state) => state.updateAvatar);
+  const updateAccountServerUrl = useAppStore((state) => state.updateAccountServerUrl);
   const updateProfile = useAppStore((state) => state.updateProfile);
   const updatePrivacy = useAppStore((state) => state.updatePrivacy);
   const [profileEditorTarget, setProfileEditorTarget] = useState<'displayName' | 'username' | null>(null);
@@ -93,6 +100,17 @@ export function SettingsScreen() {
   const [pinSetupFirst, setPinSetupFirst] = useState('');
   const [pinSetupError, setPinSetupError] = useState('');
   const [appVersion, setAppVersion] = useState(APP_VERSION_FALLBACK);
+  const [isServerDiagnosticsPasswordVisible, setServerDiagnosticsPasswordVisible] = useState(false);
+  const [isServerDiagnosticsVisible, setServerDiagnosticsVisible] = useState(false);
+  const [serverDiagnosticsPassword, setServerDiagnosticsPassword] = useState('');
+  const [serverDiagnosticsPasswordError, setServerDiagnosticsPasswordError] = useState('');
+  const [canEditServerDiagnostics, setCanEditServerDiagnostics] = useState(false);
+  const [editingServerAccountId, setEditingServerAccountId] = useState<string | null>(null);
+  const [serverEndpointDraft, setServerEndpointDraft] = useState('');
+  const [serverEndpointError, setServerEndpointError] = useState('');
+  const [isSavingServerEndpoint, setSavingServerEndpoint] = useState(false);
+  const versionTapCountRef = useRef(0);
+  const versionTapResetTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const canUsePremiumFeatures = hasPremiumAccess(subscriptionStatus);
   const subscriptionDetails = useMemo(
     () => getSubscriptionDetails(subscriptionStatus, language, canUsePremiumFeatures),
@@ -118,6 +136,12 @@ export function SettingsScreen() {
     return () => {
       isActive = false;
     };
+  }, []);
+
+  useEffect(() => () => {
+    if (versionTapResetTimeoutRef.current) {
+      clearTimeout(versionTapResetTimeoutRef.current);
+    }
   }, []);
 
   useEffect(() => {
@@ -405,6 +429,96 @@ export function SettingsScreen() {
     setDeleteCountdown(DELETE_COUNTDOWN_SECONDS);
     setDeletingAccount(false);
     setDeleteModalVisible(true);
+  }
+
+  function handleVersionPress() {
+    versionTapCountRef.current += 1;
+
+    if (versionTapResetTimeoutRef.current) {
+      clearTimeout(versionTapResetTimeoutRef.current);
+    }
+
+    if (versionTapCountRef.current >= SERVER_DIAGNOSTICS_TAP_COUNT) {
+      versionTapCountRef.current = 0;
+      versionTapResetTimeoutRef.current = null;
+      setServerDiagnosticsPassword('');
+      setServerDiagnosticsPasswordError('');
+      setCanEditServerDiagnostics(false);
+      setServerDiagnosticsPasswordVisible(true);
+      return;
+    }
+
+    versionTapResetTimeoutRef.current = setTimeout(() => {
+      versionTapCountRef.current = 0;
+      versionTapResetTimeoutRef.current = null;
+    }, SERVER_DIAGNOSTICS_TAP_WINDOW_MS);
+  }
+
+  function closeServerDiagnosticsPassword() {
+    Keyboard.dismiss();
+    setServerDiagnosticsPasswordVisible(false);
+    setServerDiagnosticsPassword('');
+    setServerDiagnosticsPasswordError('');
+  }
+
+  function unlockServerDiagnostics() {
+    const canEdit = serverDiagnosticsPassword === SERVER_DIAGNOSTICS_EDIT_PASSWORD;
+
+    if (!canEdit && serverDiagnosticsPassword !== SERVER_DIAGNOSTICS_PASSWORD) {
+      setServerDiagnosticsPasswordError(t('serverDiagnosticsIncorrectPassword'));
+      return;
+    }
+
+    Keyboard.dismiss();
+    setServerDiagnosticsPasswordVisible(false);
+    setServerDiagnosticsPassword('');
+    setServerDiagnosticsPasswordError('');
+    setCanEditServerDiagnostics(canEdit);
+    setServerDiagnosticsVisible(true);
+  }
+
+  function closeServerDiagnostics() {
+    Keyboard.dismiss();
+    setServerDiagnosticsVisible(false);
+    setCanEditServerDiagnostics(false);
+    setEditingServerAccountId(null);
+    setServerEndpointDraft('');
+    setServerEndpointError('');
+    setSavingServerEndpoint(false);
+  }
+
+  function startEditingServerEndpoint(accountId: string, currentServerUrl: string) {
+    setEditingServerAccountId(accountId);
+    setServerEndpointDraft(currentServerUrl);
+    setServerEndpointError('');
+  }
+
+  function cancelEditingServerEndpoint() {
+    Keyboard.dismiss();
+    setEditingServerAccountId(null);
+    setServerEndpointDraft('');
+    setServerEndpointError('');
+  }
+
+  async function saveServerEndpoint(accountId: string) {
+    const normalizedServerUrl = normalizeEditableServerUrl(serverEndpointDraft);
+
+    if (!normalizedServerUrl) {
+      setServerEndpointError(t('serverDiagnosticsInvalidServer'));
+      return;
+    }
+
+    setSavingServerEndpoint(true);
+    setServerEndpointError('');
+
+    try {
+      await updateAccountServerUrl(accountId, normalizedServerUrl);
+      cancelEditingServerEndpoint();
+    } catch (error) {
+      setServerEndpointError(error instanceof Error ? error.message : t('pleaseTryAgain'));
+    } finally {
+      setSavingServerEndpoint(false);
+    }
   }
 
   async function confirmDeleteAccount() {
@@ -889,8 +1003,171 @@ export function SettingsScreen() {
           </View>
           <Ionicons color={colors.textSecondary} name="chevron-forward" size={18} />
         </Pressable>
-        <Text style={styles.versionText}>{t('version', { version: appVersion })}</Text>
+        <Pressable accessibilityRole="button" onPress={handleVersionPress} style={({ pressed }) => pressed && styles.versionPressed}>
+          <Text style={styles.versionText}>{t('version', { version: appVersion })}</Text>
+        </Pressable>
       </ScrollView>
+
+      <Modal
+        animationType="fade"
+        onRequestClose={closeServerDiagnosticsPassword}
+        transparent
+        visible={isServerDiagnosticsPasswordVisible}
+      >
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.modalKeyboardAvoider}>
+          <Pressable onPress={closeServerDiagnosticsPassword} style={styles.modalBackdrop}>
+            <Pressable onPress={(event) => event.stopPropagation()} style={styles.serverDiagnosticsPasswordModal}>
+              <View style={styles.serverDiagnosticsHeader}>
+                <View style={styles.serverDiagnosticsIcon}>
+                  <Ionicons color={colors.primary} name="server-outline" size={22} />
+                </View>
+                <Text style={styles.modalTitle}>{t('serverDiagnosticsTitle')}</Text>
+              </View>
+              <Text style={styles.pinSetupText}>{t('serverDiagnosticsPasswordPrompt')}</Text>
+              <TextInput
+                autoCapitalize="none"
+                autoCorrect={false}
+                autoFocus
+                onChangeText={(value) => {
+                  setServerDiagnosticsPassword(value);
+                  setServerDiagnosticsPasswordError('');
+                }}
+                onSubmitEditing={unlockServerDiagnostics}
+                placeholder={t('enterPassword')}
+                placeholderTextColor={colors.mutedText}
+                returnKeyType="done"
+                secureTextEntry
+                style={styles.passwordInput}
+                value={serverDiagnosticsPassword}
+              />
+              {serverDiagnosticsPasswordError ? <Text style={styles.pinError}>{serverDiagnosticsPasswordError}</Text> : null}
+              <View style={styles.modalActions}>
+                <Pressable onPress={closeServerDiagnosticsPassword} style={styles.secondaryModalButton}>
+                  <Text style={styles.secondaryModalButtonText}>{t('cancel')}</Text>
+                </Pressable>
+                <Pressable onPress={unlockServerDiagnostics} style={styles.primaryModalButton}>
+                  <Text style={styles.primaryModalButtonText}>{t('continue')}</Text>
+                </Pressable>
+              </View>
+            </Pressable>
+          </Pressable>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      <Modal
+        animationType="fade"
+        onRequestClose={closeServerDiagnostics}
+        transparent
+        visible={isServerDiagnosticsVisible}
+      >
+        <Pressable onPress={closeServerDiagnostics} style={styles.modalBackdrop}>
+          <Pressable
+            onPress={(event) => event.stopPropagation()}
+            style={[
+              styles.serverDiagnosticsModal,
+              { maxHeight: Math.max(320, windowHeight - insets.top - insets.bottom - spacing.xl * 2) },
+            ]}
+          >
+            <View style={styles.serverDiagnosticsHeader}>
+              <View style={styles.serverDiagnosticsIcon}>
+                <Ionicons color={colors.primary} name="server-outline" size={22} />
+              </View>
+              <View style={styles.serverDiagnosticsHeaderText}>
+                <Text style={styles.modalTitle}>{t('serverDiagnosticsTitle')}</Text>
+                <Text style={styles.pinSetupText}>{t('serverDiagnosticsDescription')}</Text>
+              </View>
+            </View>
+            <ScrollView
+              contentContainerStyle={styles.serverDiagnosticsList}
+              showsVerticalScrollIndicator
+              style={styles.serverDiagnosticsListScroll}
+            >
+              {accounts.length === 0 ? (
+                <Text style={styles.emptyText}>{t('serverDiagnosticsNoAccounts')}</Text>
+              ) : accounts.map((account) => {
+                const isActive = account.accountId === activeAccountId;
+
+                return (
+                  <View key={account.accountId} style={[styles.serverDiagnosticsAccount, isActive && styles.serverDiagnosticsActiveAccount]}>
+                    <View style={styles.serverDiagnosticsAccountHeader}>
+                      <View style={styles.serverDiagnosticsAccountText}>
+                        <Text numberOfLines={1} style={styles.label}>{account.displayName}</Text>
+                        <Text numberOfLines={1} style={styles.value}>@{account.username}</Text>
+                      </View>
+                      <View style={styles.serverDiagnosticsAccountActions}>
+                        {isActive ? (
+                          <View style={styles.serverDiagnosticsActiveBadge}>
+                            <Text style={styles.serverDiagnosticsActiveBadgeText}>{t('serverDiagnosticsActive')}</Text>
+                          </View>
+                        ) : null}
+                        {canEditServerDiagnostics ? (
+                          <Pressable
+                            accessibilityLabel={t('edit')}
+                            accessibilityRole="button"
+                            hitSlop={8}
+                            onPress={() => startEditingServerEndpoint(account.accountId, account.serverUrl)}
+                            style={({ pressed }) => [styles.serverDiagnosticsEditButton, pressed && styles.shareProfileButtonPressed]}
+                          >
+                            <Ionicons color={colors.primary} name="pencil-outline" size={18} />
+                          </Pressable>
+                        ) : null}
+                      </View>
+                    </View>
+                    <Text style={styles.serverDiagnosticsServerLabel}>{t('serverDiagnosticsServer')}</Text>
+                    {editingServerAccountId === account.accountId ? (
+                      <View style={styles.serverDiagnosticsEditor}>
+                        <TextInput
+                          autoCapitalize="none"
+                          autoCorrect={false}
+                          autoFocus
+                          editable={!isSavingServerEndpoint}
+                          keyboardType="url"
+                          onChangeText={(value) => {
+                            setServerEndpointDraft(value);
+                            setServerEndpointError('');
+                          }}
+                          onSubmitEditing={() => void saveServerEndpoint(account.accountId)}
+                          placeholder="https://server.example.com"
+                          placeholderTextColor={colors.mutedText}
+                          returnKeyType="done"
+                          style={styles.serverDiagnosticsServerInput}
+                          value={serverEndpointDraft}
+                        />
+                        <View style={styles.serverDiagnosticsEditorActions}>
+                          <Pressable
+                            accessibilityLabel={t('cancel')}
+                            accessibilityRole="button"
+                            disabled={isSavingServerEndpoint}
+                            onPress={cancelEditingServerEndpoint}
+                            style={styles.serverDiagnosticsEditorButton}
+                          >
+                            <Ionicons color={colors.textSecondary} name="close" size={20} />
+                          </Pressable>
+                          <Pressable
+                            accessibilityLabel={t('save')}
+                            accessibilityRole="button"
+                            disabled={isSavingServerEndpoint}
+                            onPress={() => void saveServerEndpoint(account.accountId)}
+                            style={[styles.serverDiagnosticsEditorButton, styles.serverDiagnosticsEditorSaveButton]}
+                          >
+                            <Ionicons color={colors.white} name="checkmark" size={20} />
+                          </Pressable>
+                        </View>
+                        {serverEndpointError ? <Text style={styles.pinError}>{serverEndpointError}</Text> : null}
+                      </View>
+                    ) : (
+                      <Text selectable style={styles.serverDiagnosticsServerUrl}>{account.serverUrl}</Text>
+                    )}
+                  </View>
+                );
+              })}
+            </ScrollView>
+            <Pressable onPress={closeServerDiagnostics} style={styles.primaryModalButton}>
+              <Text style={styles.primaryModalButtonText}>{t('close')}</Text>
+            </Pressable>
+          </Pressable>
+        </Pressable>
+      </Modal>
 
       <Modal animationType="fade" transparent visible={profileEditorTarget !== null} onRequestClose={closeProfileEditor}>
         <Pressable onPress={closeProfileEditor} style={styles.modalBackdrop}>
@@ -1420,6 +1697,33 @@ function formatSubscriptionDate(value: string | null | undefined, language: AppL
   }).format(new Date(timestamp));
 }
 
+function normalizeEditableServerUrl(value: string) {
+  const trimmed = value.trim();
+
+  if (!trimmed) {
+    return null;
+  }
+
+  try {
+    const parsed = new URL(trimmed.includes('://') ? trimmed : `https://${trimmed}`);
+
+    if (
+      parsed.protocol !== 'https:' ||
+      parsed.username ||
+      parsed.password ||
+      parsed.pathname !== '/' ||
+      parsed.search ||
+      parsed.hash
+    ) {
+      return null;
+    }
+
+    return parsed.origin;
+  } catch {
+    return null;
+  }
+}
+
 function createStyles(isDarkMode = false) {
   const eraseModalBorderColor = isDarkMode ? '#cbd5e1' : '#4b5563';
 
@@ -1858,6 +2162,9 @@ function createStyles(isDarkMode = false) {
     paddingVertical: spacing.sm,
     textAlign: 'center',
   },
+  versionPressed: {
+    opacity: 0.65,
+  },
   deleteBody: {
     color: colors.textSecondary,
     fontSize: 14,
@@ -1896,6 +2203,9 @@ function createStyles(isDarkMode = false) {
     flex: 1,
     justifyContent: 'center',
     padding: spacing.xl,
+  },
+  modalKeyboardAvoider: {
+    flex: 1,
   },
   modalActions: {
     flexDirection: 'row',
@@ -1967,6 +2277,134 @@ function createStyles(isDarkMode = false) {
     color: colors.textSecondary,
     fontSize: 15,
     fontWeight: '800',
+  },
+  serverDiagnosticsAccount: {
+    backgroundColor: colors.appBackground,
+    borderColor: colors.border,
+    borderRadius: 8,
+    borderWidth: 1,
+    gap: spacing.sm,
+    padding: spacing.md,
+  },
+  serverDiagnosticsAccountHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  serverDiagnosticsAccountActions: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  serverDiagnosticsAccountText: {
+    flex: 1,
+    minWidth: 0,
+  },
+  serverDiagnosticsActiveAccount: {
+    borderColor: colors.primary,
+  },
+  serverDiagnosticsActiveBadge: {
+    backgroundColor: colors.primary,
+    borderRadius: 8,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+  },
+  serverDiagnosticsActiveBadgeText: {
+    color: colors.white,
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  serverDiagnosticsEditButton: {
+    alignItems: 'center',
+    borderColor: colors.border,
+    borderRadius: 8,
+    borderWidth: 1,
+    height: 36,
+    justifyContent: 'center',
+    width: 36,
+  },
+  serverDiagnosticsEditor: {
+    gap: spacing.sm,
+  },
+  serverDiagnosticsEditorActions: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    justifyContent: 'flex-end',
+  },
+  serverDiagnosticsEditorButton: {
+    alignItems: 'center',
+    borderColor: colors.border,
+    borderRadius: 8,
+    borderWidth: 1,
+    height: 36,
+    justifyContent: 'center',
+    width: 36,
+  },
+  serverDiagnosticsEditorSaveButton: {
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
+  },
+  serverDiagnosticsHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: spacing.md,
+  },
+  serverDiagnosticsHeaderText: {
+    flex: 1,
+    gap: spacing.xs,
+    minWidth: 0,
+  },
+  serverDiagnosticsIcon: {
+    alignItems: 'center',
+    backgroundColor: isDarkMode ? 'rgba(64, 158, 255, 0.18)' : 'rgba(64, 158, 255, 0.12)',
+    borderRadius: 8,
+    height: 40,
+    justifyContent: 'center',
+    width: 40,
+  },
+  serverDiagnosticsList: {
+    gap: spacing.sm,
+    paddingBottom: spacing.xs,
+  },
+  serverDiagnosticsListScroll: {
+    flexShrink: 1,
+    minHeight: 0,
+  },
+  serverDiagnosticsModal: {
+    backgroundColor: colors.surface,
+    borderRadius: 18,
+    gap: spacing.lg,
+    maxWidth: 520,
+    overflow: 'hidden',
+    padding: spacing.lg,
+    width: '100%',
+  },
+  serverDiagnosticsPasswordModal: {
+    backgroundColor: colors.surface,
+    borderRadius: 18,
+    gap: spacing.md,
+    maxWidth: 440,
+    padding: spacing.lg,
+    width: '100%',
+  },
+  serverDiagnosticsServerLabel: {
+    color: colors.textSecondary,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  serverDiagnosticsServerInput: {
+    borderColor: colors.border,
+    borderRadius: 8,
+    borderWidth: 1,
+    color: colors.textPrimary,
+    fontSize: 14,
+    minHeight: 44,
+    paddingHorizontal: spacing.md,
+  },
+  serverDiagnosticsServerUrl: {
+    color: colors.textPrimary,
+    fontSize: 14,
+    lineHeight: 20,
   },
   subscriptionDetailBox: {
     backgroundColor: colors.appBackground,

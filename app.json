@@ -17,7 +17,9 @@
       "associatedDomains": [
         "applinks:meetvap.com",
         "applinks:www.meetvap.com",
-        "applinks:meet.meetvap.com"
+        "applinks:web.meetvap.ru",
+        "applinks:meet.meetvap.com",
+        "applinks:meet.meetvap.ru"
       ],
       "entitlements": {
         "com.apple.developer.avfoundation.multitasking-camera-access": true,
@@ -72,7 +74,22 @@
               "scheme": "https"
             },
             {
+              "host": "web.meetvap.ru",
+              "pathPrefix": "/u",
+              "scheme": "https"
+            },
+            {
+              "host": "web.meetvap.ru",
+              "pathPrefix": "/g",
+              "scheme": "https"
+            },
+            {
               "host": "meet.meetvap.com",
+              "pathPrefix": "/",
+              "scheme": "https"
+            },
+            {
+              "host": "meet.meetvap.ru",
               "pathPrefix": "/",
               "scheme": "https"
             }

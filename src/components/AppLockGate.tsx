@@ -6,7 +6,7 @@ import { ActivityIndicator, AppState, Platform, Pressable, StyleSheet, Text, Vie
 import { PinPad } from './PinPad';
 import { launchAnsweredCallKitCallIfPending } from '../lib/answeredCallKitLaunch';
 import { t } from '../i18n';
-import { addAppLockAccessListener, beginCallOnlyAccess, getCallOnlyAccessCallId, isAppLockForegroundOperationActive, setAppLockCurrentAppState, updateAppLockStatus } from '../lib/appLockAccess';
+import { addAppLockAccessListener, beginCallOnlyAccess, getCallOnlyAccessCallId, isAppLockForegroundOperationActive, isAppUnlockRequiredForCall, setAppLockCurrentAppState, updateAppLockStatus } from '../lib/appLockAccess';
 import { emitSecurityEvent } from '../lib/securityEvents';
 import { bulkDeleteConversations, createLiveLocation } from '../lib/backend';
 import { hasLiveLocationBackgroundAuthorization, registerLiveLocationShare } from '../lib/liveLocation';
@@ -377,7 +377,10 @@ export function AppLockGate({ children, deferPinOverlay, userId }: { children: R
     : null;
   const isIncomingCallVisible = !!visibleIncomingCallId;
   const isLockedCallRoomVisible = visibleCallRoomParams?.callAccess === 'locked-call' && !!visibleCallRoomParams.callId;
-  const shouldBypassPinForCall = !!callOnlyAccessCallId || isIncomingCallVisible || isLockedCallRoomVisible;
+  const isUnlockRequiredForVisibleCall = isAppUnlockRequiredForCall(visibleCallRoomParams?.callId);
+  const shouldBypassPinForCall = !isUnlockRequiredForVisibleCall && (
+    !!callOnlyAccessCallId || isIncomingCallVisible || isLockedCallRoomVisible
+  );
   const isCallOnlyRoutePending = !!callOnlyAccessCallId && !isCallOnlyRouteVisible && !isIncomingCallVisible && (lockState === 'checking' || lockState === 'locked');
   const isPinOverlayPreparing = lockState === 'locked' && !isAppObscured && !isPinOverlayReady && !shouldBypassPinForCall;
   const shouldShowDeferredPinCheck = (deferPinOverlay || isNativeAnsweredCallCheckPending) && lockState !== 'unlocked';
@@ -385,6 +388,7 @@ export function AppLockGate({ children, deferPinOverlay, userId }: { children: R
   useEffect(() => {
     if (
       !visibleIncomingCallId ||
+      isUnlockRequiredForVisibleCall ||
       !hasLockPin ||
       lockState === 'unlocked' ||
       callOnlyAccessCallId === visibleIncomingCallId
@@ -395,7 +399,7 @@ export function AppLockGate({ children, deferPinOverlay, userId }: { children: R
     // Route changes and PIN storage hydration can finish in either order on a
     // cold CallKit launch. Once both are known, scope the bypass to this call.
     beginCallOnlyAccess(visibleIncomingCallId);
-  }, [callOnlyAccessCallId, hasLockPin, lockAccessRevision, lockState, visibleIncomingCallId]);
+  }, [callOnlyAccessCallId, hasLockPin, isUnlockRequiredForVisibleCall, lockAccessRevision, lockState, visibleIncomingCallId]);
 
   return (
     <View style={styles.container}>

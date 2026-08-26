@@ -10,6 +10,7 @@ import { HttpError } from '../httpError';
 import { selectLiveKitServer } from '../livekitPool';
 import { prisma } from '../prisma';
 import { getCachedPushTokensForUsers } from '../pushTokenCache';
+import { getPublicApiUrlForRequest, getPublicApiUrlOrDefault, resolveRequestPublicApiEndpoint } from '../publicApiEndpoints';
 import { sendCallEndedPush, sendIncomingCallPush } from '../pushNotifications';
 import { serializeMessage } from '../serializers';
 import { recordMessageStats } from '../stats';
@@ -33,6 +34,7 @@ type CallPushToken = {
   locale: string | null;
   platform: string | null;
   provider: string;
+  publicApiUrl: string | null;
   token: string;
   userId?: string;
 };
@@ -87,9 +89,11 @@ publicCallRoutes.post('/:callId/ringing', async (req, res, next) => {
 
 async function issueCallJoinCredentials(req: Request, call: { id: string; livekitRoom: string | null; livekitServerId?: string | null }, currentUser: { displayName: string; id: string }) {
   const startedAt = Date.now();
+  const endpoint = resolveRequestPublicApiEndpoint(req);
 
   const liveKitServer = await selectLiveKitServer({
     assignedServerId: call.livekitServerId,
+    apiHost: endpoint?.mode === 'relay' ? endpoint.host : undefined,
   });
 
   if (!liveKitServer) {
@@ -749,10 +753,20 @@ callRoutes.post('/', async (req, res, next) => {
       await assertContactsOnlyCallAllowed(currentUser.id, calleeIds);
     }
 
+    const endpoint = resolveRequestPublicApiEndpoint(req);
+    const liveKitServer = await selectLiveKitServer({
+      apiHost: endpoint?.mode === 'relay' ? endpoint.host : undefined,
+    });
+
+    if (!liveKitServer) {
+      throw new HttpError(503, 'Calls are unavailable');
+    }
+
     const call = await prisma.call.create({
       data: {
         conversationId: input.conversationId,
         livekitRoom: input.livekitRoom ?? `call-${crypto.randomUUID()}`,
+        livekitServerId: liveKitServer.id,
         mode: input.mode,
         participants: {
           create: [
@@ -1425,14 +1439,17 @@ function emitCallRinging(req: Request, call: {
 }
 
 function createCallRingingReceiptUrl(req: Request, callId: string) {
-  const expiresAt = Date.now() + CALL_RINGING_RECEIPT_TTL_MS;
-  const host = req.get('host');
+  return createCallRingingReceiptUrlForOrigin(callId, getPublicApiUrlForRequest(req));
+}
 
-  if (!config.PUBLIC_API_URL && !host) {
+function createCallRingingReceiptUrlForOrigin(callId: string, publicApiUrl?: string | null) {
+  const expiresAt = Date.now() + CALL_RINGING_RECEIPT_TTL_MS;
+  const origin = getPublicApiUrlOrDefault(publicApiUrl);
+
+  if (!origin) {
     throw new HttpError(500, 'Public API URL is not configured');
   }
 
-  const origin = config.PUBLIC_API_URL ?? `${req.protocol}://${host}`;
   const url = new URL(`/call-receipts/${encodeURIComponent(callId)}/ringing`, origin);
 
   url.searchParams.set('expiresAt', String(expiresAt));
@@ -1501,7 +1518,10 @@ async function sendIncomingCallPushToUsers(input: {
     return;
   }
 
-  const tokens = await getCachedPushTokensForUsers(userIds, true);
+  const tokens = (await getCachedPushTokensForUsers(userIds, true)).map((token) => ({
+    ...token,
+    ringingReceiptUrl: createCallRingingReceiptUrlForOrigin(input.callId, token.publicApiUrl),
+  }));
 
   logCallDebug('incoming-push-token-ready', {
     callId: input.callId,

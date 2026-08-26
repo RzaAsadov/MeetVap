@@ -13,6 +13,7 @@ let status: AppLockStatus = {
 };
 let callOnlyAccessCallId: string | null = null;
 let callOnlyAccessGraceUntil = 0;
+let appUnlockRequiredCallId: string | null = null;
 let foregroundOperationDepth = 0;
 let foregroundOperationGraceUntil = 0;
 let foregroundOperationCurrentAppState = 'active';
@@ -43,12 +44,17 @@ export function notifyAppLockRouteChanged() {
 export function updateAppLockStatus(nextStatus: AppLockStatus) {
   const didChange = status.hasLockPin !== nextStatus.hasLockPin || status.isUnlocked !== nextStatus.isUnlocked;
   status = nextStatus;
+  const didClearUnlockRequirement = !!appUnlockRequiredCallId && (!status.hasLockPin || status.isUnlocked);
+
+  if (didClearUnlockRequirement) {
+    appUnlockRequiredCallId = null;
+  }
 
   if (status.hasLockPin && status.isUnlocked && callOnlyAccessCallId && Date.now() >= callOnlyAccessGraceUntil) {
     callOnlyAccessCallId = null;
   }
 
-  if (didChange) {
+  if (didChange || didClearUnlockRequirement) {
     notifyListeners();
   }
 }
@@ -79,6 +85,10 @@ export function beginCallOnlyAccess(callId: string) {
     return;
   }
 
+  if (appUnlockRequiredCallId === callId) {
+    return;
+  }
+
   callOnlyAccessGraceUntil = Date.now() + 120_000;
   if (callOnlyAccessCallId === callId) {
     notifyListeners();
@@ -90,13 +100,38 @@ export function beginCallOnlyAccess(callId: string) {
 }
 
 export function endCallOnlyAccess(callId?: string | null) {
-  if (!callOnlyAccessCallId || (callId && callOnlyAccessCallId !== callId)) {
+  const shouldClearCallOnlyAccess = !!callOnlyAccessCallId && (!callId || callOnlyAccessCallId === callId);
+  const shouldClearUnlockRequirement = !!appUnlockRequiredCallId && (!callId || appUnlockRequiredCallId === callId);
+
+  if (!shouldClearCallOnlyAccess && !shouldClearUnlockRequirement) {
+    return;
+  }
+
+  if (shouldClearCallOnlyAccess) {
+    callOnlyAccessCallId = null;
+    callOnlyAccessGraceUntil = 0;
+  }
+
+  if (shouldClearUnlockRequirement) {
+    appUnlockRequiredCallId = null;
+  }
+
+  notifyListeners();
+}
+
+export function requireAppUnlockAfterCallMinimize(callId: string) {
+  if (!callId) {
     return;
   }
 
   callOnlyAccessCallId = null;
   callOnlyAccessGraceUntil = 0;
+  appUnlockRequiredCallId = callId;
   notifyListeners();
+}
+
+export function isAppUnlockRequiredForCall(callId?: string | null) {
+  return !!callId && appUnlockRequiredCallId === callId;
 }
 
 export function getCallOnlyAccessCallId() {

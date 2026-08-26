@@ -12,6 +12,57 @@ const appDomainSchema = z.string()
     (value) => value.length <= 253 && /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(value),
     'appdomains entries must be hostnames such as example.com',
   );
+const publicApiHostSchema = z.string()
+  .trim()
+  .toLowerCase()
+  .transform((value) => value.replace(/\.$/, ''))
+  .refine(
+    (value) => value.length <= 253 && /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(value),
+    'public API hosts must be DNS hostnames',
+  );
+const httpsOriginSchema = (settingName: string) => z.string().url().transform((value, context) => {
+  const parsed = new URL(value);
+
+  if (parsed.protocol !== 'https:' || parsed.pathname !== '/' || parsed.search || parsed.hash || parsed.username || parsed.password) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: `${settingName} values must be HTTPS origins` });
+    return z.NEVER;
+  }
+
+  return parsed.origin;
+});
+export const publicApiEndpointSchema = z.object({
+  host: publicApiHostSchema,
+  meetUrl: httpsOriginSchema('public API meetUrl').optional(),
+  mode: z.enum(['direct', 'relay']).default('direct'),
+  shareUrl: httpsOriginSchema('public API shareUrl').optional(),
+  url: z.string().url().transform((value, context) => {
+    const parsed = new URL(value);
+
+    if (parsed.protocol !== 'https:' || parsed.pathname !== '/' || parsed.search || parsed.hash || parsed.username || parsed.password) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: 'public API endpoint URLs must be HTTPS origins' });
+      return z.NEVER;
+    }
+
+    return parsed.origin;
+  }),
+}).superRefine((value, context) => {
+  if (new URL(value.url).hostname.toLowerCase() !== value.host) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'public API endpoint host must match its URL hostname' });
+  }
+});
+const publicApiSchema = z.object({
+  defaultHost: publicApiHostSchema,
+  endpoints: z.array(publicApiEndpointSchema).min(1),
+}).superRefine((value, context) => {
+  const hosts = value.endpoints.map((endpoint) => endpoint.host);
+
+  if (!hosts.includes(value.defaultHost)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'publicApi.defaultHost must exist in publicApi.endpoints' });
+  }
+  if (new Set(hosts).size !== hosts.length) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'publicApi endpoints must have unique hosts' });
+  }
+});
 export const appVersionsSchema = z.object({
   android: z.object({
     latest: z.string().trim().min(1).default('0.1.0'),
@@ -36,6 +87,7 @@ export const appVersionsSchema = z.object({
 const operationalConfigSchema = z.object({
   serverInstanceId: z.string().trim().min(3).max(160).regex(/^[A-Za-z0-9._:-]+$/).optional(),
   serverRole: z.enum(['main', 'child']).default('main'),
+  publicApi: publicApiSchema.optional(),
   mainServerHost: z.string().url().refine((value) => new URL(value).protocol === 'https:', 'mainServerHost must use HTTPS').optional(),
   mainServerKey: z.string()
     .trim()
@@ -225,9 +277,12 @@ export function getServerInstanceId(publicApiUrl?: string) {
   return operationalConfig.serverRole === 'main' ? 'meetvap-main' : `meetvap-child-${operationalConfig.mainServerHost ?? 'unknown'}`;
 }
 
-export function getClientPolicy(publicApiUrl?: string) {
+export function getClientPolicy(publicApiUrl?: string, shareUrl = 'https://meetvap.com') {
   return {
     serverInstanceId: getServerInstanceId(publicApiUrl),
+    publicUrls: {
+      share: shareUrl,
+    },
     appVersions: {
       android: {
         latest: operationalConfig.appVersions.android.latest,

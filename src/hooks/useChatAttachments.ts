@@ -15,7 +15,7 @@ import {
   registerLiveLocationShare,
   requestLiveLocationPermissions,
 } from '../lib/liveLocation';
-import { assertAttachmentsWithinPolicy, AttachmentPolicyError } from '../lib/serverPolicy';
+import { assertAttachmentsWithinPolicy, AttachmentPolicyError, getShareBaseUrl } from '../lib/serverPolicy';
 import { buildSharedContactMessage } from '../lib/shareLinks';
 import { renderNativeImageDrawing, type ImageDrawingStroke } from '../native/CallNative';
 import { useAppStore, type AppState } from '../store/useAppStore';
@@ -389,7 +389,7 @@ export function useChatAttachments({
 
   async function sendSharedContact(contact: AuthUser) {
     try {
-      const payload = buildSharedContactMessage(contact);
+      const payload = buildSharedContactMessage(contact, await getShareBaseUrl(serverUrl));
       await sendTextMessage(conversationId, payload.message);
       setContactSharePickerVisible(false);
     } catch (error) {

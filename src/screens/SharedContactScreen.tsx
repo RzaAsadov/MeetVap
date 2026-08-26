@@ -10,6 +10,7 @@ import { t } from '../i18n';
 import { ApiError } from '../lib/api';
 import { getSharedUser } from '../lib/backend';
 import { buildSharedContactMessage } from '../lib/shareLinks';
+import { getShareBaseUrl } from '../lib/serverPolicy';
 import { type AppState, useAppStore } from '../store/useAppStore';
 import { colors } from '../theme/colors';
 import { spacing } from '../theme/spacing';
@@ -144,7 +145,7 @@ export function SharedContactScreen({ navigation, route }: Props) {
     }
 
     try {
-      const payload = buildSharedContactMessage(sharedUser);
+      const payload = buildSharedContactMessage(sharedUser, await getShareBaseUrl(serverUrl));
       await Share.share(payload);
     } catch {
       Alert.alert(t('shareFailed'), t('pleaseTryAgain'));

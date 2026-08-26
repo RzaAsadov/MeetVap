@@ -17,6 +17,7 @@ import { MAX_SAVED_ACCOUNTS } from '../lib/accountRegistry';
 import { getActiveMeetingSession, setActiveMeetingSession } from '../lib/activeMeetingSession';
 import { buildReportReason, getReportContextNotice } from '../lib/reporting';
 import { buildSharedContactMessage } from '../lib/shareLinks';
+import { getShareBaseUrl } from '../lib/serverPolicy';
 import { CONVERSATION_LIST_STALE_MS, isServerSideConversationFilter, type ConversationListFilter } from '../lib/conversationList';
 import { noteHighPriorityUiActivity, scheduleAfterForegroundIdle } from '../lib/foregroundWorkScheduler';
 import { getStoredFavoriteConversationIds, setStoredFavoriteConversationIds } from '../lib/storage';
@@ -421,16 +422,14 @@ export function ChatsScreen() {
     });
   }
 
-  function shareMyContact() {
+  async function shareMyContact() {
     if (!user) {
       return;
     }
 
     try {
-      const payload = buildSharedContactMessage(user);
-      void Share.share(payload).catch(() => {
-        Alert.alert(t('shareFailed'), t('pleaseTryAgain'));
-      });
+      const payload = buildSharedContactMessage(user, await getShareBaseUrl(serverUrl));
+      await Share.share(payload);
     } catch {
       Alert.alert(t('shareFailed'), t('pleaseTryAgain'));
     }
@@ -443,7 +442,7 @@ export function ChatsScreen() {
       return;
     }
 
-    shareMyContact();
+    void shareMyContact();
   }
 
   function flushPendingShareMyContact() {

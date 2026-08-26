@@ -6,12 +6,15 @@ import { RoomServiceClient } from 'livekit-server-sdk';
 import { z } from 'zod';
 
 import { config } from './config';
+import { isLiveKitServerEligibleForApiHost } from './livekitRouting';
+import { operationalConfig } from './operationalConfig';
 import { prisma } from './prisma';
 import { notifyServerLiveKitNodeHealthChanged } from './serverEventMessages';
 
 export type LiveKitServerConfig = {
   apiKey: string;
   apiSecret: string;
+  clientUrlByApiHost?: string;
   enabled: boolean;
   id: string;
   healthUrl?: string;
@@ -22,11 +25,14 @@ export type LiveKitServerConfig = {
 
 type SelectLiveKitServerInput = {
   assignedServerId?: string | null;
+  apiHost?: string | null;
 };
 
 const liveKitServerSchema = z.object({
   apiKey: z.string().min(1),
   apiSecret: z.string().min(1),
+  clientUrlByApiHost: z.string().trim().toLowerCase().min(1).optional()
+    .transform((host) => host?.replace(/\.$/, '')),
   enabled: z.boolean().default(true),
   id: z.string().min(1).max(80),
   healthUrl: z.string().url().optional(),
@@ -116,6 +122,7 @@ export async function removeUserFromLiveKitRooms(userId: string) {
 export function getLiveKitHealthSnapshot() {
   return liveKitServers.map((server) => ({
     checkedAt: liveKitHealth.get(server.id)?.checkedAt?.toISOString() ?? null,
+    clientUrlByApiHost: server.clientUrlByApiHost ?? null,
     enabled: server.enabled,
     healthy: isLiveKitServerHealthy(server.id),
     id: server.id,
@@ -163,12 +170,12 @@ export async function selectLiveKitServer(input: SelectLiveKitServerInput) {
     return isLiveKitServerHealthy(assignedServer.id) ? assignedServer : null;
   }
 
-  return selectLeastLoadedEnabledServer();
+  return selectLeastLoadedEnabledServer(input.apiHost);
 }
 
-export async function selectLiveKitServerForRoom(roomKey: string) {
+export async function selectLiveKitServerForRoom(roomKey: string, input?: { apiHost?: string | null }) {
   const enabledServers = liveKitServers
-    .filter((server) => server.enabled)
+    .filter((server) => server.enabled && isLiveKitServerEligibleForApiHost(server, input?.apiHost))
     .sort((left, right) => left.id.localeCompare(right.id));
 
   if (enabledServers.length === 0) {
@@ -189,8 +196,10 @@ function getStableRoomBucket(value: string, bucketCount: number) {
   return hash % bucketCount;
 }
 
-async function selectLeastLoadedEnabledServer() {
-  const enabledServers = liveKitServers.filter((server) => server.enabled);
+async function selectLeastLoadedEnabledServer(apiHost?: string | null) {
+  const enabledServers = liveKitServers.filter((server) => (
+    server.enabled && isLiveKitServerEligibleForApiHost(server, apiHost)
+  ));
 
   if (enabledServers.length === 0) {
     return null;
@@ -469,6 +478,11 @@ function parseLiveKitServerConfigFile() {
 }
 function validateUniqueIds(servers: LiveKitServerConfig[]) {
   const seenIds = new Set<string>();
+  const relayApiHosts = new Set(
+    operationalConfig.publicApi?.endpoints
+      .filter((endpoint) => endpoint.mode === 'relay')
+      .map((endpoint) => endpoint.host) ?? [],
+  );
 
   servers.forEach((server) => {
     if (seenIds.has(server.id)) {
@@ -476,6 +490,13 @@ function validateUniqueIds(servers: LiveKitServerConfig[]) {
     }
 
     seenIds.add(server.id);
+
+    if (server.clientUrlByApiHost) {
+      const host = server.clientUrlByApiHost;
+      if (!relayApiHosts.has(host)) {
+        throw new Error(`LiveKit server ${server.id} references unknown relay API host: ${host}`);
+      }
+    }
   });
 
   return servers;

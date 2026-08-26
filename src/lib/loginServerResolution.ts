@@ -1,11 +1,14 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { validateServerUrl } from './api';
+import { getRoutingHostnames, normalizeRoutingHostname, parseRoutingRecord, type ParsedRoutingRecord } from './serverRoutingRecords';
 import { DEFAULT_SERVER_URL } from './storage';
 
 const ALIAS_TXT_DOMAIN = 'rasadov.com';
 const ALIAS_CACHE_KEY = 'messenger.loginAliasCache.v1';
+const MAIN_POOL_CACHE_KEY = 'messenger.mainServerPoolCache.v1';
 const DNS_TIMEOUT_MS = 5_000;
+const PRIMARY_RETRY_DELAY_MS = 650;
 const MAX_STALE_ALIAS_AGE_MS = 30 * 24 * 60 * 60_000;
 
 export class LoginHostUnavailableError extends Error {
@@ -22,11 +25,30 @@ export class LoginAliasResolutionError extends Error {
   }
 }
 
+export type LoginServerSource = 'main' | 'main-dns-pool' | 'direct-hostname' | 'dns-alias';
+
 export type LoginServerResolution = {
   alias?: string;
+  candidateServerUrls: string[];
   serverUrl: string;
-  source: 'main' | 'direct-hostname' | 'dns-alias';
+  source: LoginServerSource;
   username: string;
+};
+
+export type MainServerCandidate = {
+  hostname: string;
+  responseTimeMs: number;
+  serverInstanceId: string;
+  serverUrl: string;
+};
+
+export type RuntimeMainServerDiscovery = {
+  candidates: MainServerCandidate[];
+  dnsReachable: boolean;
+};
+
+type MainPoolCacheEntry = MainServerCandidate & {
+  verifiedAt: number;
 };
 
 export function parseDomainLogin(value: string) {
@@ -47,20 +69,112 @@ export async function resolveLoginServer(rawUsername: string): Promise<LoginServ
   const parsed = parseDomainLogin(rawUsername);
 
   if (!parsed.domain) {
-    return { serverUrl: DEFAULT_SERVER_URL, source: 'main', username: parsed.username };
+    try {
+      const serverUrl = await requireReachableHost(DEFAULT_SERVER_URL);
+      return {
+        candidateServerUrls: [serverUrl],
+        serverUrl,
+        source: 'main',
+        username: parsed.username,
+      };
+    } catch {
+      const candidates = await resolveMainLoginFallbackCandidates();
+      if (candidates.length === 0) throw new LoginHostUnavailableError(DEFAULT_SERVER_URL);
+      return {
+        candidateServerUrls: candidates.map((candidate) => candidate.serverUrl),
+        serverUrl: candidates[0].serverUrl,
+        source: 'main-dns-pool',
+        username: parsed.username,
+      };
+    }
   }
 
   const hostname = parsed.domain.includes('.')
-    ? normalizeHostname(parsed.domain)
+    ? normalizeRoutingHostname(parsed.domain)
     : await resolveServerAlias(parsed.domain);
   const serverUrl = `https://${hostname}`;
+  const reachableServerUrl = await requireReachableHost(serverUrl);
 
   return {
     ...(hostname === parsed.domain ? {} : { alias: parsed.domain }),
-    serverUrl: await requireReachableHost(serverUrl),
+    candidateServerUrls: [reachableServerUrl],
+    serverUrl: reachableServerUrl,
     source: parsed.domain.includes('.') ? 'direct-hostname' : 'dns-alias',
     username: parsed.username,
   };
+}
+
+export async function resolveMainLoginFallbackCandidates() {
+  try {
+    const records = await queryRoutingTxtRecords();
+    const candidates = await probeMainServerCandidates(getRoutingHostnames(records, 'main'));
+    if (candidates.length > 0) await cacheMainPoolCandidates(candidates);
+    return candidates;
+  } catch {
+    await delay(PRIMARY_RETRY_DELAY_MS);
+    const primary = await probeMainServerCandidate(DEFAULT_SERVER_URL);
+    if (primary) return [primary];
+    const cached = await getCachedMainPoolCandidates();
+    return probeMainServerCandidates(cached.map((candidate) => candidate.hostname));
+  }
+}
+
+export async function discoverRuntimeMainServers(
+  expectedServerInstanceId: string,
+): Promise<RuntimeMainServerDiscovery> {
+  try {
+    const records = await queryRoutingTxtRecords();
+    const candidates = await probeMainServerCandidates(
+      getRoutingHostnames(records, 'main'),
+      expectedServerInstanceId,
+    );
+    if (candidates.length > 0) await cacheMainPoolCandidates(candidates);
+    return { candidates, dnsReachable: true };
+  } catch {
+    return { candidates: [], dnsReachable: false };
+  }
+}
+
+export async function probeMainServerCandidate(
+  serverUrl: string,
+  expectedServerInstanceId?: string,
+): Promise<MainServerCandidate | null> {
+  let normalizedUrl: string;
+  let hostname: string;
+
+  try {
+    normalizedUrl = normalizeServerUrl(serverUrl);
+    hostname = normalizeRoutingHostname(new URL(normalizedUrl).hostname);
+  } catch {
+    return null;
+  }
+  const startedAt = Date.now();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), DNS_TIMEOUT_MS);
+
+  try {
+    const [healthResponse, configResponse] = await Promise.all([
+      fetch(`${normalizedUrl}/health`, { signal: controller.signal }),
+      fetch(`${normalizedUrl}/config/client`, {
+        headers: { Accept: 'application/json' },
+        signal: controller.signal,
+      }),
+    ]);
+    if (!healthResponse.ok || !configResponse.ok) return null;
+    const config = await configResponse.json() as { serverInstanceId?: unknown };
+    const serverInstanceId = typeof config.serverInstanceId === 'string' ? config.serverInstanceId.trim() : '';
+    if (!serverInstanceId || (expectedServerInstanceId && serverInstanceId !== expectedServerInstanceId)) return null;
+    return {
+      hostname,
+      responseTimeMs: Math.max(1, Date.now() - startedAt),
+      serverInstanceId,
+      serverUrl: normalizedUrl,
+    };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 export async function getServerInstanceId(serverUrl: string) {
@@ -89,11 +203,8 @@ async function resolveServerAlias(alias: string) {
   }
 
   try {
-    const records = await queryAliasTxtRecords();
-    const matches = records
-      .map(parseAliasRecord)
-      .filter((record): record is { alias: string; hostname: string } => !!record && record.alias === alias);
-    const hostnames = [...new Set(matches.map((record) => record.hostname))];
+    const records = await queryRoutingTxtRecords();
+    const hostnames = [...new Set(records.filter((record) => record.alias === alias).map((record) => record.hostname))];
     if (hostnames.length !== 1) {
       throw new LoginAliasResolutionError(
         alias,
@@ -111,32 +222,35 @@ async function resolveServerAlias(alias: string) {
   }
 }
 
-async function queryAliasTxtRecords() {
+async function queryRoutingTxtRecords() {
   const endpoints = [
     `https://cloudflare-dns.com/dns-query?name=${ALIAS_TXT_DOMAIN}&type=TXT`,
     `https://dns.google/resolve?name=${ALIAS_TXT_DOMAIN}&type=TXT`,
   ];
-  let lastError: unknown;
-  for (const endpoint of endpoints) {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), DNS_TIMEOUT_MS);
-    try {
-      const response = await fetch(endpoint, {
-        headers: { Accept: 'application/dns-json' },
-        signal: controller.signal,
-      });
-      if (!response.ok) throw new Error(`DNS request failed with ${response.status}`);
-      const payload = await response.json() as { Answer?: { data?: unknown; type?: number }[] };
-      return (payload.Answer ?? [])
-        .filter((answer) => answer.type === 16 && typeof answer.data === 'string')
-        .map((answer) => decodeTxtData(answer.data as string));
-    } catch (error) {
-      lastError = error;
-    } finally {
-      clearTimeout(timeout);
-    }
+  const results = await Promise.allSettled(endpoints.map(queryTxtEndpoint));
+  const successful = results.filter((result): result is PromiseFulfilledResult<string[]> => result.status === 'fulfilled');
+  if (successful.length === 0) throw new Error('DNS lookup failed');
+  return [...new Set(successful.flatMap((result) => result.value))]
+    .map(parseRoutingRecord)
+    .filter((record): record is ParsedRoutingRecord => !!record);
+}
+
+async function queryTxtEndpoint(endpoint: string) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), DNS_TIMEOUT_MS);
+  try {
+    const response = await fetch(endpoint, {
+      headers: { Accept: 'application/dns-json' },
+      signal: controller.signal,
+    });
+    if (!response.ok) throw new Error(`DNS request failed with ${response.status}`);
+    const payload = await response.json() as { Answer?: { data?: unknown; type?: number }[] };
+    return (payload.Answer ?? [])
+      .filter((answer) => answer.type === 16 && typeof answer.data === 'string')
+      .map((answer) => decodeTxtData(answer.data as string));
+  } finally {
+    clearTimeout(timeout);
   }
-  throw lastError ?? new Error('DNS lookup failed');
 }
 
 function decodeTxtData(value: string) {
@@ -145,25 +259,21 @@ function decodeTxtData(value: string) {
   return chunks.map((chunk) => chunk.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, '\\')).join('');
 }
 
-function parseAliasRecord(value: string) {
-  const match = /^mv=([a-z0-9][a-z0-9_-]{0,62});([^;]+)$/i.exec(value.trim());
-  if (!match) return null;
-  try {
-    return { alias: match[1].toLowerCase(), hostname: normalizeHostname(match[2]) };
-  } catch {
-    return null;
-  }
+async function probeMainServerCandidates(hostnames: string[], expectedServerInstanceId?: string) {
+  const results = await Promise.all(hostnames.map((hostname) => (
+    probeMainServerCandidate(`https://${hostname}`, expectedServerInstanceId)
+  )));
+  return results
+    .filter((candidate): candidate is MainServerCandidate => !!candidate)
+    .sort((left, right) => left.responseTimeMs - right.responseTimeMs);
 }
 
-function normalizeHostname(value: string) {
-  const hostname = value.trim().toLowerCase().replace(/\.$/, '');
-  if (
-    hostname.length > 253 ||
-    !/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(hostname)
-  ) {
-    throw new Error('Invalid server hostname');
+function normalizeServerUrl(value: string) {
+  const parsed = new URL(value.trim().replace(/\/+$/, ''));
+  if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.port || parsed.pathname !== '/' || parsed.search || parsed.hash) {
+    throw new Error('Invalid server URL');
   }
-  return hostname;
+  return `https://${normalizeRoutingHostname(parsed.hostname)}`;
 }
 
 async function getCachedAlias(alias: string) {
@@ -186,10 +296,32 @@ async function readAliasCache() {
   }
 }
 
+async function cacheMainPoolCandidates(candidates: MainServerCandidate[]) {
+  const entries = candidates.map((candidate) => ({ ...candidate, verifiedAt: Date.now() }));
+  await AsyncStorage.setItem(MAIN_POOL_CACHE_KEY, JSON.stringify(entries));
+}
+
+async function getCachedMainPoolCandidates() {
+  try {
+    const entries = JSON.parse(await AsyncStorage.getItem(MAIN_POOL_CACHE_KEY) ?? '[]') as MainPoolCacheEntry[];
+    return entries.filter((entry) => (
+      typeof entry.hostname === 'string' &&
+      typeof entry.verifiedAt === 'number' &&
+      Date.now() - entry.verifiedAt <= MAX_STALE_ALIAS_AGE_MS
+    ));
+  } catch {
+    return [];
+  }
+}
+
 async function requireReachableHost(hostname: string) {
   try {
     return await validateServerUrl(hostname);
   } catch {
     throw new LoginHostUnavailableError(hostname.trim().replace(/\/+$/, ''));
   }
+}
+
+function delay(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

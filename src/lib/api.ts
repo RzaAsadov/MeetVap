@@ -3,6 +3,7 @@ import { t } from '../i18n';
 import { getClientRequestHeaders, initializeClientInstallationId } from './appClientInfo';
 import { MASK_HEADER, MASK_VERSION, maskPayload, unmaskPayload } from './payloadMask';
 import { notifyAuthSuspension } from './authSuspensionEvents';
+import { reportServerConnectionFailure, reportServerConnectionSuccess } from './serverConnectionEvents';
 
 type RequestOptions = RequestInit & {
   authToken?: string | null;
@@ -47,11 +48,21 @@ export async function apiRequest<T>(path: string, options: RequestOptions): Prom
     headers.set('Authorization', `Bearer ${token}`);
   }
 
-  const response = await fetch(`${serverUrl}${path}`, {
-    ...fetchOptions,
-    body,
-    headers,
-  });
+  let response: Response;
+
+  try {
+    response = await fetch(`${serverUrl}${path}`, {
+      ...fetchOptions,
+      body,
+      headers,
+    });
+    reportServerConnectionSuccess(serverUrl, 'api');
+  } catch (error) {
+    if (!(error instanceof Error && error.name === 'AbortError')) {
+      reportServerConnectionFailure(serverUrl, 'api');
+    }
+    throw error;
+  }
 
   const responseText = await response.text();
   const parsedResponse = parseApiResponseText(responseText, response.headers.get(MASK_HEADER));

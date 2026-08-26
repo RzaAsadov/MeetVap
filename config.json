@@ -1,6 +1,25 @@
 {
   "serverRole": "main",
   "serverInstanceId": "meetvap-main",
+  "publicApi": {
+    "defaultHost": "mm.meetvap.com",
+    "endpoints": [
+      {
+        "host": "mm.meetvap.com",
+        "url": "https://mm.meetvap.com",
+        "mode": "direct",
+        "meetUrl": "https://meet.meetvap.com",
+        "shareUrl": "https://meetvap.com"
+      },
+      {
+        "host": "sub.meetvap.ru",
+        "url": "https://sub.meetvap.ru",
+        "mode": "relay",
+        "meetUrl": "https://meet.meetvap.ru",
+        "shareUrl": "https://web.meetvap.ru"
+      }
+    ]
+  },
   "appdomains": [],
   "attestation": {
     "androidRequiredBuild": 999999,

@@ -64,7 +64,7 @@ export function ChatRoomScreen({ navigation, route }: Props) {
     selectedCallVoiceEffectIdRef, suppressNextCallPressRef, pendingJumpMessageIdRef, pendingJumpOptionsRef, pendingJumpAttemptRef,
     pendingJumpRetryTimeoutRef, pendingHistoryAnchorRef, isControlledHistoryPrependRef, isHistoryExpansionPendingRef, isOlderLocalHistoryLoadingRef,
     isOlderLocalHistoryExhaustedRef, isTailOpenLockedRef, chatScrollDebugLastScrollAtRef, chatScrollDebugLastDistanceRef, hasTailActivityDuringOpenRef,
-    composerTextInputRef, draftSelection, handleDraftChange, handleDraftSelectionChange, hasDraft, isSendingText, sendOptionsMode,
+    composerTextInputRef, composerInputHeight, isComposerInputScrollable, handleComposerContentSizeChange, draftSelection, handleDraftChange, handleDraftSelectionChange, hasDraft, isSendingText, sendOptionsMode,
     setSendOptionsMode, scheduleDateDraft, setScheduleDateDraft, scheduleHourDraft, setScheduleHourDraft,
     scheduleMinuteDraft, setScheduleMinuteDraft, scheduleSecondDraft, setScheduleSecondDraft, disappearSecondsDraft,
     setDisappearSecondsDraft, isComposerEditMenuVisible, setComposerEditMenuVisible, isEmojiPickerVisible,
@@ -1418,6 +1418,7 @@ export function ChatRoomScreen({ navigation, route }: Props) {
               defaultValue=""
               multiline
               onChangeText={handleDraftChange}
+              onContentSizeChange={(event) => handleComposerContentSizeChange(event.nativeEvent.contentSize.height)}
               onFocus={() => {
                 setEmojiPickerVisible(false);
                 if (isNearBottomRef.current || isTailForced()) {
@@ -1431,7 +1432,8 @@ export function ChatRoomScreen({ navigation, route }: Props) {
               placeholder={t('message')}
               placeholderTextColor={colors.mutedText}
               ref={composerTextInputRef}
-              style={[styles.input, styles.inputInWrap]}
+              scrollEnabled={Platform.OS === 'ios' || isComposerInputScrollable}
+              style={[styles.input, styles.inputInWrap, { height: composerInputHeight }]}
             />
             )}
           </View>

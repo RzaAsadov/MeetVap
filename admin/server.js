@@ -967,6 +967,8 @@ const ADMIN_TR = {
   'Allowed origin IP addresses': 'İzin verilen kaynak IP adresleri',
   'Main server key': 'Ana sunucu anahtarı',
   'New main server key': 'Yeni ana sunucu anahtarı',
+  'This is the key currently configured for this child server.': 'Bu, alt sunucu için şu anda yapılandırılmış anahtardır.',
+  'This key was created before key viewing was available. Enter the existing key or a new replacement key, then save.': 'Bu anahtar, anahtar görüntüleme özelliğinden önce oluşturuldu. Mevcut anahtarı veya yeni bir anahtarı girip kaydedin.',
   'Maximum users': 'Azami kullanıcı',
   'Requests': 'İstekler',
   'First requested': 'İlk istek',
@@ -1040,6 +1042,11 @@ const ADMIN_TR = {
   'Current voice participants': 'Mevcut sesli arama katılımcıları',
   'Current video participants': 'Mevcut video arama katılımcıları',
   'Calls without endedAt': 'Bitiş zamanı olmayan aramalar',
+  'LiveKit server': 'LiveKit sunucusu',
+  'Not recorded': 'Kaydedilmedi',
+  'Server is no longer configured': 'Sunucu artık yapılandırılmamış',
+  'No server assignment was stored': 'Sunucu ataması kaydedilmemiş',
+  'No longer configured': 'Artık yapılandırılmamış',
   'Admin messages': 'Admin mesajları',
   'Admins hidden': 'Adminler gizli',
   'Cancelled': 'İptal edildi',
@@ -1267,11 +1274,12 @@ app.post('/sub-domains', requireAdmin, requireSection('subdomains', 'edit'), asy
     const input = parseLoginDomainForm(req.body, true);
     await pool.query(`
       insert into "LoginDomain" (
-        id, domain, hostname, description, contacts, "originIpAddresses", "mainServerKeyHash",
+        id, domain, hostname, description, contacts, "originIpAddresses", "mainServerKeyHash", "mainServerKeyEncrypted",
         "expiresAt", "maxUserCount", "isActive", "createdByAdminUsername", "updatedByAdminUsername"
-      ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,true,$10,$10)
+      ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,true,$11,$11)
     `, [cuid(), input.domain, input.hostname, input.description, input.contacts, input.originIpAddresses,
-      hashMainServerKey(input.mainServerKey), input.expiresAt, input.maxUserCount, req.admin.username]);
+      hashMainServerKey(input.mainServerKey), encryptMainServerKey(input.mainServerKey), input.expiresAt,
+      input.maxUserCount, req.admin.username]);
     res.redirect('/sub-domains');
   } catch (error) {
     if (error?.code === '23505') {
@@ -1294,7 +1302,10 @@ app.post('/sub-domains/:id', requireAdmin, requireSection('subdomains', 'edit'),
       where id=$9
     `, params);
     if (input.mainServerKey) {
-      await pool.query('update "LoginDomain" set "mainServerKeyHash"=$1, "updatedAt"=current_timestamp where id=$2', [hashMainServerKey(input.mainServerKey), req.params.id]);
+      await pool.query(`
+        update "LoginDomain" set "mainServerKeyHash"=$1, "mainServerKeyEncrypted"=$2,
+          "updatedAt"=current_timestamp where id=$3
+      `, [hashMainServerKey(input.mainServerKey), encryptMainServerKey(input.mainServerKey), req.params.id]);
     }
     res.redirect('/sub-domains');
   } catch (error) {
@@ -2265,7 +2276,7 @@ app.get('/calls', requireAdmin, requireSection('calls'), async (req, res, next) 
           <button>Filter</button>
         </form>
         <div class="panel"><div class="table-wrap"><table>
-          <thead><tr><th>${escapeHtml(translateText('Call'))}</th><th>${escapeHtml(translateText('Conversation'))}</th><th>${escapeHtml(translateText('Mode'))}</th><th>${escapeHtml(translateText('Started'))}</th><th>${escapeHtml(translateText('Ended'))}</th><th>${escapeHtml(translateText('Participants'))}</th><th></th></tr></thead>
+          <thead><tr><th>${escapeHtml(translateText('Call'))}</th><th>${escapeHtml(translateText('Conversation'))}</th><th>${escapeHtml(translateText('Mode'))}</th><th>${escapeHtml(translateText('LiveKit server'))}</th><th>${escapeHtml(translateText('Started'))}</th><th>${escapeHtml(translateText('Ended'))}</th><th>${escapeHtml(translateText('Participants'))}</th><th></th></tr></thead>
           <tbody>${rows.map((row) => callRowWithOptions(row, { showIds: false })).join('')}</tbody>
         </table></div></div>
       `,
@@ -2296,7 +2307,7 @@ app.get('/livekit', requireAdmin, requireSection('calls'), async (_req, res, nex
 
 app.get('/calls/:id', requireAdmin, requireSection('calls'), async (req, res, next) => {
   try {
-    const call = (await pool.query(`
+    const storedCall = (await pool.query(`
       select c.*, cv.title, cv.type, cv."ownerId", count(cp.id)::int participant_count,
         count(cp.id) filter (where cp."joinedAt" is not null and cp."leftAt" is null)::int joined_now,
         max(cp."leftAt") filter (where cp."joinedAt" is not null)::timestamp(3) last_left_at,
@@ -2308,10 +2319,11 @@ app.get('/calls/:id', requireAdmin, requireSection('calls'), async (req, res, ne
       where c.id = $1
       group by c.id, cv.id
     `, [req.params.id])).rows[0];
-    if (!call) {
+    if (!storedCall) {
       res.status(404).send(page({ active: 'calls', body: empty('Call not found.'), title: 'Not found' }));
       return;
     }
+    const call = addLiveKitServerMetadata([storedCall])[0];
     const participants = await getCallParticipants(req.params.id);
     const effectiveEndedAt = getEffectiveCallEndedAt(call);
     res.send(page({
@@ -2323,6 +2335,7 @@ app.get('/calls/:id', requireAdmin, requireSection('calls'), async (req, res, ne
           ${metric('Status', isCallActive(call) ? 'Active' : 'Ended', durationBetween(call.startedAt, effectiveEndedAt || new Date()))}
           ${metric('Participants', number(call.participant_count), 'Invited and joined users')}
           ${metric('Conversation', displayConversationType(call.type), escapeHtml(callConversationLabel(call)))}
+          ${metric('LiveKit server', escapeHtml(liveKitServerName(call)), liveKitServerUrl(call))}
         </section>
         ${panel('Participants', participantTable(participants.rows))}
       `,
@@ -2975,8 +2988,8 @@ async function getLiveMetrics() {
 }
 
 async function getActiveCalls() {
-  return pool.query(`
-    select c.id, c.mode, c."startedAt", c."endedAt", c."conversationId", c."livekitRoom", cv.title, cv.type,
+  const result = await pool.query(`
+    select c.id, c.mode, c."startedAt", c."endedAt", c."conversationId", c."livekitRoom", c."livekitServerId", cv.title, cv.type,
       count(cp.id)::int participants,
       count(cp.id) filter (where cp."joinedAt" is not null and cp."leftAt" is null)::int joined_now,
       max(cp."leftAt") filter (where cp."joinedAt" is not null)::timestamp(3) last_left_at,
@@ -2997,6 +3010,8 @@ async function getActiveCalls() {
     order by c."startedAt" desc
     limit 12
   `);
+
+  return { ...result, rows: addLiveKitServerMetadata(result.rows) };
 }
 
 async function getLiveKitAdminSnapshot() {
@@ -3645,8 +3660,8 @@ function daysInMonth(year, month) {
   return new Date(year, month + 1, 0).getDate();
 }
 
-function getUserCalls(id) {
-  return pool.query(`
+async function getUserCalls(id) {
+  const result = await pool.query(`
     select c.*, cv.title, cv.type,
       count(cp2.id)::int participants,
       cp.direction, cp."joinedAt", cp."leftAt"
@@ -3659,6 +3674,8 @@ function getUserCalls(id) {
     order by c."startedAt" desc
     limit 30
   `, [id]);
+
+  return { ...result, rows: addLiveKitServerMetadata(result.rows) };
 }
 
 async function getCalls({ mode = '', status = 'all' } = {}) {
@@ -3678,7 +3695,7 @@ async function getCalls({ mode = '', status = 'all' } = {}) {
         and cp_active."leftAt" is null
     )`);
   }
-  return (await pool.query(`
+  const rows = (await pool.query(`
     select c.*, cv.title, cv.type,
       count(cp.id)::int participants,
       count(cp.id) filter (where cp."joinedAt" is not null and cp."leftAt" is null)::int joined_now,
@@ -3693,6 +3710,8 @@ async function getCalls({ mode = '', status = 'all' } = {}) {
     order by c."startedAt" desc
     limit 300
   `, params)).rows;
+
+  return addLiveKitServerMetadata(rows);
 }
 
 function getCallParticipants(callId) {
@@ -3754,8 +3773,8 @@ function getGroupMembers(id) {
   `, [id]);
 }
 
-function getGroupCalls(id) {
-  return pool.query(`
+async function getGroupCalls(id) {
+  const result = await pool.query(`
     select c.*, cv.title, cv.type, count(cp.id)::int participants
     from "Call" c
     join "Conversation" cv on cv.id = c."conversationId"
@@ -3765,6 +3784,8 @@ function getGroupCalls(id) {
     order by c."startedAt" desc
     limit 20
   `, [id]);
+
+  return { ...result, rows: addLiveKitServerMetadata(result.rows) };
 }
 
 function getGroupWebhooks(id) {
@@ -4514,6 +4535,7 @@ function callRowWithOptions(c, options = {}) {
     <td data-label="${escapeAttr(translateText('Call'))}"><a href="/calls/${encodeURIComponent(c.id)}"><strong>${escapeHtml(title)}</strong></a>${showIds ? `<br><span class="subtle">${escapeHtml(c.id)}</span>` : ''}</td>
     <td data-label="${escapeAttr(translateText('Conversation'))}">${showIds ? conversationLink(c.conversationId, callConversationLabel(c)) : escapeHtml(callConversationLabel(c))}</td>
     <td data-label="${escapeAttr(translateText('Mode'))}"><span class="pill ${c.mode === 'VIDEO' ? 'video' : 'voice'}">${escapeHtml(displayCallMode(c.mode))}</span></td>
+    <td data-label="${escapeAttr(translateText('LiveKit server'))}">${liveKitServerCell(c)}</td>
     <td data-label="${escapeAttr(translateText('Started'))}">${date(c.startedAt)}</td>
     <td data-label="${escapeAttr(translateText('Ended'))}">${date(effectiveEndedAt)}</td>
     <td data-label="${escapeAttr(translateText('Participants'))}">${number(c.joined_now ?? c.participants)} / ${number(c.participants)}</td>
@@ -4967,6 +4989,42 @@ function hashMainServerKey(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
 }
 
+function getMainServerKeyEncryptionKey() {
+  return crypto.createHash('sha256').update(`meetvap-login-domain-key:${config.sessionSecret}`).digest();
+}
+
+function encryptMainServerKey(value) {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', getMainServerKeyEncryptionKey(), iv);
+  const ciphertext = Buffer.concat([cipher.update(value, 'utf8'), cipher.final()]);
+  const authTag = cipher.getAuthTag();
+
+  return `v1.${iv.toString('base64url')}.${authTag.toString('base64url')}.${ciphertext.toString('base64url')}`;
+}
+
+function decryptMainServerKey(value) {
+  const [version, encodedIv, encodedAuthTag, encodedCiphertext] = String(value || '').split('.');
+
+  if (version !== 'v1' || !encodedIv || !encodedAuthTag || !encodedCiphertext) {
+    return '';
+  }
+
+  try {
+    const decipher = crypto.createDecipheriv(
+      'aes-256-gcm',
+      getMainServerKeyEncryptionKey(),
+      Buffer.from(encodedIv, 'base64url'),
+    );
+    decipher.setAuthTag(Buffer.from(encodedAuthTag, 'base64url'));
+    return Buffer.concat([
+      decipher.update(Buffer.from(encodedCiphertext, 'base64url')),
+      decipher.final(),
+    ]).toString('utf8');
+  } catch {
+    return '';
+  }
+}
+
 function loginDomainCreateModal() {
   const generatedKey = crypto.randomBytes(32).toString('base64url');
   return `<dialog class="admin-modal" id="subdomain-create-modal">
@@ -5000,13 +5058,20 @@ function loginDomainEditModal(domain, modalId) {
 }
 
 function loginDomainForm(domain, generatedKey = '') {
+  const currentMainServerKey = domain ? decryptMainServerKey(domain.mainServerKeyEncrypted) : generatedKey;
+  const keyHelp = domain
+    ? currentMainServerKey
+      ? 'This is the key currently configured for this child server.'
+      : 'This key was created before key viewing was available. Enter the existing key or a new replacement key, then save.'
+    : 'Copy this key into the child server config.json.';
+
   return `<div class="stack">
     <label>${escapeHtml(translateText('Domain'))}<input name="domain" maxlength="253" required value="${escapeAttr(domain?.domain || '')}" placeholder="company or company.example.com"><span class="subtle">${escapeHtml(translateText('Enter the value used after @. URLs and @ prefixes are normalized automatically.'))}</span></label>
     <label>${escapeHtml(translateText('Hostname'))}<input name="hostname" type="url" required value="${escapeAttr(domain?.hostname || '')}" placeholder="https://api.company.com"></label>
     <label>${escapeHtml(translateText('Description'))}<textarea name="description" maxlength="2000" rows="3">${escapeHtml(domain?.description || '')}</textarea></label>
     <label>${escapeHtml(translateText('Contacts'))}<textarea name="contacts" maxlength="2000" rows="3">${escapeHtml(domain?.contacts || '')}</textarea></label>
     <label>${escapeHtml(translateText('Allowed origin IP addresses'))}<textarea name="originIpAddresses" rows="3" required placeholder="203.0.113.10">${escapeHtml((domain?.originIpAddresses || []).join('\n'))}</textarea></label>
-    <label>${escapeHtml(translateText(domain ? 'New main server key' : 'Main server key'))}<input name="mainServerKey" ${domain ? '' : 'required'} minlength="24" value="${escapeAttr(generatedKey)}" autocomplete="off"><span class="subtle">${escapeHtml(translateText(domain ? 'Leave empty to keep the existing key.' : 'Copy this key into the child server config.json.'))}</span></label>
+    <label>${escapeHtml(translateText('Main server key'))}<input name="mainServerKey" ${domain ? '' : 'required'} minlength="24" value="${escapeAttr(currentMainServerKey)}" autocomplete="off" spellcheck="false"><span class="subtle">${escapeHtml(translateText(keyHelp))}</span></label>
     <label>${escapeHtml(translateText('Expires'))}<input name="expiresAt" type="datetime-local" value="${escapeAttr(dateTimeLocal(domain?.expiresAt))}"></label>
     <label>${escapeHtml(translateText('Maximum users'))}<input name="maxUserCount" type="number" min="1" value="${escapeAttr(domain?.maxUserCount ?? '')}" placeholder="Unlimited"></label>
     <button>${escapeHtml(translateText(domain ? 'Save' : 'Create'))}</button>
@@ -5175,12 +5240,57 @@ function mediaMiniTable(rows) {
 function callCards(rows, options = {}) {
   const clickable = options.clickable !== false;
   return `<div class="call-cards">${rows.map((c) => {
-    const content = `<span class="pill ${c.mode === 'VIDEO' ? 'video' : 'voice'}">${escapeHtml(displayCallMode(c.mode))}</span><strong>${escapeHtml(callPrimaryLabel(c))}</strong><span>${number(c.joined_now)} ${escapeHtml(translateText('joined'))} · ${durationBetween(c.startedAt, new Date())}</span>`;
+    const content = `<span class="pill ${c.mode === 'VIDEO' ? 'video' : 'voice'}">${escapeHtml(displayCallMode(c.mode))}</span><strong>${escapeHtml(callPrimaryLabel(c))}</strong><span>${number(c.joined_now)} ${escapeHtml(translateText('joined'))} · ${durationBetween(c.startedAt, new Date())}</span><span>${escapeHtml(translateText('LiveKit server'))}: ${escapeHtml(liveKitServerName(c))}</span>`;
 
     return clickable
       ? `<a class="call-card" href="/calls/${encodeURIComponent(c.id)}">${content}</a>`
       : `<div class="call-card">${content}</div>`;
   }).join('')}</div>`;
+}
+
+function addLiveKitServerMetadata(rows) {
+  const configuredServers = new Map(
+    readLiveKitServerConfig().servers.map((server) => [server.id, server]),
+  );
+
+  return rows.map((row) => {
+    const server = row.livekitServerId ? configuredServers.get(row.livekitServerId) : null;
+
+    return {
+      ...row,
+      livekitServerUrl: server?.url || '',
+    };
+  });
+}
+
+function liveKitServerName(call) {
+  return call.livekitServerId || translateText('Not recorded');
+}
+
+function liveKitServerUrl(call) {
+  if (call.livekitServerUrl) {
+    return escapeHtml(call.livekitServerUrl);
+  }
+
+  if (call.livekitServerId) {
+    return escapeHtml(translateText('Server is no longer configured'));
+  }
+
+  return escapeHtml(translateText('No server assignment was stored'));
+}
+
+function liveKitServerCell(call) {
+  const name = escapeHtml(liveKitServerName(call));
+
+  if (!call.livekitServerId) {
+    return `<span class="subtle">${name}</span>`;
+  }
+
+  const url = call.livekitServerUrl
+    ? `<br><span class="subtle">${escapeHtml(call.livekitServerUrl)}</span>`
+    : `<br><span class="subtle">${escapeHtml(translateText('No longer configured'))}</span>`;
+
+  return `<strong>${name}</strong>${url}`;
 }
 
 function liveKitConfigurationDetails(snapshot) {

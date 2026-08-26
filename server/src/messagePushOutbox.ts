@@ -2,7 +2,6 @@ import { Prisma } from '@prisma/client';
 import { z } from 'zod';
 
 import { createPushReceiptUrl, MESSAGE_PUSH_OUTBOX_SCOPE } from './childPushRelay';
-import { config } from './config';
 import { recordProviderReceipts } from './expoPushReceipts';
 import { operationalConfig } from './operationalConfig';
 import { prisma } from './prisma';
@@ -183,6 +182,7 @@ async function loadRecipientTokens(payload: z.infer<typeof payloadSchema>): Prom
       locale: true,
       platform: true,
       provider: true,
+      publicApiUrl: true,
       token: true,
       updatedAt: true,
       userId: true,
@@ -208,9 +208,8 @@ async function loadRecipientTokens(payload: z.infer<typeof payloadSchema>): Prom
 }
 
 function addReceiptUrls(requestId: string, tokens: StoredPushToken[]) {
-  if (!config.PUBLIC_API_URL) return tokens;
   return tokens.map((token) => token.id
-    ? { ...token, deliveryReceiptUrl: createPushReceiptUrl(requestId, token.id) }
+    ? { ...token, deliveryReceiptUrl: createPushReceiptUrl(requestId, token.id, token.publicApiUrl) }
     : token);
 }
 

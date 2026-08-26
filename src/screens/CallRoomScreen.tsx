@@ -18,7 +18,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Avatar } from '../components/Avatar';
 import { t } from '../i18n';
 import { ApiError } from '../lib/api';
-import { addAppLockAccessListener, beginAppLockForegroundOperation, endCallOnlyAccess, isCallOnlyAccessFor } from '../lib/appLockAccess';
+import { addAppLockAccessListener, beginAppLockForegroundOperation, endCallOnlyAccess, isCallOnlyAccessFor, requireAppUnlockAfterCallMinimize } from '../lib/appLockAccess';
 import { getActiveCallSession, setActiveCallSession } from '../lib/activeCallSession';
 import { answerCall, createCall, endCall, getCallScreenshotPrivacy, getCallStatus as fetchCallStatus, getCallToken, getConversationScreenshotPrivacy, inviteCallParticipant, submitCallFeedback } from '../lib/backend';
 import { getMobileCallAnswerClientId } from '../lib/callAnswerClient';
@@ -32,7 +32,7 @@ import { subscribeToShareIntentItems } from '../lib/shareIntentEvents';
 import { formatShareSubtitle, formatShareSummary, isUsableSharedItem, prepareSharedItem } from '../lib/shareTargetItems';
 import { hasPremiumAccess } from '../lib/subscriptionAccess';
 import { MainTabs } from '../navigation/MainTabs';
-import { answerNativeIncomingCallKitCall, beginNativeLiveVoiceEffectSession, cancelNativeAndroidIncomingCall, closeCallPictureInPicture, confirmNativeLiveVoiceEffectAttached, endIosCallKitCall, enterCallPictureInPicture, getNativeCallAudioRoutes, isIosMultitaskingCameraAccessSupported, prepareNativeCallAudioSession, prepareNativeCallKitAudioSession, selectNativeCallAudioRoute, setCallPictureInPictureEnabled, setNativeCallAudioRoute, setNativeLiveVoiceEffect, setNativeLiveVoiceEffectAndWait, setNativeMediaViewerOrientationUnlocked, setNativeProximityScreenOffEnabled, startNativeCallService, startNativeIncomingRingtone, startNativeOutgoingRingback, stopNativeCallService, stopNativeIncomingRingtone, stopNativeOutgoingRingback, waitForNativeCallKitAudioActivation, waitForNativeLiveVoiceProcessing } from '../native/CallNative';
+import { answerNativeIncomingCallKitCall, beginNativeLiveVoiceEffectSession, cancelNativeAndroidIncomingCall, closeCallPictureInPicture, confirmNativeLiveVoiceEffectAttached, dismissNativeAndroidIncomingCall, endIosCallKitCall, enterCallPictureInPicture, getNativeCallAudioRoutes, isIosMultitaskingCameraAccessSupported, prepareNativeCallAudioSession, prepareNativeCallKitAudioSession, selectNativeCallAudioRoute, setCallPictureInPictureEnabled, setNativeCallAudioRoute, setNativeLiveVoiceEffect, setNativeLiveVoiceEffectAndWait, setNativeMediaViewerOrientationUnlocked, setNativeProximityScreenOffEnabled, startNativeCallService, startNativeIncomingRingtone, startNativeOutgoingRingback, stopNativeCallService, stopNativeIncomingRingtone, stopNativeOutgoingRingback, waitForNativeCallKitAudioActivation, waitForNativeLiveVoiceProcessing } from '../native/CallNative';
 import type { CallAudioRoute } from '../native/CallNative';
 import { AddPeopleModal, CallConnectionProblemModal, CallControl, CallRoomPresentationProvider, ConnectedCallStage, IncomingControls, LiveKitWaitingVideoStage, MinimizedCallView, PeopleInCallModal, WaitingCallControls, WaitingIncomingCallModal, WaitingVideoStage, clampMiniCallPosition, getMiniCallBounds } from './call/CallRoomPresentation';
 import type { CallParticipantProfile, InviteCandidate, ScreenPoint } from './call/CallRoomPresentation';
@@ -733,8 +733,11 @@ export function CallRoomScreen({ navigation, route }: Props) {
   const loadConversations: AppStoreState['loadConversations'] = useAppStore((state: AppStoreState) => state.loadConversations);
   const recordCallLog: AppStoreState['recordCallLog'] = useAppStore((state: AppStoreState) => state.recordCallLog);
   const [hasCallOnlyAccess, setHasCallOnlyAccess] = useState(() => isCallOnlyAccessFor(route.params.callId));
-  const isLockedCallAccess = route.params.callAccess === 'locked-call' || (
-    route.params.direction === 'incoming' && hasCallOnlyAccess
+  const [hasReleasedLockedCallAccess, setHasReleasedLockedCallAccess] = useState(false);
+  const isLockedCallAccess = !hasReleasedLockedCallAccess && (
+    route.params.callAccess === 'locked-call' || (
+      route.params.direction === 'incoming' && hasCallOnlyAccess
+    )
   );
   const [incomingVoiceEffectId, setIncomingVoiceEffectId] = useState<VoiceEffectId>(() => normalizeVoiceEffectId(route.params.voiceEffectId));
   const [isIncomingVoiceEffectPickerOpen, setIncomingVoiceEffectPickerOpen] = useState(false);
@@ -2067,18 +2070,8 @@ export function CallRoomScreen({ navigation, route }: Props) {
               })
               .catch(() => undefined);
           }
-          if (route.params.mode === 'video' && Platform.OS === 'android') {
-            // On iOS, the pre-answer WebRTC session can interrupt the foreground ringtone.
-            // Keep iOS ringing stable, then join LiveKit from the normal answer path.
-            logCallTiming('incoming-prejoin-start');
-            void connectLiveKitWithRetry(route.params.callId, {
-              keepIncomingRingtone: true,
-              preserveStatus: true,
-              silent: true,
-              skipAudioPreparation: true,
-              skipPermissionsCheck: true,
-            }).catch(() => undefined);
-          }
+          // Pre-answer WebRTC audio-session activation can silence the incoming
+          // ringtone. Token prefetch stays active; LiveKit joins after answer.
           return;
         }
 
@@ -2396,7 +2389,7 @@ export function CallRoomScreen({ navigation, route }: Props) {
       return;
     }
 
-    cancelNativeAndroidIncomingCall(callId ?? route.params.callId);
+    dismissNativeAndroidIncomingCall(callId ?? route.params.callId);
   }, [callId, route.params.callId, route.params.direction]);
 
   useEffect(() => {
@@ -3113,13 +3106,22 @@ export function CallRoomScreen({ navigation, route }: Props) {
   }, [activeCallAudioRouteType, connectedAt, isSpeakerOn, route.params.mode]);
 
   const minimizeCall = useCallback(async () => {
-    if (!liveKitToken || isLockedCallAccess) {
+    if (!liveKitToken) {
       return;
+    }
+
+    if (isLockedCallAccess) {
+      const nextCallId = currentCallIdRef.current ?? route.params.callId;
+
+      if (nextCallId) {
+        requireAppUnlockAfterCallMinimize(nextCallId);
+      }
+      setHasReleasedLockedCallAccess(true);
     }
 
     setSystemPictureInPictureLayout(false);
     setPictureInPictureLayout(true);
-  }, [isLockedCallAccess, liveKitToken]);
+  }, [isLockedCallAccess, liveKitToken, route.params.callId]);
 
   useEffect(() => {
     const unsubscribe = navigation.addListener('beforeRemove', (event) => {
@@ -3343,10 +3345,19 @@ export function CallRoomScreen({ navigation, route }: Props) {
         onTouchStart={shouldAutoHideVideoChrome ? revealVideoCallChrome : undefined}
         style={styles.callContent}
       >
+        {isVideoLayout ? (
+          <Pressable
+            accessibilityLabel={t('back')}
+            onPress={canUseRoomControls ? () => void minimizeCall() : hangUp}
+            style={[styles.persistentVideoMinimizeButton, { top: insets.top + spacing.sm }]}
+          >
+            <Ionicons color={colors.white} name="chevron-down" size={24} />
+          </Pressable>
+        ) : null}
         {(!isVideoLayout || showVideoChrome) ? (
           <View style={[styles.topBar, isVideoLayout ? [styles.overlayTopBar, { paddingTop: insets.top + spacing.sm }] : undefined]}>
             <View style={styles.topActions}>
-              {isLockedCallAccess && canUseRoomControls ? (
+              {isVideoLayout ? (
                 <View style={styles.topButton} />
               ) : (
                 <Pressable onPress={canUseRoomControls ? () => void minimizeCall() : hangUp} style={styles.topButton}>

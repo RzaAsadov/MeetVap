@@ -8,6 +8,7 @@ import { Avatar } from '../components/Avatar';
 import { ScreenBackground } from '../components/ScreenBackground';
 import { useVoiceCallTip } from '../hooks/useVoiceCallTip';
 import { buildSharedContactMessage } from '../lib/shareLinks';
+import { getShareBaseUrl } from '../lib/serverPolicy';
 import { t } from '../i18n';
 import { useAppStore } from '../store/useAppStore';
 import { colors } from '../theme/colors';
@@ -25,6 +26,7 @@ export function ContactsScreen() {
   const contacts = useAppStore((state) => state.contacts);
   const language = useAppStore((state) => state.language);
   const user = useAppStore((state) => state.user);
+  const serverUrl = useAppStore((state) => state.serverUrl);
   const blockUserById = useAppStore((state) => state.blockUserById);
   const deleteContactById = useAppStore((state) => state.deleteContactById);
   const loadContacts = useAppStore((state) => state.loadContacts);
@@ -220,7 +222,7 @@ export function ContactsScreen() {
               icon="share-social-outline"
               label={t('shareContact')}
               onPress={() => selectedContact && runContactMenuAction(async () => {
-                const payload = buildSharedContactMessage(selectedContact);
+                const payload = buildSharedContactMessage(selectedContact, await getShareBaseUrl(serverUrl));
                 await Share.share(payload);
               }, t('shareFailed'))}
             />

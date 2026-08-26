@@ -6,6 +6,7 @@ import { config } from './config';
 import { HttpError } from './httpError';
 import { getServerInstanceId, operationalConfig } from './operationalConfig';
 import { prisma } from './prisma';
+import { getDefaultPublicApiEndpoint, getPublicApiUrlOrDefault } from './publicApiEndpoints';
 import { invalidatePushTokenCacheForUser } from './pushTokenCache';
 
 const CHILD_SCOPE = 'child';
@@ -97,8 +98,8 @@ export function startChildPushRelayWorker() {
   if (operationalConfig.serverRole !== 'child') {
     return;
   }
-  if (!config.PUBLIC_API_URL) {
-    console.warn('Child push device receipts are disabled because PUBLIC_API_URL is not configured');
+  if (!getDefaultPublicApiEndpoint()) {
+    console.warn('Child push device receipts are disabled because no public API endpoint is configured');
   }
 
   const run = async () => {
@@ -342,7 +343,7 @@ function getSyncStateId() {
 }
 
 function addDeliveryReceiptUrls(requestId: string, input: unknown) {
-  if (!config.PUBLIC_API_URL || !input || typeof input !== 'object') {
+  if (!getDefaultPublicApiEndpoint() || !input || typeof input !== 'object') {
     return input;
   }
 
@@ -360,17 +361,27 @@ function addDeliveryReceiptUrls(requestId: string, input: unknown) {
 
       return {
         ...token,
-        accountServerInstanceId: getServerInstanceId(config.PUBLIC_API_URL),
-        accountServerUrl: config.PUBLIC_API_URL,
-        deliveryReceiptUrl: createPushReceiptUrl(requestId, token.id),
+        accountServerInstanceId: getServerInstanceId(getDefaultPublicApiEndpoint()?.url ?? config.PUBLIC_API_URL),
+        accountServerUrl: getPublicApiUrlOrDefault('publicApiUrl' in token && typeof token.publicApiUrl === 'string' ? token.publicApiUrl : undefined),
+        deliveryReceiptUrl: createPushReceiptUrl(
+          requestId,
+          token.id,
+          'publicApiUrl' in token && typeof token.publicApiUrl === 'string' ? token.publicApiUrl : undefined,
+        ),
       };
     }),
   };
 }
 
-export function createPushReceiptUrl(requestId: string, tokenId: string) {
+export function createPushReceiptUrl(requestId: string, tokenId: string, publicApiUrl?: string | null) {
   const expiresAt = Date.now() + PUSH_RECEIPT_TTL_MS;
-  const url = new URL(`/push-receipts/${encodeURIComponent(requestId)}/${encodeURIComponent(tokenId)}`, config.PUBLIC_API_URL);
+  const origin = getPublicApiUrlOrDefault(publicApiUrl);
+
+  if (!origin) {
+    throw new Error('Public API URL is not configured');
+  }
+
+  const url = new URL(`/push-receipts/${encodeURIComponent(requestId)}/${encodeURIComponent(tokenId)}`, origin);
   url.searchParams.set('expiresAt', String(expiresAt));
   url.searchParams.set('signature', createPushReceiptSignature(requestId, tokenId, expiresAt));
   return url.toString();

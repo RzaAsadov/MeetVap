@@ -11,6 +11,7 @@ import { HttpError } from '../httpError';
 import { operationalConfig } from '../operationalConfig';
 import { prisma } from '../prisma';
 import { invalidatePushTokenCacheForUser } from '../pushTokenCache';
+import { getPublicApiUrlForRequest } from '../publicApiEndpoints';
 import { serializeUser } from '../serializers';
 import { ensureUserPublicShareCode } from '../shareCodes';
 import { getPremiumFeatureAccessMap, requirePremiumFeatureAccess } from '../subscriptions';
@@ -807,6 +808,7 @@ userRoutes.post('/push-token', requireAuth, async (req, res, next) => {
     const currentUser = getAuthedUser(req);
     const input = registerPushTokenSchema.parse(req.body);
     const provider = normalizePushTokenProvider(input.provider, input.platform);
+    const publicApiUrl = getPublicApiUrlForRequest(req);
     const clientMetadata = getRequestClientMetadata(req, input.platform);
     const hasAnotherAccountSession = clientMetadata.installationId &&
       (clientMetadata.appBuildNumber ?? 0) >= MULTI_ACCOUNT_SESSION_INFERENCE_MIN_BUILD
@@ -870,6 +872,7 @@ userRoutes.post('/push-token', requireAuth, async (req, res, next) => {
           locale: input.locale,
           platform: input.platform,
           provider,
+          publicApiUrl,
           token: input.token,
           userId: currentUser.id,
         },
@@ -878,6 +881,7 @@ userRoutes.post('/push-token', requireAuth, async (req, res, next) => {
           locale: input.locale,
           platform: input.platform,
           provider,
+          publicApiUrl,
         },
         where: {
           userId_token_provider: {

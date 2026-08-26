@@ -84,6 +84,30 @@ PUBLIC_API_URL=https://mm.meetvap.com
 MEET_SERVER_URL=meet.meetvap.com
 ```
 
+`PUBLIC_API_URL` is the compatibility fallback for installations with one API
+hostname. When the same main backend is reachable through direct and relay
+hostnames, define every accepted origin in the root `config.json` instead:
+
+```json
+{
+  "serverRole": "main",
+  "serverInstanceId": "meetvap-main",
+  "publicApi": {
+    "defaultHost": "mm.meetvap.com",
+    "endpoints": [
+      { "host": "mm.meetvap.com", "url": "https://mm.meetvap.com", "mode": "direct", "meetUrl": "https://meet.meetvap.com" },
+      { "host": "sub.meetvap.ru", "url": "https://sub.meetvap.ru", "mode": "relay", "meetUrl": "https://meet.meetvap.ru" }
+    ]
+  }
+}
+```
+
+The reverse proxy must preserve the original hostname in `Host` or
+`X-Forwarded-Host`. Both endpoints return the same `serverInstanceId`, while
+sessions, web pairings, and push tokens retain the endpoint used by that client.
+The optional `meetUrl` assigns the public Meet frontend returned to clients using
+that API endpoint. When omitted, the backend falls back to `MEET_SERVER_URL`.
+
 LiveKit can run with the existing single-server variables:
 
 ```env
@@ -116,6 +140,7 @@ Example `livekit-servers.json`:
   {
     "id": "livekit-b",
     "url": "wss://wp2.meetvap.com",
+    "clientUrlByApiHost": "sub.meetvap.ru",
     "apiKey": "...",
     "apiSecret": "...",
     "enabled": true,
@@ -124,6 +149,12 @@ Example `livekit-servers.json`:
   }
 ]
 ```
+
+An entry without `clientUrlByApiHost` belongs to the normal direct pool. An
+entry with `clientUrlByApiHost` is eligible only for requests arriving through
+that relay API host. Calls and meetings persist the selected physical LiveKit server, so all
+participants subsequently join the same room even when they use different API
+endpoints.
 
 Copy `config.json` beside the root `.env` file. It controls retention cleanup, attachment limits, send cooldowns, and the message queue hard-delete client build gate. Restart the backend after changing it.
 

@@ -67,8 +67,14 @@ class MainActivity : ReactActivity() {
       if (isIncomingCall) {
         IncomingCallIntentStore.remember(intent)
       }
-      IncomingCallNotificationHelper.stopRingtone()
-      IncomingCallNotificationHelper.cancel(applicationContext, data?.getQueryParameter("callId"))
+
+      if (isIncomingCall && !isDeclineOnly && !isAcceptedIncomingCall) {
+        // The full-screen activity is now responsible for the ringing UI, but
+        // the same native player must continue until answer, decline, or end.
+        IncomingCallNotificationHelper.dismiss(applicationContext, data?.getQueryParameter("callId"))
+      } else {
+        IncomingCallNotificationHelper.cancel(applicationContext, data?.getQueryParameter("callId"))
+      }
     }
 
     if (isDeclineOnly) {

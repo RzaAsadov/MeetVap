@@ -8,6 +8,7 @@ export type CachedPushToken = {
   locale: string | null;
   platform: string;
   provider: string;
+  publicApiUrl: string | null;
   token: string;
   userId?: string;
 };
@@ -43,6 +44,7 @@ export async function getCachedPushTokensForUsers(userIds: string[], includeUser
       locale: true,
       platform: true,
       provider: true,
+      publicApiUrl: true,
       token: true,
       ...(includeUserId ? { userId: true } : {}),
     },

@@ -1,4 +1,4 @@
-import { ConversationMember, Message, MessageKind, MessageStatus, Prisma, ScheduledMessage, StatusAudience, StatusUpdate } from '@prisma/client';
+import { ConversationMember, MediaFile, Message, MessageKind, MessageStatus, Prisma, ScheduledMessage, StatusAudience, StatusUpdate } from '@prisma/client';
 import { NextFunction, Request, Response, Router } from 'express';
 import { AccessToken } from 'livekit-server-sdk';
 import crypto from 'crypto';
@@ -14,14 +14,15 @@ import { getMessageClientKind, normalizeMessageClient, type MessageClientIdentit
 import { config } from '../config';
 import { HttpError } from '../httpError';
 import { createUniqueGroupInviteCode } from '../groupInviteCodes';
-import { selectLiveKitServerForRoom } from '../livekitPool';
+import { selectLiveKitServer, selectLiveKitServerForRoom } from '../livekitPool';
+import { resolveRequestPublicApiEndpoint } from '../publicApiEndpoints';
 import { enqueueMessagePush, kickMessagePushOutbox } from '../messagePushOutbox';
 import { prisma } from '../prisma';
 import { serializeConversation, serializeMessage } from '../serializers';
 import { notifyServerSupportTicketCreated } from '../serverEventMessages';
 import { recordMessageStats } from '../stats';
 import { getPremiumFeatureAccessMap, hasPremiumFeatureAccess, requirePremiumFeatureAccess } from '../subscriptions';
-import { removeVideoThumbnail } from '../videoThumbnails';
+import { getVideoThumbnailPublicPath, removeVideoThumbnail } from '../videoThumbnails';
 import { ensureMeetVapDirectConversationForUser, getMeetVapSystemUserId } from '../systemAccount';
 import { assertNotBlockedBetween } from './userRoutes';
 import { bulkConversationAckSchema, bulkConversationDeltaSchema, bulkConversationSyncSchema, bulkDeleteConversationsSchema, createDirectConversationSchema, createGroupConversationSchema, createMessageSchema, createScheduledMessageSchema, declineGroupInviteSchema, deleteConversationSchema, deleteMessageSchema, editMessageSchema, messageDeletionAckSchema, messageIdsSchema, messageReactionSchema, openDisappearingMessageSchema, quickReplySchema, transferGroupOwnershipSchema, updateConversationMuteSchema, updateDisappearingMessagesSchema, updateGroupAliasSchema, updateGroupAvatarSchema, updateGroupMembersSchema, updateGroupSettingsSchema, updateGroupTitleSchema, updateVoiceRoomParticipantSchema } from '../validators';
@@ -694,10 +695,36 @@ conversationRoutes.post('/:conversationId/voice-room/join', async (req, res, nex
     const currentUser = getAuthedUser(req);
     const conversation = await assertVoiceRoomMember(req.params.conversationId, currentUser.id);
     const roomName = getVoiceRoomLiveKitRoomName(conversation.id);
-    const liveKitServer = await selectLiveKitServerForRoom(roomName);
+    const endpoint = resolveRequestPublicApiEndpoint(req);
+    let liveKitServer = conversation.voiceRoomLivekitServerId
+      ? await selectLiveKitServer({ assignedServerId: conversation.voiceRoomLivekitServerId })
+      : await selectLiveKitServerForRoom(roomName, {
+          apiHost: endpoint?.mode === 'relay' ? endpoint.host : undefined,
+        });
 
     if (!liveKitServer) {
       throw new HttpError(503, 'Voice rooms are unavailable');
+    }
+
+    if (!conversation.voiceRoomLivekitServerId) {
+      await prisma.conversation.updateMany({
+        data: { voiceRoomLivekitServerId: liveKitServer.id },
+        where: { id: conversation.id, voiceRoomLivekitServerId: null },
+      });
+      const assignedConversation = await prisma.conversation.findUnique({
+        select: { voiceRoomLivekitServerId: true },
+        where: { id: conversation.id },
+      });
+
+      if (assignedConversation?.voiceRoomLivekitServerId !== liveKitServer.id) {
+        liveKitServer = await selectLiveKitServer({
+          assignedServerId: assignedConversation?.voiceRoomLivekitServerId,
+        });
+      }
+
+      if (!liveKitServer) {
+        throw new HttpError(503, 'Voice rooms are unavailable');
+      }
     }
 
     const participant = await prisma.voiceRoomParticipant.upsert({
@@ -3610,6 +3637,7 @@ conversationRoutes.get('/:conversationId/scheduled-messages', async (req, res, n
     await assertGroupInviteAccepted(req.params.conversationId, currentUser.id);
 
     const messages = await prisma.scheduledMessage.findMany({
+      include: { media: true },
       orderBy: [{ sendAt: 'asc' }, { createdAt: 'asc' }],
       where: {
         conversationId: req.params.conversationId,
@@ -3648,6 +3676,7 @@ conversationRoutes.post('/:conversationId/scheduled-messages', async (req, res, 
         sendAt: new Date(input.sendAt),
         senderId: currentUser.id,
       },
+      include: { media: true },
     });
 
     res.status(201).json({ scheduledMessage: serializeScheduledMessage(scheduledMessage) });
@@ -4649,6 +4678,7 @@ async function assertVoiceRoomMember(conversationId: string, userId: string) {
           isVoiceRoom: true,
           ownerId: true,
           type: true,
+          voiceRoomLivekitServerId: true,
         },
       },
     },
@@ -5070,7 +5100,7 @@ function getReactionMetadata(metadata: Record<string, unknown>) {
   }, {});
 }
 
-function serializeScheduledMessage(message: ScheduledMessage) {
+function serializeScheduledMessage(message: ScheduledMessage & { media?: MediaFile | null }) {
   return {
     body: message.body,
     cancelledAt: message.cancelledAt?.toISOString() ?? null,
@@ -5080,6 +5110,17 @@ function serializeScheduledMessage(message: ScheduledMessage) {
     failureReason: message.failureReason,
     id: message.id,
     kind: message.kind,
+    media: message.media
+      ? {
+          durationSec: message.media.durationSec,
+          id: message.media.id,
+          mimeType: message.media.mimeType,
+          originalName: message.media.originalName,
+          sizeBytes: message.media.sizeBytes,
+          storageKey: message.media.storageKey,
+          thumbnailPath: getVideoThumbnailPublicPath(message.media),
+        }
+      : null,
     mediaId: message.mediaId,
     metadata: message.metadata,
     processedAt: message.processedAt?.toISOString() ?? null,

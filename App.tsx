@@ -15,6 +15,7 @@ import { AppLockGate } from './src/components/AppLockGate';
 import { AppAttestationBridge } from './src/components/AppAttestationBridge';
 import { AppUpdateGate } from './src/components/AppUpdateGate';
 import { BackgroundLocationDisclosureBridge } from './src/components/BackgroundLocationDisclosureBridge';
+import { MainServerFailoverBridge } from './src/components/MainServerFailoverBridge';
 import { RealtimeBridge } from './src/components/RealtimeBridge';
 import { VoiceRoomBridge } from './src/components/VoiceRoomBridge';
 import { PushNotificationBridge, handleIncomingCallUrl } from './src/components/PushNotificationBridge';
@@ -28,6 +29,7 @@ import { getAuthToken, getServerUrl, getStoredLanguage, migrateLegacyMessageStor
 import { resolveLanguage, setI18nLanguage, t, type LanguagePreference } from './src/i18n';
 import { clearNativeQuickReplyCredentials, setNativeQuickReplyCredentials } from './src/native/CallNative';
 import { initializeClientInstallationId } from './src/lib/appClientInfo';
+import { getMeetingCodeFromUrl } from './src/lib/meetingLinks';
 import { subscribeToAuthSuspension } from './src/lib/authSuspensionEvents';
 
 // MeetVap owns AVAudioSession activation through CallNative so incoming
@@ -54,7 +56,7 @@ export default function App() {
         SharedContact: 'u/:username',
       },
     },
-    prefixes: ['meetvap://', 'com.meetvap.app://', 'https://meetvap.com', 'https://www.meetvap.com'],
+    prefixes: ['meetvap://', 'com.meetvap.app://', 'https://meetvap.com', 'https://www.meetvap.com', 'https://web.meetvap.ru'],
   }), []);
   const navigationTheme = {
     ...DefaultTheme,
@@ -164,27 +166,6 @@ export default function App() {
         return false;
       }
     };
-    const getMeetingCodeFromUrl = (url: string) => {
-      try {
-        const parsed = new URL(url);
-
-        if (parsed.protocol === 'https:' && parsed.hostname === 'meet.meetvap.com') {
-          return parsed.pathname.split('/').filter(Boolean)[0] ?? null;
-        }
-
-        if (
-          (parsed.protocol === 'meetvap:' || parsed.protocol === 'com.meetvap.app:') &&
-          parsed.hostname === 'meet'
-        ) {
-          return parsed.pathname.split('/').filter(Boolean)[0] ?? null;
-        }
-      } catch {
-        return null;
-      }
-
-      return null;
-    };
-
     const beginCallOnlyAccessFromUrl = beginCallOnlyAccessFromIncomingCallUrl;
 
     const handleCallUrl = async (url: string | null) => {
@@ -409,6 +390,7 @@ export default function App() {
       >
         <AppLockGate deferPinOverlay={isInitialCallUrlCheckPending || isInitialNotificationResponseCheckPending} userId={user?.id}>
           {user && !isDecoyOffline ? <PushNotificationBridge /> : null}
+          {user && !isDecoyOffline ? <MainServerFailoverBridge /> : null}
           {user && !isDecoyOffline ? <RealtimeBridge /> : null}
           {user && !isDecoyOffline ? <VoiceRoomBridge /> : null}
           <AppAttestationBridge enabled={!!user && !isDecoyOffline} serverUrl={serverUrl} userId={user?.id} />

@@ -14,6 +14,7 @@ import { formatBytes } from '../lib/format';
 import { downloadRemoteMediaFile,getCachedVideoThumbnailUri,getMessageMediaCacheUri,getRememberedCachedVideoThumbnailUri,resolveLocalMediaFileUri } from '../lib/mediaCache';
 import { containsMeetVapKeyword } from '../lib/prohibitedNames';
 import { buildSharedGroupWebUrl } from '../lib/shareLinks';
+import { getShareBaseUrl } from '../lib/serverPolicy';
 import { hasPremiumAccess } from '../lib/subscriptionAccess';
 import { getMessageVideoThumbnailUri } from '../lib/messageVideoThumbnail';
 import { useAppStore } from '../store/useAppStore';
@@ -808,6 +809,7 @@ function ChatInfoModalContent({
   const uiLanguage = useAppStore((state: { language: AppLanguage }) => state.language);
   const currentUserId = useAppStore((state) => state.user?.id);
   const subscriptionStatus = useAppStore((state) => state.subscriptionStatus);
+  const serverUrl = useAppStore((state) => state.serverUrl);
   const canUsePremiumFeatures = hasPremiumAccess(subscriptionStatus);
   const title = isGroup ? (conversation?.title ?? fallbackTitle) : (otherUser?.displayName ?? fallbackTitle);
   const shouldShowTitlePremiumBadge = !isGroup && otherUser?.hasPremiumAccess === true;
@@ -840,6 +842,7 @@ function ChatInfoModalContent({
   const [fullScreenPhotoUri, setFullScreenPhotoUri] = useState<string | null>(null);
   const [isGalleryModalVisible, setGalleryModalVisible] = useState(false);
   const [galleryTab, setGalleryTab] = useState<ChatGalleryTab>('media');
+  const [shareBaseUrl, setShareBaseUrl] = useState<string | null>(null);
   const memberIds = useMemo(() => new Set(members.map((member) => member.id)), [members]);
   const adminIdSet = useMemo(() => new Set(conversation?.adminIds ?? []), [conversation?.adminIds]);
   const shouldShowAdminBadges = conversation?.showAdmins !== false;
@@ -899,12 +902,27 @@ function ChatInfoModalContent({
     () => shouldPopulateGallery ? extractChatLinks(messages) : [],
     [messages, shouldPopulateGallery],
   );
-  const publicGroupLink = conversation?.publicInviteCode
-    ? buildSharedGroupWebUrl(conversation.publicInviteCode)
+  const publicGroupLink = conversation?.publicInviteCode && shareBaseUrl
+    ? buildSharedGroupWebUrl(conversation.publicInviteCode, shareBaseUrl)
     : '';
   const disappearingMessagesDurationLabelKey = getDisappearingMessagesDurationLabelKey(conversation?.disappearingMessagesDurationMinutes);
   const disappearingMessagesEnabled = !!conversation?.disappearingMessagesDurationMinutes;
   const disappearingMessagesEnabledByPeer = disappearingMessagesEnabled && conversation?.disappearingMessagesSetById !== currentUserId;
+
+  useEffect(() => {
+    let active = true;
+    setShareBaseUrl(null);
+
+    void getShareBaseUrl(serverUrl).then((resolvedUrl) => {
+      if (active) {
+        setShareBaseUrl(resolvedUrl);
+      }
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [serverUrl]);
 
   useEffect(() => {
     if (!isEditingTitle) {

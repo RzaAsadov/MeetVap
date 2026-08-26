@@ -8,6 +8,7 @@ import { relayPushToMainServer } from './childPushRelay';
 import { config } from './config';
 import { getServerInstanceId, operationalConfig } from './operationalConfig';
 import { prisma } from './prisma';
+import { getDefaultPublicApiEndpoint, getPublicApiUrlOrDefault } from './publicApiEndpoints';
 
 const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
 const INCOMING_CALL_CHANNEL_ID = 'incoming-calls-ringtone';
@@ -22,10 +23,12 @@ export type StoredPushToken = {
   locale?: string | null;
   platform?: string | null;
   provider: string;
+  publicApiUrl?: string | null;
   token: string;
   updatedAt?: Date | string;
   userId?: string | null;
   quickReplyToken?: string;
+  ringingReceiptUrl?: string;
 };
 
 export type IncomingCallPush = {
@@ -904,13 +907,17 @@ function dedupePushTokens<T extends { token: string; userId?: string | null }>(t
 }
 
 function getDeliveryReceiptData(item: StoredPushToken): Record<string, string> {
+  const accountServerUrl = item.accountServerUrl ?? getPublicApiUrlOrDefault(item.publicApiUrl);
   const data: Record<string, string> = {
-    serverInstanceId: item.accountServerInstanceId ?? getServerInstanceId(config.PUBLIC_API_URL),
-    ...(item.accountServerUrl || config.PUBLIC_API_URL ? { accountServerUrl: item.accountServerUrl ?? config.PUBLIC_API_URL! } : {}),
+    serverInstanceId: item.accountServerInstanceId ?? getServerInstanceId(getDefaultPublicApiEndpoint()?.url ?? config.PUBLIC_API_URL),
+    ...(accountServerUrl ? { accountServerUrl } : {}),
     ...(item.userId ? { accountUserId: item.userId } : {}),
   };
   if (item.deliveryReceiptUrl) {
     data.deliveryReceiptUrl = item.deliveryReceiptUrl;
+  }
+  if (item.ringingReceiptUrl) {
+    data.ringingReceiptUrl = item.ringingReceiptUrl;
   }
   return data;
 }

@@ -4,10 +4,10 @@ import { AccessToken } from 'livekit-server-sdk';
 import { z } from 'zod';
 
 import { getAuthedUser, requireAuth } from '../auth';
-import { config } from '../config';
 import { HttpError } from '../httpError';
 import { selectLiveKitServer } from '../livekitPool';
 import { prisma } from '../prisma';
+import { getMeetServerUrlForRequest, resolveRequestPublicApiEndpoint } from '../publicApiEndpoints';
 
 export const meetingRoutes = Router();
 
@@ -73,7 +73,7 @@ meetingRoutes.post('/', requireAuth, async (req, res, next) => {
     const activeMeeting = await findActiveMeetingByCreator(currentUser.id);
 
     if (activeMeeting) {
-      res.status(200).json({ meeting: serializeMeeting(activeMeeting), remainingSeconds: getMeetingRemainingSeconds(activeMeeting) });
+      res.status(200).json({ meeting: serializeMeeting(req, activeMeeting), remainingSeconds: getMeetingRemainingSeconds(activeMeeting) });
       return;
     }
 
@@ -90,13 +90,22 @@ meetingRoutes.post('/', requireAuth, async (req, res, next) => {
     const livekitRoom = `meet-${id}`;
     const now = new Date();
     const maxEndsAt = new Date(now.getTime() + remainingSeconds * 1000);
+    const endpoint = resolveRequestPublicApiEndpoint(req);
+    const liveKitServer = await selectLiveKitServer({
+      apiHost: endpoint?.mode === 'relay' ? endpoint.host : undefined,
+    });
+
+    if (!liveKitServer) {
+      throw new HttpError(503, 'Meetings are unavailable');
+    }
+
     const [meeting] = await prisma.$queryRaw<MeetingRow[]>`
       insert into "Meeting" (
-        "id", "code", "creatorId", "mode", "status", "livekitRoom",
+        "id", "code", "creatorId", "mode", "status", "livekitRoom", "livekitServerId",
         "startedAt", "maxEndsAt", "durationLimitSeconds", "createdAt", "updatedAt"
       )
       values (
-        ${id}, ${code}, ${currentUser.id}, ${input.mode}::"CallMode", 'ACTIVE'::"MeetingStatus", ${livekitRoom},
+        ${id}, ${code}, ${currentUser.id}, ${input.mode}::"CallMode", 'ACTIVE'::"MeetingStatus", ${livekitRoom}, ${liveKitServer.id},
         ${now}, ${maxEndsAt}, ${remainingSeconds}, ${now}, ${now}
       )
       returning
@@ -124,7 +133,7 @@ meetingRoutes.post('/', requireAuth, async (req, res, next) => {
             "updatedAt" = ${now}
     `;
 
-    res.status(201).json({ meeting: serializeMeeting(meeting), remainingSeconds });
+    res.status(201).json({ meeting: serializeMeeting(req, meeting), remainingSeconds });
   } catch (error) {
     next(error);
   }
@@ -140,7 +149,7 @@ meetingRoutes.get('/:code', async (req, res, next) => {
     }
 
     res.json({
-      meeting: serializeMeeting(meeting),
+      meeting: serializeMeeting(req, meeting),
       participants: await listMeetingParticipants(meeting.id),
       remainingSeconds: getMeetingRemainingSeconds(meeting),
     });
@@ -184,13 +193,13 @@ meetingRoutes.post('/:code/join', async (req, res, next) => {
       )
       returning *
     `;
-    const livekit = await issueMeetingJoinCredentials(meeting, participantIdentity, displayName, remainingSeconds);
+    const livekit = await issueMeetingJoinCredentials(req, meeting, participantIdentity, displayName, remainingSeconds);
 
     emitMeetingParticipantsChanged(req, meeting.id);
     res.json({
       guestId,
       livekit,
-      meeting: serializeMeeting(meeting),
+      meeting: serializeMeeting(req, meeting),
       participant,
       remainingSeconds,
     });
@@ -258,7 +267,7 @@ meetingRoutes.post('/:code/end', requireAuth, async (req, res, next) => {
 
     const usage = await endMeeting(req, meeting, 'host');
     res.json({
-      meeting: serializeMeeting({ ...meeting, endedAt: new Date(), status: 'ENDED' }),
+      meeting: serializeMeeting(req, { ...meeting, endedAt: new Date(), status: 'ENDED' }),
       usage,
     });
   } catch (error) {
@@ -281,13 +290,16 @@ meetingRoutes.get('/:code/participants', async (req, res, next) => {
 });
 
 async function issueMeetingJoinCredentials(
+  req: Request,
   meeting: MeetingRow,
   identity: string,
   displayName: string,
   remainingSeconds: number,
 ) {
+  const endpoint = resolveRequestPublicApiEndpoint(req);
   const liveKitServer = await selectLiveKitServer({
     assignedServerId: meeting.livekitServerId,
+    apiHost: endpoint?.mode === 'relay' ? endpoint.host : undefined,
   });
 
   if (!liveKitServer) {
@@ -418,7 +430,7 @@ function getMeetingRemainingSeconds(meeting: MeetingRow) {
   return Math.max(0, Math.ceil((meeting.maxEndsAt.getTime() - Date.now()) / 1000));
 }
 
-function serializeMeeting(meeting: MeetingRow) {
+function serializeMeeting(req: Request, meeting: MeetingRow) {
   return {
     code: meeting.code,
     creator: {
@@ -429,7 +441,7 @@ function serializeMeeting(meeting: MeetingRow) {
     durationLimitSeconds: meeting.durationLimitSeconds,
     endedAt: meeting.endedAt?.toISOString() ?? null,
     id: meeting.id,
-    link: `${config.MEET_SERVER_URL}/${encodeURIComponent(meeting.code)}`,
+    link: `${getMeetServerUrlForRequest(req)}/${encodeURIComponent(meeting.code)}`,
     maxEndsAt: meeting.maxEndsAt.toISOString(),
     mode: meeting.mode === 'VIDEO' ? 'video' : 'voice',
     startedAt: meeting.startedAt.toISOString(),

@@ -117,7 +117,10 @@
         <data android:scheme="https" android:host="meetvap.com" android:pathPrefix="/g"/>
         <data android:scheme="https" android:host="www.meetvap.com" android:pathPrefix="/u"/>
         <data android:scheme="https" android:host="www.meetvap.com" android:pathPrefix="/g"/>
+        <data android:scheme="https" android:host="web.meetvap.ru" android:pathPrefix="/u"/>
+        <data android:scheme="https" android:host="web.meetvap.ru" android:pathPrefix="/g"/>
         <data android:scheme="https" android:host="meet.meetvap.com" android:pathPrefix="/"/>
+        <data android:scheme="https" android:host="meet.meetvap.ru" android:pathPrefix="/"/>
       </intent-filter>
     </activity>
   </application>

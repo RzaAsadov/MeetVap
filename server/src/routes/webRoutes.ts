@@ -5,9 +5,9 @@ import { getAuthedUser, isAdminBlocked, requireAuth, signWebAccessToken, toAuthU
 import { getClientMetadataWriteData, hashAccessToken } from '../clientCompatibility';
 import { normalizeInstallationId } from '../clientActivity';
 import { assertRequestDeviceAllowed } from '../deviceAccess';
-import { config } from '../config';
 import { HttpError } from '../httpError';
 import { prisma } from '../prisma';
+import { getPublicApiUrlForRequest, getPublicApiUrlOrDefault } from '../publicApiEndpoints';
 import { serializeMessage, serializeUser } from '../serializers';
 
 export const webRoutes = Router();
@@ -19,10 +19,7 @@ webRoutes.post('/pairing', async (req, res, next) => {
   try {
     await assertRequestDeviceAllowed(req, { required: true });
     const secret = crypto.randomBytes(32).toString('base64url');
-    const requestHost = req.get('host');
-    const serverUrl = normalizeServerUrl(
-      config.PUBLIC_API_URL ?? (requestHost ? `${req.protocol}://${requestHost}` : ''),
-    );
+    const serverUrl = getPublicApiUrlForRequest(req);
 
     if (!serverUrl) {
       throw new HttpError(500, 'Public API URL is not configured');
@@ -32,6 +29,7 @@ webRoutes.post('/pairing', async (req, res, next) => {
       data: {
         expiresAt: new Date(Date.now() + WEB_PAIRING_TTL_MS),
         ipAddress: getRequestIp(req),
+        publicApiUrl: serverUrl,
         secretHash: hashSecret(secret),
         userAgent: req.get('user-agent') ?? null,
       },
@@ -87,7 +85,7 @@ webRoutes.get('/pairing/:pairingId', async (req, res, next) => {
       throw new HttpError(403, 'This account is blocked', { code: 'ACCOUNT_BLOCKED' });
     }
 
-    const token = await createSingleWebSession(req, toAuthUser(user));
+    const token = await createSingleWebSession(req, toAuthUser(user), pairing.publicApiUrl);
     req.app.get('io')?.to(`user:${user.id}`).emit('web:logged-out');
 
     await prisma.webPairingSession.update({
@@ -253,7 +251,11 @@ webRoutes.get('/calls', requireAuth, async (req, res, next) => {
   }
 });
 
-async function createSingleWebSession(req: { get: (name: string) => string | undefined; ip?: string; socket: { remoteAddress?: string } }, user: ReturnType<typeof toAuthUser>) {
+async function createSingleWebSession(
+  req: { get: (name: string) => string | undefined; ip?: string; socket: { remoteAddress?: string } },
+  user: ReturnType<typeof toAuthUser>,
+  pairingPublicApiUrl?: string | null,
+) {
   await prisma.session.deleteMany({
     where: {
       platform: 'WEB',
@@ -271,6 +273,7 @@ async function createSingleWebSession(req: { get: (name: string) => string | und
       }),
       expiresAt: new Date(Date.now() + WEB_SESSION_TTL_MS),
       ipAddress: getRequestIp(req),
+      publicApiUrl: getPublicApiUrlOrDefault(pairingPublicApiUrl ?? getPublicApiUrlForRequest(req)),
       tokenHash: hashAccessToken(token),
       userAgent: req.get('user-agent') ?? null,
       userId: user.id,
@@ -282,27 +285,6 @@ async function createSingleWebSession(req: { get: (name: string) => string | und
 
 function hashSecret(secret: string) {
   return crypto.createHash('sha256').update(secret).digest('hex');
-}
-
-function normalizeServerUrl(value: string) {
-  try {
-    const parsed = new URL(value);
-
-    if (
-      (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') ||
-      parsed.username ||
-      parsed.password ||
-      parsed.search ||
-      parsed.hash
-    ) {
-      return null;
-    }
-
-    const path = parsed.pathname.replace(/\/+$/, '');
-    return `${parsed.origin}${path}`;
-  } catch {
-    return null;
-  }
 }
 
 function getSingleQueryValue(value: unknown) {

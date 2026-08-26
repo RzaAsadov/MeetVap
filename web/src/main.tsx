@@ -2,13 +2,14 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client';
 import QRCode from 'qrcode';
 import { io, Socket } from 'socket.io-client';
-import { Ban, Bell, BellOff, BookUser, Camera, Check, CheckCheck, ChevronDown, Contact, Copy, Download, Eye, File, Flag, Image, Link, LoaderCircle, Maximize2, MessageCircle, MessageCirclePlus, Mic, MicOff, Minimize2, MoreVertical, Paperclip, Pause, Pencil, Phone, PhoneCall, PhoneIncoming, PhoneOff, PhoneOutgoing, Pin, Play, Plus, Reply, ScreenShare, Search, Send, Settings as SettingsIcon, Share2, Shield, Smile, Star, Trash2, Type, UserPlus, Users, Video, Volume2, VolumeX, X } from 'lucide-react';
+import { Ban, Bell, BellOff, BookUser, Camera, Check, CheckCheck, ChevronDown, Clock3, Contact, Copy, Download, Eye, File, Flag, Image, Link, LoaderCircle, Maximize2, MessageCircle, MessageCirclePlus, Mic, MicOff, Minimize2, MoreVertical, Paperclip, Pause, Pencil, Phone, PhoneCall, PhoneIncoming, PhoneOff, PhoneOutgoing, Pin, Play, Plus, Reply, ScreenShare, Search, Send, Settings as SettingsIcon, Share2, Shield, Smile, Star, Trash2, Type, UserPlus, Users, Video, Volume2, VolumeX, X } from 'lucide-react';
 import { Room, RoomEvent, Track, VideoPreset, VideoPresets, VideoQuality } from 'livekit-client';
 import type { LocalTrack, LocalVideoTrack, RemoteTrack, RemoteTrackPublication, ScreenShareCaptureOptions, TrackPublishOptions, VideoCaptureOptions } from 'livekit-client';
 
 import './styles.css';
 import outgoingRingbackUrl from './assets/ringing.mp3';
 import ringtoneUrl from './assets/ringtone.wav';
+import { MessageComposer, type MessageComposerHandle } from './MessageComposer';
 import { getRuntimeApiUrl } from './runtimeConfig';
 
 const API_URL = getRuntimeApiUrl(import.meta.env.VITE_API_URL);
@@ -162,6 +163,8 @@ const translations = {
     save: 'Save',
     done: 'Done',
     edit: 'Edit',
+    editMessage: 'Edit message',
+    editMessageFailed: 'Could not edit message',
     forward: 'Forward',
     gallery: 'Photo/video - Gallery',
     incomingCall: 'Incoming call',
@@ -177,6 +180,8 @@ const translations = {
     messageOptions: 'Message options',
     microphone: 'Microphone',
     recordVoice: 'Record voice',
+    readLess: 'Read less',
+    readMore: 'Read more',
     read: 'Read',
     pin: 'Pin',
     reply: 'Reply',
@@ -199,6 +204,19 @@ const translations = {
     searchPeople: 'Search by username or name',
     send: 'Send',
     sendAttachment: 'Send attachment',
+    sendOptions: 'Send options',
+    scheduledMessage: 'Scheduled message',
+    scheduledMessageHint: 'Choose the date and time when this message should be sent.',
+    scheduleSend: 'Schedule send',
+    disappearingMessage: 'Disappearing after view',
+    disappearingMessageHint: 'Choose how many seconds after the recipient opens this message it should be removed.',
+    seconds: 'Seconds',
+    clickToView: 'Click to view',
+    scheduledFor: 'Scheduled for {time}',
+    disappearsAfterView: 'Disappears {seconds}s after opening',
+    invalidScheduledTime: 'Choose a valid future date and time.',
+    invalidDisappearSeconds: 'Enter a valid number of seconds.',
+    scheduleFailed: 'Could not schedule message',
     sending: 'Sending...',
     sent: 'Sent',
     zoomIn: 'Zoom in',
@@ -355,6 +373,8 @@ const translations = {
     save: 'Kaydet',
     done: 'Tamam',
     edit: 'Düzenle',
+    editMessage: 'Mesajı düzenle',
+    editMessageFailed: 'Mesaj düzenlenemedi',
     forward: 'İlet',
     gallery: 'Fotoğraf/video - Galeri',
     incomingCall: 'Gelen arama',
@@ -370,6 +390,8 @@ const translations = {
     messageOptions: 'Mesaj seçenekleri',
     microphone: 'Mikrofon',
     recordVoice: 'Ses kaydet',
+    readLess: 'Daha az göster',
+    readMore: 'Devamını oku',
     read: 'Okundu',
     pin: 'Sabitle',
     reply: 'Yanıtla',
@@ -392,6 +414,19 @@ const translations = {
     searchPeople: 'Rumuz veya ada göre ara',
     send: 'Gönder',
     sendAttachment: 'Ek gönder',
+    sendOptions: 'Gönderme seçenekleri',
+    scheduledMessage: 'Zamanlanmış mesaj',
+    scheduledMessageHint: 'Mesajın gönderileceği tarih ve saati seç.',
+    scheduleSend: 'Gönderimi zamanla',
+    disappearingMessage: 'Görüntülenince kaybolan mesaj',
+    disappearingMessageHint: 'Alıcı mesajı açtıktan kaç saniye sonra silineceğini seç.',
+    seconds: 'Saniye',
+    clickToView: 'Görüntülemek için tıkla',
+    scheduledFor: '{time} için zamanlandı',
+    disappearsAfterView: 'Açıldıktan {seconds} sn sonra kaybolur',
+    invalidScheduledTime: 'Gelecekte geçerli bir tarih ve saat seç.',
+    invalidDisappearSeconds: 'Geçerli bir saniye değeri gir.',
+    scheduleFailed: 'Mesaj zamanlanamadı',
     sending: 'Gönderiliyor...',
     sent: 'Gönderildi',
     zoomIn: 'Yakınlaştır',
@@ -548,6 +583,8 @@ const translations = {
     save: 'Сохранить',
     done: 'Готово',
     edit: 'Изменить',
+    editMessage: 'Редактировать сообщение',
+    editMessageFailed: 'Не удалось изменить сообщение',
     forward: 'Переслать',
     gallery: 'Фото/видео - Галерея',
     incomingCall: 'Входящий звонок',
@@ -563,6 +600,8 @@ const translations = {
     messageOptions: 'Действия с сообщением',
     microphone: 'Микрофон',
     recordVoice: 'Записать голос',
+    readLess: 'Скрыть',
+    readMore: 'Читать далее',
     read: 'Прочитано',
     pin: 'Закрепить',
     reply: 'Ответить',
@@ -585,6 +624,19 @@ const translations = {
     searchPeople: 'Поиск по имени или логину',
     send: 'Отправить',
     sendAttachment: 'Отправить вложение',
+    sendOptions: 'Параметры отправки',
+    scheduledMessage: 'Запланированное сообщение',
+    scheduledMessageHint: 'Выберите дату и время отправки сообщения.',
+    scheduleSend: 'Запланировать отправку',
+    disappearingMessage: 'Исчезающее после просмотра',
+    disappearingMessageHint: 'Выберите, через сколько секунд после открытия сообщение будет удалено.',
+    seconds: 'Секунды',
+    clickToView: 'Нажмите для просмотра',
+    scheduledFor: 'Запланировано на {time}',
+    disappearsAfterView: 'Исчезнет через {seconds} сек. после открытия',
+    invalidScheduledTime: 'Выберите корректные будущие дату и время.',
+    invalidDisappearSeconds: 'Введите корректное количество секунд.',
+    scheduleFailed: 'Не удалось запланировать сообщение',
     sending: 'Отправка...',
     sent: 'Отправлено',
     zoomIn: 'Увеличить',
@@ -1079,6 +1131,23 @@ type Message = {
   status: 'SENDING' | 'SENT' | 'DELIVERED' | 'READ';
 };
 
+type ScheduledMessage = {
+  body: string;
+  conversationId: string;
+  createdAt: string;
+  id: string;
+  kind: Exclude<Message['kind'], 'CALL'>;
+  media?: Message['media'];
+  mediaId?: string | null;
+  metadata?: Message['metadata'];
+  sendAt: string;
+  senderId: string;
+  status: 'PENDING';
+};
+
+type SendOptionsMode = null | 'menu' | 'schedule' | 'disappear';
+type SendOptionsTarget = 'attachment' | 'text';
+
 type CallLog = {
   conversationId: string;
   direction: 'incoming' | 'outgoing';
@@ -1327,7 +1396,12 @@ function App() {
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
   const [messagesByConversation, setMessagesByConversation] = useState<Record<string, Message[]>>({});
   const [callLogs, setCallLogs] = useState<CallLog[]>([]);
-  const [draft, setDraft] = useState('');
+  const [sendOptionsMode, setSendOptionsMode] = useState<SendOptionsMode>(null);
+  const [sendOptionsTarget, setSendOptionsTarget] = useState<SendOptionsTarget>('text');
+  const [scheduledSendAt, setScheduledSendAt] = useState('');
+  const [disappearSeconds, setDisappearSeconds] = useState('30');
+  const [sendOptionsError, setSendOptionsError] = useState<string | null>(null);
+  const [isApplyingSendOption, setApplyingSendOption] = useState(false);
   const [language, setLanguage] = useState<Language>(() => getStoredWebLanguage() ?? getBrowserLanguage());
   const [webMediaCacheConfig, setWebMediaCacheConfig] = useState<WebMediaCacheConfig>(DEFAULT_WEB_MEDIA_CACHE_CONFIG);
   const [webUploadConfig, setWebUploadConfig] = useState<WebUploadConfig>(DEFAULT_WEB_UPLOAD_CONFIG);
@@ -1374,6 +1448,10 @@ function App() {
   const [startingUserId, setStartingUserId] = useState<string | null>(null);
   const [blockedUserIds, setBlockedUserIds] = useState<Set<string>>(new Set());
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  const [editingMessage, setEditingMessage] = useState<Message | null>(null);
+  const [editMessageDraft, setEditMessageDraft] = useState('');
+  const [editMessageError, setEditMessageError] = useState<string | null>(null);
+  const [isSavingMessageEdit, setSavingMessageEdit] = useState(false);
   const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(() => new Set());
   const [isBulkDeleteOpen, setBulkDeleteOpen] = useState(false);
   const [isBulkForwardOpen, setBulkForwardOpen] = useState(false);
@@ -1438,7 +1516,7 @@ function App() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const groupAvatarInputRef = useRef<HTMLInputElement>(null);
-  const composerTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const messageComposerRef = useRef<MessageComposerHandle>(null);
   const messagesContainerRef = useRef<HTMLElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messageElementsRef = useRef(new Map<string, HTMLDivElement>());
@@ -1446,6 +1524,8 @@ function App() {
   const shouldStickToMessagesEndRef = useRef(true);
   const suppressNextMessagesAutoScrollRef = useRef(false);
   const messageHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const sendLongPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const didTriggerSendLongPressRef = useRef(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const voiceChunksRef = useRef<Blob[]>([]);
   const voiceRecordingStartedAtRef = useRef(0);
@@ -1996,21 +2076,6 @@ function App() {
 
     return () => cancelAnimationFrame(frame);
   }, [activePanelTab, isLoading, messages.length, scrollMessagesToEnd, selectedConversationId]);
-
-  useEffect(() => {
-    const textarea = composerTextareaRef.current;
-
-    if (!textarea) {
-      return;
-    }
-
-    textarea.style.height = 'auto';
-    const maxHeight = 148;
-    const nextHeight = Math.min(textarea.scrollHeight, maxHeight);
-
-    textarea.style.height = `${nextHeight}px`;
-    textarea.style.overflowY = textarea.scrollHeight > maxHeight ? 'auto' : 'hidden';
-  }, [draft, selectedConversationId]);
 
   useEffect(() => {
     if (incomingCall) {
@@ -2704,6 +2769,9 @@ function App() {
   }, [syncMessageStatusUpdates]);
 
   const loadMessages = useCallback(async (conversationId: string) => {
+    const scheduledMessagesRequest = authedRequest<{ scheduledMessages: ScheduledMessage[] }>(
+      `/conversations/${conversationId}/scheduled-messages`,
+    ).catch(() => null);
     let persistedMessages = await getStoredConversationMessages(user?.id, conversationId);
     const visibleMessages = (await loadPendingWebMessages(conversationId, async (pageMessages) => {
       const visiblePageMessages = pageMessages.filter(isVisibleChatMessage);
@@ -2726,6 +2794,24 @@ function App() {
     await acknowledgeWebMessageContent(conversationId, visibleMessages).catch(() => undefined);
     await syncMessageStatusUpdates(conversationId).catch(() => undefined);
     await markMessagesReceived(conversationId, visibleMessages, isPageActivelyViewed());
+    const scheduledResponse = await scheduledMessagesRequest;
+
+    if (!scheduledResponse) {
+      return;
+    }
+
+    const scheduledMessages = scheduledResponse.scheduledMessages
+      .map((message) => mapScheduledWebMessage(message, user ?? undefined));
+
+    setMessagesByConversation((current) => {
+      const withoutStaleScheduledMessages = (current[conversationId] ?? [])
+        .filter((message) => !isScheduledWebMessage(message));
+      const nextMessages = mergeMessages(withoutStaleScheduledMessages, scheduledMessages)
+        .filter(isVisibleChatMessage);
+
+      cacheConversationMessages(user?.id, conversationId, nextMessages);
+      return { ...current, [conversationId]: nextMessages };
+    });
   }, [acknowledgeWebMessageContent, loadPendingWebMessages, markMessagesReceived, mergeConversationMessages, syncMessageStatusUpdates, updateConversationPreviewFromMessage, user?.id]);
 
   useEffect(() => {
@@ -3509,6 +3595,10 @@ function App() {
       clearInterval(voiceRecordingTimerRef.current);
       voiceRecordingTimerRef.current = null;
     }
+    if (sendLongPressTimerRef.current) {
+      clearTimeout(sendLongPressTimerRef.current);
+      sendLongPressTimerRef.current = null;
+    }
     const recorder = mediaRecorderRef.current;
 
     if (recorder && recorder.state !== 'inactive') {
@@ -3516,12 +3606,24 @@ function App() {
     }
   }, [stopIncomingRingtone, stopOutgoingRingback]);
 
-  async function sendMessage() {
-    if (!selectedConversationId || !draft.trim()) {
+  function getCurrentReplyMetadata() {
+    return replyingTo ? {
+      replyTo: {
+        body: replyingTo.body,
+        id: replyingTo.id,
+        kind: replyingTo.kind,
+        senderName: replyingTo.sender?.displayName || replyingTo.sender?.username || '',
+      },
+    } : {};
+  }
+
+  async function sendMessage(extraMetadata?: Record<string, unknown>, bodyOverride?: string) {
+    const body = (bodyOverride ?? messageComposerRef.current?.getValue() ?? '').trim();
+
+    if (!selectedConversationId || !body) {
       return;
     }
 
-    const body = draft.trim();
     const optimisticId = createLocalMessageId();
     const optimisticMessage = createOptimisticMessage({
       body,
@@ -3531,20 +3633,16 @@ function App() {
       user,
     });
 
-    setDraft('');
+    messageComposerRef.current?.clear();
     addOptimisticMessage(optimisticMessage);
     const response = await authedRequest<{ message: Message }>(`/conversations/${selectedConversationId}/messages`, {
       body: JSON.stringify({
         body,
         kind: 'TEXT',
-        metadata: replyingTo ? {
-          replyTo: {
-            body: replyingTo.body,
-            id: replyingTo.id,
-            kind: replyingTo.kind,
-            senderName: replyingTo.sender?.displayName || replyingTo.sender?.username || '',
-          },
-        } : undefined,
+        metadata: {
+          ...getCurrentReplyMetadata(),
+          ...(extraMetadata ?? {}),
+        },
       }),
       method: 'POST',
     }).catch((error) => {
@@ -3557,6 +3655,187 @@ function App() {
       replaceOptimisticMessage(selectedConversationId, optimisticId, response.message);
       void persistAndAcknowledgeWebMessageContent(selectedConversationId, [response.message])
         .catch(() => undefined);
+    }
+  }
+
+  function openSendOptions(target: SendOptionsTarget) {
+    const defaultSendAt = new Date(Date.now() + 60 * 60 * 1000);
+
+    setSendOptionsTarget(target);
+    setScheduledSendAt(formatDateTimeLocal(defaultSendAt));
+    setDisappearSeconds('30');
+    setSendOptionsError(null);
+    setSendOptionsMode('menu');
+  }
+
+  function beginSendLongPress(target: SendOptionsTarget) {
+    const hasContent = target === 'text'
+      ? !!messageComposerRef.current?.getValue().trim()
+      : !!pendingCaptionAttachment;
+
+    if (!hasContent || isApplyingSendOption) {
+      return;
+    }
+
+    if (sendLongPressTimerRef.current) {
+      clearTimeout(sendLongPressTimerRef.current);
+    }
+    didTriggerSendLongPressRef.current = false;
+    sendLongPressTimerRef.current = setTimeout(() => {
+      sendLongPressTimerRef.current = null;
+      didTriggerSendLongPressRef.current = true;
+      openSendOptions(target);
+    }, 500);
+  }
+
+  function finishSendLongPress() {
+    if (sendLongPressTimerRef.current) {
+      clearTimeout(sendLongPressTimerRef.current);
+      sendLongPressTimerRef.current = null;
+    }
+  }
+
+  function consumeTriggeredSendLongPress() {
+    if (!didTriggerSendLongPressRef.current) {
+      return false;
+    }
+
+    didTriggerSendLongPressRef.current = false;
+    return true;
+  }
+
+  async function sendScheduledTextMessage(sendAt: Date) {
+    const body = messageComposerRef.current?.getValue().trim() ?? '';
+
+    if (!selectedConversationId || !body) {
+      return;
+    }
+
+    const conversationId = selectedConversationId;
+    const pendingReply = replyingTo;
+    const metadata = getCurrentReplyMetadata();
+    messageComposerRef.current?.clear();
+    setReplyingTo(null);
+
+    try {
+      const response = await authedRequest<{ scheduledMessage: ScheduledMessage }>(`/conversations/${conversationId}/scheduled-messages`, {
+        body: JSON.stringify({
+          body,
+          clientTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          kind: 'TEXT',
+          metadata,
+          sendAt: sendAt.toISOString(),
+        }),
+        method: 'POST',
+      });
+      addOptimisticMessage(mapScheduledWebMessage(response.scheduledMessage, user ?? undefined));
+    } catch (error) {
+      messageComposerRef.current?.setValue(body);
+      setReplyingTo(pendingReply);
+      setSendOptionsError(error instanceof Error ? error.message : t('scheduleFailed'));
+      throw error;
+    }
+  }
+
+  async function applyScheduledSend() {
+    const sendAt = new Date(scheduledSendAt);
+
+    if (!scheduledSendAt || Number.isNaN(sendAt.getTime()) || sendAt.getTime() <= Date.now() + 5_000) {
+      setSendOptionsError(t('invalidScheduledTime'));
+      return;
+    }
+
+    setApplyingSendOption(true);
+    setSendOptionsError(null);
+    try {
+      if (sendOptionsTarget === 'attachment' && pendingCaptionAttachment) {
+        await uploadAndScheduleFile(
+          pendingCaptionAttachment.file,
+          pendingCaptionAttachment.kind,
+          captionDraft,
+          sendAt,
+        );
+      } else {
+        await sendScheduledTextMessage(sendAt);
+      }
+      setSendOptionsMode(null);
+    } catch {
+      // The operation keeps its own actionable error and restores unsent content.
+    } finally {
+      setApplyingSendOption(false);
+    }
+  }
+
+  async function applyDisappearingSend() {
+    const seconds = Number(disappearSeconds.trim());
+
+    if (!Number.isInteger(seconds) || seconds < 1 || seconds > 30 * 24 * 60 * 60) {
+      setSendOptionsError(t('invalidDisappearSeconds'));
+      return;
+    }
+
+    setApplyingSendOption(true);
+    setSendOptionsError(null);
+    try {
+      if (sendOptionsTarget === 'attachment' && pendingCaptionAttachment) {
+        await uploadAndSendFile(
+          pendingCaptionAttachment.file,
+          pendingCaptionAttachment.kind,
+          captionDraft,
+          { disappearingAfterView: { seconds } },
+        );
+      } else {
+        await sendMessage({ disappearingAfterView: { seconds } });
+      }
+      setSendOptionsMode(null);
+    } finally {
+      setApplyingSendOption(false);
+    }
+  }
+
+  async function openDisappearingMessage(message: Message) {
+    const secondsAfterView = getDisappearingAfterViewSeconds(message);
+
+    if (!secondsAfterView || message.senderId === user?.id) {
+      return;
+    }
+
+    try {
+      const response = await authedRequest<{
+        disappearingView: {
+          deleteAt: string;
+          openedAt: string;
+          secondsAfterView: number;
+        };
+      }>(`/conversations/${message.conversationId}/messages/${message.id}/disappearing/open`, {
+        body: JSON.stringify({ secondsAfterView }),
+        method: 'POST',
+      });
+      const metadata = message.metadata && typeof message.metadata === 'object' ? message.metadata : {};
+      const openedMessage: Message = {
+        ...message,
+        metadata: {
+          ...metadata,
+          disappearingDeleteAt: response.disappearingView.deleteAt,
+          disappearingOpenedAt: response.disappearingView.openedAt,
+        },
+      };
+
+      mergeConversationMessages(message.conversationId, [openedMessage]);
+      const deleteDelay = Math.max(0, new Date(response.disappearingView.deleteAt).getTime() - Date.now());
+      if (deleteDelay <= 2_147_000_000) {
+        window.setTimeout(() => {
+          setMessagesByConversation((current) => {
+            const nextMessages = (current[message.conversationId] ?? [])
+              .filter((item) => item.id !== message.id);
+
+            cacheConversationMessages(user?.id, message.conversationId, nextMessages);
+            return { ...current, [message.conversationId]: nextMessages };
+          });
+        }, deleteDelay);
+      }
+    } catch (error) {
+      setAttachmentError(error instanceof Error ? error.message : t('attachmentFailed'));
     }
   }
 
@@ -3632,7 +3911,12 @@ function App() {
     setImageEditorOpen(false);
   }
 
-  async function uploadAndSendFile(file: globalThis.File, kind: 'FILE' | 'IMAGE' | 'VIDEO', caption: string) {
+  async function uploadAndSendFile(
+    file: globalThis.File,
+    kind: 'FILE' | 'IMAGE' | 'VIDEO',
+    caption: string,
+    metadata?: Record<string, unknown>,
+  ) {
     if (!selectedConversationId) {
       return;
     }
@@ -3679,6 +3963,7 @@ function App() {
           body: caption.trim() || (kind === 'FILE' ? file.name : ''),
           kind,
           mediaId: uploadPayload.media.id,
+          metadata,
         }),
         method: 'POST',
       });
@@ -3710,6 +3995,96 @@ function App() {
         },
       }));
       setAttachmentError(error instanceof Error ? error.message : t('attachmentFailed'));
+    } finally {
+      setSendingAttachment(false);
+    }
+  }
+
+  async function uploadAndScheduleFile(
+    file: globalThis.File,
+    kind: 'FILE' | 'IMAGE' | 'VIDEO',
+    caption: string,
+    sendAt: Date,
+  ) {
+    if (!selectedConversationId) {
+      return;
+    }
+
+    const conversationId = selectedConversationId;
+    const previewUrl = pendingCaptionAttachment?.file === file
+      ? pendingCaptionAttachment.previewUrl
+      : null;
+    const optimisticId = createLocalMessageId();
+    const optimisticMessage = createOptimisticMessage({
+      body: caption.trim() || (kind === 'FILE' ? file.name : ''),
+      conversationId,
+      id: optimisticId,
+      kind,
+      media: {
+        id: null,
+        mimeType: file.type || 'application/octet-stream',
+        originalName: file.name || 'attachment',
+        storageKey: '',
+      },
+      metadata: previewUrl ? { previewUrl } : undefined,
+      user,
+    });
+
+    setAttachmentError(null);
+    setSendingAttachment(true);
+    addOptimisticMessage(optimisticMessage);
+    setAttachmentUploadsByMessageId((current) => ({
+      ...current,
+      [optimisticId]: { progress: 0, status: 'uploading' },
+    }));
+    dismissCaptionModalForUpload();
+
+    try {
+      const uploadPayload = await uploadWebMessageMedia(file, token, webUploadConfig, (progress) => {
+        setAttachmentUploadsByMessageId((current) => ({
+          ...current,
+          [optimisticId]: { progress, status: 'uploading' },
+        }));
+      }, t('attachmentFailed'));
+      const response = await authedRequest<{ scheduledMessage: ScheduledMessage }>(`/conversations/${conversationId}/scheduled-messages`, {
+        body: JSON.stringify({
+          body: caption.trim() || (kind === 'FILE' ? file.name : ''),
+          clientTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          kind,
+          mediaId: uploadPayload.media.id,
+          sendAt: sendAt.toISOString(),
+        }),
+        method: 'POST',
+      });
+      const scheduledMessage = mapScheduledWebMessage(response.scheduledMessage, user ?? undefined);
+      const displayedMessage = previewUrl
+        ? {
+            ...scheduledMessage,
+            metadata: {
+              ...(scheduledMessage.metadata && typeof scheduledMessage.metadata === 'object' ? scheduledMessage.metadata : {}),
+              previewUrl,
+            },
+          }
+        : scheduledMessage;
+
+      if (scheduledMessage.media?.id) {
+        primeLocalMediaBlob(scheduledMessage.media.id, file, scheduledMessage.media, webMediaCacheConfig);
+      }
+      replaceOptimisticMessage(conversationId, optimisticId, displayedMessage);
+      setAttachmentUploadsByMessageId((current) => omitRecordKey(current, optimisticId));
+    } catch (error) {
+      setPendingCaptionAttachment({ file, kind, previewUrl });
+      setCaptionDraft(caption);
+      setMessagesByConversation((current) => {
+        const nextMessages = (current[conversationId] ?? []).filter((message) => message.id !== optimisticId);
+
+        cacheConversationMessages(user?.id, conversationId, nextMessages);
+        return { ...current, [conversationId]: nextMessages };
+      });
+      setAttachmentUploadsByMessageId((current) => omitRecordKey(current, optimisticId));
+      setSendOptionsError(error instanceof Error ? error.message : t('scheduleFailed'));
+      setAttachmentError(error instanceof Error ? error.message : t('scheduleFailed'));
+      throw error;
     } finally {
       setSendingAttachment(false);
     }
@@ -4714,6 +5089,26 @@ function App() {
   async function runMessageAction(action: MessageContextAction, message: Message) {
     setContextMenu(null);
 
+    const scheduledMessageId = getMessageScheduledMessageId(message);
+
+    if (isScheduledWebMessage(message)) {
+      if ((action === 'delete-all' || action === 'delete-me') && scheduledMessageId) {
+        await authedRequest(`/conversations/${message.conversationId}/scheduled-messages/${scheduledMessageId}`, {
+          method: 'DELETE',
+        });
+        setMessagesByConversation((current) => {
+          const nextMessages = (current[message.conversationId] ?? []).filter((item) => item.id !== message.id);
+
+          cacheConversationMessages(user?.id, message.conversationId, nextMessages);
+          return { ...current, [message.conversationId]: nextMessages };
+        });
+        scheduleConversationRefresh();
+      } else if (action === 'copy' && message.body) {
+        await navigator.clipboard.writeText(message.body);
+      }
+      return;
+    }
+
     if (action === 'select') {
       setSelectedMessageIds((current) => {
         const next = new Set(current);
@@ -4733,7 +5128,7 @@ function App() {
     if (action === 'reply') {
       setReplyingTo(message);
       setActivePanelTab('chats');
-      setTimeout(() => composerTextareaRef.current?.focus(), 0);
+      setTimeout(() => messageComposerRef.current?.focus(), 0);
       return;
     }
     if (action === 'forward') {
@@ -4765,24 +5160,9 @@ function App() {
       return;
     }
     if (action === 'edit') {
-      const body = window.prompt(t('edit'), message.body)?.trim();
-
-      if (!body || body === message.body) {
-        return;
-      }
-      await authedRequest(`/conversations/${message.conversationId}/messages/${message.id}`, {
-        body: JSON.stringify({ body }),
-        method: 'PATCH',
-      });
-      setMessagesByConversation((current) => {
-        const nextMessages = (current[message.conversationId] ?? []).map((item) => item.id === message.id ? { ...item, body } : item);
-
-        cacheConversationMessages(user?.id, message.conversationId, nextMessages);
-        return {
-          ...current,
-          [message.conversationId]: nextMessages,
-        };
-      });
+      setEditingMessage(message);
+      setEditMessageDraft(message.body ?? '');
+      setEditMessageError(null);
       return;
     }
     if (action === 'report') {
@@ -4811,6 +5191,58 @@ function App() {
         [message.conversationId]: nextMessages,
       };
     });
+  }
+
+  function closeMessageEditModal() {
+    if (isSavingMessageEdit) {
+      return;
+    }
+
+    setEditingMessage(null);
+    setEditMessageDraft('');
+    setEditMessageError(null);
+  }
+
+  async function saveMessageEdit() {
+    if (!editingMessage || isSavingMessageEdit) {
+      return;
+    }
+
+    const body = editMessageDraft.trim();
+
+    if (!body || body === editingMessage.body) {
+      if (body === editingMessage.body) {
+        closeMessageEditModal();
+      }
+      return;
+    }
+
+    setSavingMessageEdit(true);
+    setEditMessageError(null);
+
+    try {
+      await authedRequest(`/conversations/${editingMessage.conversationId}/messages/${editingMessage.id}`, {
+        body: JSON.stringify({ body }),
+        method: 'PATCH',
+      });
+      setMessagesByConversation((current) => {
+        const nextMessages = (current[editingMessage.conversationId] ?? []).map((item) => (
+          item.id === editingMessage.id ? { ...item, body } : item
+        ));
+
+        cacheConversationMessages(user?.id, editingMessage.conversationId, nextMessages);
+        return {
+          ...current,
+          [editingMessage.conversationId]: nextMessages,
+        };
+      });
+      setEditingMessage(null);
+      setEditMessageDraft('');
+    } catch (error) {
+      setEditMessageError(error instanceof Error ? error.message : t('editMessageFailed'));
+    } finally {
+      setSavingMessageEdit(false);
+    }
   }
 
   function toggleSelectedMessage(messageId: string) {
@@ -6103,16 +6535,19 @@ function App() {
                 <div className="sender">{row.message.sender?.displayName ?? row.message.sender?.username ?? ''}</div>
                 <MessageContent
                   cacheConfig={webMediaCacheConfig}
+                  currentUserId={user?.id}
                   message={row.message}
                   onOpenMedia={(viewer) => {
                     setMediaViewer(viewer);
                     setMediaViewerZoom(1);
                   }}
                   onContentReady={(message) => void acknowledgeWebMessageContent(message.conversationId, [message], true).catch(() => undefined)}
+                  onOpenDisappearing={(message) => void openDisappearingMessage(message)}
                   t={t}
                   token={token}
                   onReplyClick={(messageId) => void jumpToRepliedMessage(messageId)}
                 />
+                <MessageLifecycleNotice language={language} message={row.message} />
                 {attachmentUploadsByMessageId[row.message.id] ? (
                   <AttachmentUploadProgress
                     state={attachmentUploadsByMessageId[row.message.id]}
@@ -6205,7 +6640,7 @@ function App() {
             </div>
             <div className="emoji-grid">
               {selectedEmojiGroup.emojis.map((emoji) => (
-                <button key={`${selectedEmojiGroup.key}-${emoji}`} onClick={() => setDraft((current) => `${current}${emoji}`)}>
+                <button key={`${selectedEmojiGroup.key}-${emoji}`} onClick={() => messageComposerRef.current?.append(emoji)}>
                   {emoji}
                 </button>
               ))}
@@ -6292,24 +6727,16 @@ function App() {
           >
             {isSendingVoice ? <LoaderCircle aria-hidden className="spin" size={19} /> : isRecordingVoice ? <MicOff aria-hidden size={19} /> : <Mic aria-hidden size={19} />}
           </button>
-          <textarea
+          <MessageComposer
             disabled={!selectedConversation}
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' && !event.shiftKey) {
-                event.preventDefault();
-                void sendMessage();
-              }
-            }}
+            isSendOptionPending={isApplyingSendOption}
+            onLongPressSend={() => openSendOptions('text')}
             onPaste={handleComposerPaste}
             placeholder={t('message')}
-            ref={composerTextareaRef}
-            rows={1}
-            value={draft}
+            ref={messageComposerRef}
+            sendLabel={t('send')}
+            onSend={(body) => void sendMessage(undefined, body)}
           />
-          <button aria-label={t('send')} disabled={!draft.trim()} onClick={() => void sendMessage()} title={t('send')}>
-            <Send aria-hidden size={18} />
-          </button>
         </footer> : null}
         {attachmentError ? (
           <div className="attachment-error">
@@ -6624,12 +7051,139 @@ function App() {
               <button
                 aria-label={t('send')}
                 disabled={isSendingAttachment}
-                onClick={() => void uploadAndSendFile(pendingCaptionAttachment.file, pendingCaptionAttachment.kind, captionDraft)}
+                onClick={() => {
+                  if (!consumeTriggeredSendLongPress()) {
+                    void uploadAndSendFile(pendingCaptionAttachment.file, pendingCaptionAttachment.kind, captionDraft);
+                  }
+                }}
+                onContextMenu={(event) => event.preventDefault()}
+                onPointerCancel={finishSendLongPress}
+                onPointerDown={() => beginSendLongPress('attachment')}
+                onPointerLeave={finishSendLongPress}
+                onPointerUp={finishSendLongPress}
               >
                 {isSendingAttachment ? <LoaderCircle aria-hidden className="spin" size={18} /> : <Send aria-hidden size={18} />}
               </button>
             </div>
           </div>
+        </div>
+      ) : null}
+      {sendOptionsMode ? (
+        <div className="modal-backdrop send-options-backdrop" onClick={() => !isApplyingSendOption && setSendOptionsMode(null)}>
+          <section
+            aria-labelledby="send-options-title"
+            aria-modal="true"
+            className="send-options-modal"
+            onClick={(event) => event.stopPropagation()}
+            role="dialog"
+          >
+            <header>
+              <strong id="send-options-title">{t('sendOptions')}</strong>
+              <button
+                aria-label={t('cancel')}
+                className="modal-close"
+                disabled={isApplyingSendOption}
+                onClick={() => setSendOptionsMode(null)}
+              >
+                <X aria-hidden size={20} />
+              </button>
+            </header>
+            {sendOptionsMode === 'menu' ? (
+              <div className="send-options-menu">
+                <button onClick={() => setSendOptionsMode('schedule')}>
+                  <span className="send-option-icon"><Clock3 aria-hidden size={21} /></span>
+                  <span><strong>{t('scheduledMessage')}</strong><small>{t('scheduledMessageHint')}</small></span>
+                </button>
+                <button onClick={() => setSendOptionsMode('disappear')}>
+                  <span className="send-option-icon"><Eye aria-hidden size={21} /></span>
+                  <span><strong>{t('disappearingMessage')}</strong><small>{t('disappearingMessageHint')}</small></span>
+                </button>
+              </div>
+            ) : null}
+            {sendOptionsMode === 'schedule' ? (
+              <div className="send-options-form">
+                <p>{t('scheduledMessageHint')}</p>
+                <label>
+                  <span>{t('scheduledMessage')}</span>
+                  <input
+                    autoFocus
+                    min={formatDateTimeLocal(new Date(Date.now() + 60_000))}
+                    onChange={(event) => setScheduledSendAt(event.target.value)}
+                    step={1}
+                    type="datetime-local"
+                    value={scheduledSendAt}
+                  />
+                </label>
+                <button disabled={isApplyingSendOption} onClick={() => void applyScheduledSend()}>
+                  {isApplyingSendOption ? <LoaderCircle aria-hidden className="spin" size={18} /> : <Clock3 aria-hidden size={18} />}
+                  <span>{t('scheduleSend')}</span>
+                </button>
+              </div>
+            ) : null}
+            {sendOptionsMode === 'disappear' ? (
+              <div className="send-options-form">
+                <p>{t('disappearingMessageHint')}</p>
+                <label>
+                  <span>{t('seconds')}</span>
+                  <input
+                    autoFocus
+                    max={30 * 24 * 60 * 60}
+                    min={1}
+                    onChange={(event) => setDisappearSeconds(event.target.value)}
+                    step={1}
+                    type="number"
+                    value={disappearSeconds}
+                  />
+                </label>
+                <button disabled={isApplyingSendOption} onClick={() => void applyDisappearingSend()}>
+                  {isApplyingSendOption ? <LoaderCircle aria-hidden className="spin" size={18} /> : <Send aria-hidden size={18} />}
+                  <span>{t('send')}</span>
+                </button>
+              </div>
+            ) : null}
+            {sendOptionsError ? <div className="send-options-error">{sendOptionsError}</div> : null}
+          </section>
+        </div>
+      ) : null}
+      {editingMessage ? (
+        <div className="modal-backdrop message-edit-backdrop" onClick={closeMessageEditModal}>
+          <section
+            aria-labelledby="message-edit-title"
+            aria-modal="true"
+            className="message-edit-modal"
+            onClick={(event) => event.stopPropagation()}
+            role="dialog"
+          >
+            <header>
+              <strong id="message-edit-title">{t('editMessage')}</strong>
+              <button aria-label={t('cancel')} className="modal-close" disabled={isSavingMessageEdit} onClick={closeMessageEditModal}>
+                <X aria-hidden size={20} />
+              </button>
+            </header>
+            <div className="message-edit-body">
+              <textarea
+                autoFocus
+                disabled={isSavingMessageEdit}
+                onChange={(event) => setEditMessageDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+                    event.preventDefault();
+                    void saveMessageEdit();
+                  }
+                }}
+                placeholder={t('message')}
+                value={editMessageDraft}
+              />
+              {editMessageError ? <div className="message-edit-error">{editMessageError}</div> : null}
+            </div>
+            <footer>
+              <button className="secondary" disabled={isSavingMessageEdit} onClick={closeMessageEditModal}>{t('cancel')}</button>
+              <button disabled={isSavingMessageEdit || !editMessageDraft.trim()} onClick={() => void saveMessageEdit()}>
+                {isSavingMessageEdit ? <LoaderCircle aria-hidden className="spin" size={18} /> : <Check aria-hidden size={18} />}
+                <span>{t('save')}</span>
+              </button>
+            </footer>
+          </section>
         </div>
       ) : null}
       {isImageEditorOpen && pendingCaptionAttachment?.kind === 'IMAGE' && pendingCaptionAttachment.previewUrl ? (
@@ -7474,7 +8028,14 @@ function ContextMenu({
       <div className="context-menu" onClick={(event) => event.stopPropagation()} style={{ left, top }}>
         <strong>{t(context.kind === 'message' ? 'messageOptions' : context.kind === 'contact' ? 'contactOptions' : 'chatOptions')}</strong>
         {context.kind === 'message' ? (
-          <>
+          isScheduledWebMessage(context.message) ? (
+            <>
+              {context.message.kind === 'TEXT' && context.message.body ? (
+                <ContextMenuButton icon={Copy} label={t('copy')} onClick={() => onMessageAction('copy', context.message)} />
+              ) : null}
+              <ContextMenuButton destructive icon={Trash2} label={t('delete')} onClick={() => onMessageAction('delete-me', context.message)} />
+            </>
+          ) : <>
             {context.message.kind === 'TEXT' && context.message.body ? (
               <ContextMenuButton icon={Copy} label={t('copy')} onClick={() => onMessageAction('copy', context.message)} />
             ) : null}
@@ -7922,28 +8483,78 @@ function ImageDrawingEditor({
   );
 }
 
+function MessageLifecycleNotice({ language, message }: { language: Language; message: Message }) {
+  const scheduledSendAt = getMessageScheduledSendAt(message);
+  const disappearingSeconds = getDisappearingAfterViewSeconds(message);
+
+  if (isScheduledWebMessage(message) && scheduledSendAt) {
+    const formattedTime = new Date(scheduledSendAt).toLocaleString(getLocaleForLanguage(language), {
+      dateStyle: 'medium',
+      timeStyle: 'short',
+    });
+
+    return (
+      <div className="message-lifecycle-notice scheduled">
+        <Clock3 aria-hidden size={13} />
+        <span>{translations[language].scheduledFor.replace('{time}', formattedTime)}</span>
+      </div>
+    );
+  }
+
+  if (disappearingSeconds) {
+    return (
+      <div className="message-lifecycle-notice disappearing">
+        <Eye aria-hidden size={13} />
+        <span>{translations[language].disappearsAfterView.replace('{seconds}', String(disappearingSeconds))}</span>
+      </div>
+    );
+  }
+
+  return null;
+}
+
 function MessageContent({
   cacheConfig,
+  currentUserId,
   message,
   onOpenMedia,
   onContentReady,
+  onOpenDisappearing,
   onReplyClick,
   t,
   token,
 }: {
   cacheConfig: WebMediaCacheConfig;
+  currentUserId?: string;
   message: Message;
   onOpenMedia?: (viewer: MediaViewerState) => void;
   onContentReady?: (message: Message) => void;
+  onOpenDisappearing?: (message: Message) => void;
   onReplyClick?: (messageId: string) => void;
   t: (key: TranslationKey) => string;
   token: string | null;
 }) {
   const previewUrl = getLocalPreviewUrl(message);
   const replyPreview = getReplyPreview(message);
+  const disappearingAfterViewSeconds = getDisappearingAfterViewSeconds(message);
+  const isDisappearingConcealed = !!disappearingAfterViewSeconds &&
+    message.senderId !== currentUserId &&
+    !getDisappearingDeleteAt(message);
   const replyElement = replyPreview
     ? <MessageReplyPreview onClick={onReplyClick} reply={replyPreview} />
     : null;
+
+  if (isDisappearingConcealed) {
+    return (
+      <>
+        {replyElement}
+        <button className="disappearing-reveal" onClick={() => onOpenDisappearing?.(message)} type="button">
+          <Eye aria-hidden size={20} />
+          <span>{t('clickToView')}</span>
+        </button>
+      </>
+    );
+  }
 
   if (message.kind === 'CALL') {
     return (
@@ -7958,7 +8569,7 @@ function MessageContent({
     return (
       <>
         {replyElement}
-        <AuthenticatedImageMedia cacheConfig={cacheConfig} caption={message.body} media={message.media} onContentReady={() => onContentReady?.(message)} onOpenMedia={onOpenMedia} previewUrl={previewUrl} token={token} />
+        <AuthenticatedImageMedia cacheConfig={cacheConfig} caption={message.body} media={message.media} onContentReady={() => onContentReady?.(message)} onOpenMedia={onOpenMedia} previewUrl={previewUrl} t={t} token={token} />
       </>
     );
   }
@@ -7967,7 +8578,7 @@ function MessageContent({
     return (
       <>
         {replyElement}
-        <AuthenticatedVideoMedia cacheConfig={cacheConfig} caption={message.body} media={message.media} onContentReady={() => onContentReady?.(message)} onOpenMedia={onOpenMedia} previewUrl={previewUrl} token={token} />
+        <AuthenticatedVideoMedia cacheConfig={cacheConfig} caption={message.body} media={message.media} onContentReady={() => onContentReady?.(message)} onOpenMedia={onOpenMedia} previewUrl={previewUrl} t={t} token={token} />
       </>
     );
   }
@@ -7989,10 +8600,15 @@ function MessageContent({
   }
 
   if (message.kind === 'FILE' && message.media) {
+    const caption = message.body?.trim() && message.body.trim() !== message.media.originalName
+      ? message.body
+      : '';
+
     return (
       <>
         {replyElement}
         <AuthenticatedFileMedia media={message.media} onContentReady={() => onContentReady?.(message)} token={token} />
+        {caption ? <ExpandableMessageText body={caption} t={t} /> : null}
       </>
     );
   }
@@ -8000,8 +8616,58 @@ function MessageContent({
   return (
     <>
       {replyElement}
-      <p>{renderLinkedMessageText(message.body)}</p>
+      <ExpandableMessageText body={message.body} t={t} />
     </>
+  );
+}
+
+function ExpandableMessageText({ body, className = '', t }: {
+  body: string;
+  className?: string;
+  t: (key: TranslationKey) => string;
+}) {
+  const textRef = useRef<HTMLParagraphElement>(null);
+  const [isExpanded, setExpanded] = useState(false);
+  const [canExpand, setCanExpand] = useState(false);
+
+  useEffect(() => {
+    setExpanded(false);
+  }, [body]);
+
+  useEffect(() => {
+    const element = textRef.current;
+
+    if (!element || isExpanded) {
+      return undefined;
+    }
+
+    const measure = () => setCanExpand(element.scrollHeight > element.clientHeight + 1);
+    const frame = requestAnimationFrame(measure);
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure);
+
+    observer?.observe(element);
+    return () => {
+      cancelAnimationFrame(frame);
+      observer?.disconnect();
+    };
+  }, [body, isExpanded]);
+
+  return (
+    <div className={`expandable-message-text ${className}`.trim()}>
+      <p className={isExpanded ? '' : 'collapsed'} ref={textRef}>{renderLinkedMessageText(body)}</p>
+      {canExpand ? (
+        <button
+          className="message-read-more"
+          onClick={(event) => {
+            event.stopPropagation();
+            setExpanded((current) => !current);
+          }}
+          type="button"
+        >
+          {t(isExpanded ? 'readLess' : 'readMore')}
+        </button>
+      ) : null}
+    </div>
   );
 }
 
@@ -8416,27 +9082,29 @@ async function normalizeClipboardImageBlob(blob: Blob) {
   return pngBlob;
 }
 
-function AuthenticatedImageMedia({ cacheConfig, caption, media, onContentReady, onOpenMedia, previewUrl, token }: { cacheConfig: WebMediaCacheConfig; caption?: string; media: NonNullable<Message['media']>; onContentReady?: () => void; onOpenMedia?: (viewer: MediaViewerState) => void; previewUrl?: string | null; token: string | null }) {
+function AuthenticatedImageMedia({ cacheConfig, caption, media, onContentReady, onOpenMedia, previewUrl, t, token }: { cacheConfig: WebMediaCacheConfig; caption?: string; media: NonNullable<Message['media']>; onContentReady?: () => void; onOpenMedia?: (viewer: MediaViewerState) => void; previewUrl?: string | null; t: (key: TranslationKey) => string; token: string | null }) {
   const imageUrl = useAuthenticatedMediaUrl(media.id, token, previewUrl, onContentReady, cacheConfig, media);
   const [aspectRatio, setAspectRatio] = useState(4 / 3);
 
   return (
-    <button
-      className="media-preview image-preview"
-      disabled={!imageUrl}
-      onClick={() => imageUrl && onOpenMedia?.({ caption, kind: 'IMAGE', media, url: imageUrl })}
-      type="button"
-    >
-      {imageUrl ? <img alt={media.originalName} className="message-media" loading="lazy" onLoad={(event) => {
-        const image = event.currentTarget;
-        if (image.naturalWidth && image.naturalHeight) setAspectRatio(image.naturalWidth / image.naturalHeight);
-      }} src={imageUrl} style={{ aspectRatio }} /> : <div className="message-media media-loading" style={{ aspectRatio }} />}
-      {caption ? <span>{caption}</span> : null}
-    </button>
+    <div className="media-preview image-preview">
+      <button
+        className="media-preview-open"
+        disabled={!imageUrl}
+        onClick={() => imageUrl && onOpenMedia?.({ caption, kind: 'IMAGE', media, url: imageUrl })}
+        type="button"
+      >
+        {imageUrl ? <img alt={media.originalName} className="message-media" loading="lazy" onLoad={(event) => {
+          const image = event.currentTarget;
+          if (image.naturalWidth && image.naturalHeight) setAspectRatio(image.naturalWidth / image.naturalHeight);
+        }} src={imageUrl} style={{ aspectRatio }} /> : <div className="message-media media-loading" style={{ aspectRatio }} />}
+      </button>
+      {caption ? <ExpandableMessageText body={caption} className="media-caption" t={t} /> : null}
+    </div>
   );
 }
 
-function AuthenticatedVideoMedia({ cacheConfig, caption, media, onContentReady, onOpenMedia, previewUrl, token }: { cacheConfig: WebMediaCacheConfig; caption?: string; media: NonNullable<Message['media']>; onContentReady?: () => void; onOpenMedia?: (viewer: MediaViewerState) => void; previewUrl?: string | null; token: string | null }) {
+function AuthenticatedVideoMedia({ cacheConfig, caption, media, onContentReady, onOpenMedia, previewUrl, t, token }: { cacheConfig: WebMediaCacheConfig; caption?: string; media: NonNullable<Message['media']>; onContentReady?: () => void; onOpenMedia?: (viewer: MediaViewerState) => void; previewUrl?: string | null; t: (key: TranslationKey) => string; token: string | null }) {
   const configuredThumbnailUrl = getServerMediaThumbnailUrl(media);
   const [failedThumbnailUrl, setFailedThumbnailUrl] = useState('');
   const [fullVideoRequested, setFullVideoRequested] = useState(false);
@@ -8466,12 +9134,13 @@ function AuthenticatedVideoMedia({ cacheConfig, caption, media, onContentReady, 
   };
 
   return (
-    <button
-      className="media-preview video-preview"
-      disabled={!previewUrl && (!media.id || !token)}
-      onClick={openVideo}
-      type="button"
-    >
+    <div className="media-preview video-preview">
+      <button
+        className="media-preview-open video-preview-open"
+        disabled={!previewUrl && (!media.id || !token)}
+        onClick={openVideo}
+        type="button"
+      >
       {previewUrl && videoUrl ? (
         <video className="message-media" muted onLoadedMetadata={(event) => {
           const video = event.currentTarget;
@@ -8498,9 +9167,10 @@ function AuthenticatedVideoMedia({ cacheConfig, caption, media, onContentReady, 
       ) : (
         <div className="message-media media-loading" style={{ aspectRatio }} />
       )}
-      <i className="video-preview-play"><Video aria-hidden size={22} /></i>
-      {caption ? <span>{caption}</span> : <span>{media.originalName}</span>}
-    </button>
+        <i className="video-preview-play"><Video aria-hidden size={22} /></i>
+      </button>
+      {caption ? <ExpandableMessageText body={caption} className="media-caption" t={t} /> : <span className="media-filename">{media.originalName}</span>}
+    </div>
   );
 }
 
@@ -9326,13 +9996,102 @@ function isMeetVapMediaUrl(url: string) {
 }
 
 function mergeMessages(current: Message[], incoming: Message[]) {
-  const messagesById = new Map(current.map((message) => [message.id, message]));
+  const deliveredScheduledMessageIds = new Set(
+    incoming.map(getMessageScheduledMessageId).filter((id): id is string => !!id),
+  );
+  const messagesById = new Map(
+    current
+      .filter((message) => {
+        const scheduledMessageId = getMessageScheduledMessageId(message);
+
+        return !isScheduledWebMessage(message) || !scheduledMessageId || !deliveredScheduledMessageIds.has(scheduledMessageId);
+      })
+      .map((message) => [message.id, message]),
+  );
 
   incoming.forEach((message) => messagesById.set(message.id, message));
 
   return [...messagesById.values()].sort((left, right) => (
     new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()
   ));
+}
+
+function mapScheduledWebMessage(message: ScheduledMessage, sender?: AuthUser): Message {
+  return {
+    body: message.body,
+    conversationId: message.conversationId,
+    createdAt: message.createdAt,
+    id: `scheduled-${message.id}`,
+    kind: message.kind,
+    media: message.media ?? null,
+    mediaId: message.mediaId,
+    metadata: {
+      ...(message.metadata && typeof message.metadata === 'object' ? message.metadata : {}),
+      scheduledMessageId: message.id,
+      scheduledSendAt: message.sendAt,
+    },
+    sender,
+    senderId: message.senderId,
+    status: 'SENT',
+  };
+}
+
+function getMessageScheduledMessageId(message: Message) {
+  const metadata = message.metadata;
+
+  if (!metadata || typeof metadata !== 'object' || !('scheduledMessageId' in metadata)) {
+    return undefined;
+  }
+
+  return typeof metadata.scheduledMessageId === 'string' ? metadata.scheduledMessageId : undefined;
+}
+
+function getMessageScheduledSendAt(message: Message) {
+  const metadata = message.metadata;
+
+  if (!metadata || typeof metadata !== 'object' || !('scheduledSendAt' in metadata)) {
+    return undefined;
+  }
+
+  return typeof metadata.scheduledSendAt === 'string' ? metadata.scheduledSendAt : undefined;
+}
+
+function isScheduledWebMessage(message: Message) {
+  return message.id.startsWith('scheduled-') && !!getMessageScheduledMessageId(message);
+}
+
+function getDisappearingAfterViewSeconds(message: Message) {
+  const metadata = message.metadata;
+
+  if (!metadata || typeof metadata !== 'object' || !('disappearingAfterView' in metadata)) {
+    return undefined;
+  }
+
+  const config = metadata.disappearingAfterView;
+
+  if (!config || typeof config !== 'object' || Array.isArray(config) || !('seconds' in config)) {
+    return undefined;
+  }
+
+  return typeof config.seconds === 'number' && Number.isInteger(config.seconds) && config.seconds > 0
+    ? config.seconds
+    : undefined;
+}
+
+function getDisappearingDeleteAt(message: Message) {
+  const metadata = message.metadata;
+
+  if (!metadata || typeof metadata !== 'object' || !('disappearingDeleteAt' in metadata)) {
+    return undefined;
+  }
+
+  return typeof metadata.disappearingDeleteAt === 'string' ? metadata.disappearingDeleteAt : undefined;
+}
+
+function formatDateTimeLocal(date: Date) {
+  const localDate = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+
+  return localDate.toISOString().slice(0, 19);
 }
 
 function updateMessageStatuses(

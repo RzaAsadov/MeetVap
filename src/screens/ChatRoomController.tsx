@@ -76,6 +76,8 @@ const EMPTY_CONVERSATIONS: Conversation[] = [];
 const CHAT_SCROLL_DIAGNOSTICS_ENABLED = false;
 const CHAT_LIFECYCLE_DIAGNOSTICS_ENABLED = false;
 const HOUR_MS = 60 * 60 * 1000;
+const COMPOSER_INPUT_MIN_HEIGHT = 44;
+const COMPOSER_INPUT_MAX_HEIGHT = 120;
 const VOICE_PLAYBACK_TAP_GUARD_MS = 450;
 const EMOJI_GROUPS = [
   { icon: 'happy-outline' as const, key: 'smileys', labelKey: 'emojiSmileys', emojis: ['😀', '😃', '😄', '😁', '😆', '😅', '😂', '🤣', '😊', '😇', '🙂', '🙃', '😉', '😍', '😘', '😋', '😎', '🤩', '🥳', '😏', '😢', '😭', '😤', '😡', '🤔', '🤗', '🤫', '😴', '😱', '🥰'] },
@@ -228,6 +230,8 @@ export function useChatRoomController({ navigation, route }: Props) {
   const pendingNativeDraftClearRef = useRef<string | null>(null);
   const draftSelectionRef = useRef({ end: 0, start: 0 });
   const [draftSelection, setDraftSelectionState] = useState({ end: 0, start: 0 });
+  const [composerInputHeight, setComposerInputHeight] = useState(COMPOSER_INPUT_MIN_HEIGHT);
+  const isComposerInputScrollable = composerInputHeight >= COMPOSER_INPUT_MAX_HEIGHT;
   const [hasDraft, setHasDraft] = useState(false);
   const [isSendingText, setSendingText] = useState(false);
   const [sendOptionsMode, setSendOptionsMode] = useState<null | 'menu' | 'schedule' | 'disappear'>(null);
@@ -245,6 +249,16 @@ export function useChatRoomController({ navigation, route }: Props) {
 
     setHasDraft((current) => current === nextHasDraft ? current : nextHasDraft);
   }, []);
+  const resetComposerInputHeight = useCallback(() => {
+    setComposerInputHeight((current) => current === COMPOSER_INPUT_MIN_HEIGHT ? current : COMPOSER_INPUT_MIN_HEIGHT);
+  }, []);
+  const handleComposerContentSizeChange = useCallback((contentHeight: number) => {
+    const nextHeight = draftRef.current.length === 0
+      ? COMPOSER_INPUT_MIN_HEIGHT
+      : Math.max(COMPOSER_INPUT_MIN_HEIGHT, Math.min(COMPOSER_INPUT_MAX_HEIGHT, Math.ceil(contentHeight)));
+
+    setComposerInputHeight((current) => current === nextHeight ? current : nextHeight);
+  }, []);
   const handleDraftChange = useCallback((nextDraft: string) => {
     noteHighPriorityUiActivity(750);
     const pendingClearedDraft = pendingNativeDraftClearRef.current;
@@ -256,6 +270,7 @@ export function useChatRoomController({ navigation, route }: Props) {
         // An onChange event queued before the imperative clear can arrive late
         // on a busy device. Do not resurrect the message that was just sent.
         composerTextInputRef.current?.clear();
+        resetComposerInputHeight();
         return;
       } else {
         pendingNativeDraftClearRef.current = null;
@@ -263,9 +278,12 @@ export function useChatRoomController({ navigation, route }: Props) {
     }
 
     draftRef.current = nextDraft;
+    if (nextDraft === '') {
+      resetComposerInputHeight();
+    }
     updateDraftPresence(nextDraft);
     composerTypingActivityRef.current(nextDraft);
-  }, [updateDraftPresence]);
+  }, [resetComposerInputHeight, updateDraftPresence]);
   const updateDraft = useCallback((nextDraft: string) => {
     const previousDraft = draftRef.current;
 
@@ -273,13 +291,14 @@ export function useChatRoomController({ navigation, route }: Props) {
     if (nextDraft === '') {
       pendingNativeDraftClearRef.current = previousDraft || null;
       composerTextInputRef.current?.clear();
+      resetComposerInputHeight();
     } else {
       pendingNativeDraftClearRef.current = null;
       composerTextInputRef.current?.setNativeProps({ text: nextDraft });
     }
     updateDraftPresence(nextDraft);
     composerTypingActivityRef.current(nextDraft);
-  }, [updateDraftPresence]);
+  }, [resetComposerInputHeight, updateDraftPresence]);
   const handleDraftSelectionChange = useCallback((selection: { end: number; start: number }) => {
     draftSelectionRef.current = selection;
   }, []);
@@ -2565,6 +2584,16 @@ export function useChatRoomController({ navigation, route }: Props) {
     });
   }, [user?.id]);
 
+  function showVoicePlaybackError(message: Message, error: unknown, phase: 'prepare' | 'play') {
+    logMessageDeliveryDiagnostic('voice-playback-failed', {
+      conversationId: message.conversationId,
+      message: error instanceof Error ? error.message : String(error),
+      messageId: message.id,
+      phase,
+    });
+    Alert.alert(t('voicePlaybackFailed'), t('voicePlaybackTryAgain'));
+  }
+
   async function playVoiceMessage(message: Message) {
     if (!message.mediaUri) {
       return;
@@ -2625,7 +2654,7 @@ export function useChatRoomController({ navigation, route }: Props) {
         }
       } catch (error) {
         if (voicePlaybackOperationVersionRef.current === operationVersion) {
-          Alert.alert(t('voicePlaybackFailed'), error instanceof Error ? error.message : t('voicePlaybackTryAgain'));
+          showVoicePlaybackError(message, error, 'prepare');
         }
         return;
       } finally {
@@ -2667,7 +2696,7 @@ export function useChatRoomController({ navigation, route }: Props) {
     } catch (error) {
       if (voicePlaybackRef.current === playback) {
         clearVoicePlayback();
-        Alert.alert(t('voicePlaybackFailed'), error instanceof Error ? error.message : t('voicePlaybackTryAgain'));
+        showVoicePlaybackError(message, error, 'play');
       }
       return;
     }
@@ -3053,7 +3082,7 @@ export function useChatRoomController({ navigation, route }: Props) {
     selectedCallVoiceEffectIdRef, suppressNextCallPressRef, pendingJumpMessageIdRef, pendingJumpOptionsRef, pendingJumpAttemptRef,
     pendingJumpRetryTimeoutRef, pendingHistoryAnchorRef, isControlledHistoryPrependRef, isHistoryExpansionPendingRef, isOlderLocalHistoryLoadingRef,
     isOlderLocalHistoryExhaustedRef, isTailOpenLockedRef, chatScrollDebugLastScrollAtRef, chatScrollDebugLastDistanceRef, hasTailActivityDuringOpenRef,
-    composerTextInputRef, draftSelection, handleDraftChange, handleDraftSelectionChange, hasDraft, isSendingText, sendOptionsMode,
+    composerTextInputRef, composerInputHeight, isComposerInputScrollable, handleComposerContentSizeChange, draftSelection, handleDraftChange, handleDraftSelectionChange, hasDraft, isSendingText, sendOptionsMode,
     setSendOptionsMode, scheduleDateDraft, setScheduleDateDraft, scheduleHourDraft, setScheduleHourDraft,
     scheduleMinuteDraft, setScheduleMinuteDraft, scheduleSecondDraft, setScheduleSecondDraft, disappearSecondsDraft,
     setDisappearSecondsDraft, isComposerEditMenuVisible, setComposerEditMenuVisible, isEmojiPickerVisible,

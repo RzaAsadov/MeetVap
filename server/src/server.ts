@@ -36,6 +36,7 @@ import { runOperationalCleanup } from './maintenance';
 import { startLiveKitHealthMonitor } from './livekitPool';
 import { startMessagePushOutboxWorker } from './messagePushOutbox';
 import { withRedisLock } from './redisCache';
+import { resolveRequestPublicApiEndpoint } from './publicApiEndpoints';
 
 const app = express();
 const server = http.createServer(app);
@@ -73,11 +74,15 @@ app.get('/health', async (_req, res) => {
   });
 });
 
-app.get('/config/client', (_req, res) => {
+app.get('/config/client', (req, res) => {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   res.setHeader('Pragma', 'no-cache');
   res.setHeader('Expires', '0');
-  res.json(getClientPolicy(config.PUBLIC_API_URL));
+  const endpoint = resolveRequestPublicApiEndpoint(req);
+  res.json(getClientPolicy(
+    endpoint?.url ?? config.PUBLIC_API_URL,
+    endpoint?.shareUrl ?? 'https://meetvap.com',
+  ));
 });
 
 app.use('/call-receipts', publicCallRoutes);

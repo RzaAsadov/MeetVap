@@ -9,6 +9,7 @@ import { assertRequestDeviceAllowed } from '../deviceAccess';
 import { HttpError } from '../httpError';
 import { operationalConfig } from '../operationalConfig';
 import { prisma } from '../prisma';
+import { getPublicApiUrlForRequest } from '../publicApiEndpoints';
 import { enforceRateLimit } from '../rateLimits';
 import { serializeUser } from '../serializers';
 import { notifyServerUserRegistered } from '../serverEventMessages';
@@ -150,6 +151,7 @@ authRoutes.post('/register', async (req, res, next) => {
         ipAddress: getRequestIp(req),
         locale: input.locale,
         platform: input.platform,
+        publicApiUrl: getPublicApiUrlForRequest(req),
         tokenHash: hashAccessToken(token),
         userAgent: req.get('user-agent') ?? null,
         userId: user.id,
@@ -220,6 +222,7 @@ authRoutes.post('/login', async (req, res, next) => {
         ipAddress: getRequestIp(req),
         locale: input.locale,
         platform: input.platform,
+        publicApiUrl: getPublicApiUrlForRequest(req),
         tokenHash: hashAccessToken(token),
         userAgent: req.get('user-agent') ?? null,
         userId: user.id,

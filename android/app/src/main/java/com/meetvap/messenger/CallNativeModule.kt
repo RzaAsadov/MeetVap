@@ -159,7 +159,6 @@ class CallNativeModule(private val reactContext: ReactApplicationContext) : Reac
   }
 
   private val mainHandler = Handler(Looper.getMainLooper())
-  private var incomingRingtonePlayer: MediaPlayer? = null
   private var outgoingRingbackPlayer: MediaPlayer? = null
   private var outgoingRingbackMode = "voice"
   private var isOutgoingRingbackActive = false
@@ -723,6 +722,11 @@ class CallNativeModule(private val reactContext: ReactApplicationContext) : Reac
   }
 
   @ReactMethod
+  fun dismissIncomingCall(callId: String?) {
+    IncomingCallNotificationHelper.dismiss(reactContext.applicationContext, callId)
+  }
+
+  @ReactMethod
   fun cancelMessageNotifications(conversationId: String?, serverInstanceId: String?, accountUserId: String?) {
     if (conversationId.isNullOrBlank()) {
       return
@@ -779,62 +783,12 @@ class CallNativeModule(private val reactContext: ReactApplicationContext) : Reac
 
   @ReactMethod
   fun startIncomingRingtone() {
-    mainHandler.post {
-      if (incomingRingtonePlayer?.isPlaying == true) {
-        return@post
-      }
-
-      runCatching {
-        incomingRingtonePlayer?.release()
-        incomingRingtonePlayer = null
-
-        val audioManager = reactContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-        audioManager.mode = AudioManager.MODE_NORMAL
-        @Suppress("DEPRECATION")
-        audioManager.isSpeakerphoneOn = false
-
-        val descriptor = reactContext.resources.openRawResourceFd(R.raw.ringtone)
-        val player = MediaPlayer().apply {
-          isLooping = true
-          setVolume(0.72f, 0.72f)
-          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            setAudioAttributes(
-              AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
-                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                .build(),
-            )
-          } else {
-            @Suppress("DEPRECATION")
-            setAudioStreamType(AudioManager.STREAM_RING)
-          }
-          setDataSource(descriptor.fileDescriptor, descriptor.startOffset, descriptor.length)
-          descriptor.close()
-          prepare()
-          start()
-        }
-
-        incomingRingtonePlayer = player
-      }.onFailure {
-        incomingRingtonePlayer?.release()
-        incomingRingtonePlayer = null
-      }
-    }
+    IncomingCallNotificationHelper.startRingtone(reactContext.applicationContext)
   }
 
   @ReactMethod
   fun stopIncomingRingtone() {
-    mainHandler.post {
-      incomingRingtonePlayer?.let { player ->
-        runCatching {
-          if (player.isPlaying) {
-            player.stop()
-          }
-        }
-        player.release()
-      }
-      incomingRingtonePlayer = null
-    }
+    IncomingCallNotificationHelper.stopRingtone()
   }
 
   @ReactMethod

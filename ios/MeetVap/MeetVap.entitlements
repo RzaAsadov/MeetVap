@@ -16,6 +16,9 @@
     <array>
       <string>applinks:meetvap.com</string>
       <string>applinks:www.meetvap.com</string>
+      <string>applinks:web.meetvap.ru</string>
+      <string>applinks:meet.meetvap.com</string>
+      <string>applinks:meet.meetvap.ru</string>
     </array>
   </dict>
 </plist>

@@ -8,7 +8,6 @@ type MessageDatabaseExecutor = Pick<SQLite.SQLiteDatabase, 'getAllAsync' | 'runA
 
 let databasePromise: Promise<SQLite.SQLiteDatabase> | null = null;
 let databaseWriteQueue: Promise<void> = Promise.resolve();
-let mediaDatabaseWriteQueue: Promise<void> = Promise.resolve();
 let activeDatabaseName = 'meetvap_messages.db';
 const COUNTER_ROW_ID = 'default';
 const APP_VERSION = `${Constants.expoConfig?.version ?? Constants.nativeApplicationVersion ?? 'unknown'}:${Constants.nativeBuildVersion ?? '0'}`;
@@ -16,7 +15,7 @@ const APP_VERSION = `${Constants.expoConfig?.version ?? Constants.nativeApplicat
 export async function configureMessageDatabase(databaseName: string) {
   const normalizedName = /^[a-zA-Z0-9_-]+\.db$/.test(databaseName) ? databaseName : 'meetvap_messages.db';
   if (activeDatabaseName === normalizedName) return;
-  await Promise.all([databaseWriteQueue.catch(() => undefined), mediaDatabaseWriteQueue.catch(() => undefined)]);
+  await databaseWriteQueue.catch(() => undefined);
   const currentPromise = databasePromise;
   databasePromise = null;
   if (currentPromise) {
@@ -32,7 +31,7 @@ export function getActiveMessageDatabaseName() {
 
 export async function deleteMessageDatabase(databaseName: string) {
   if (databaseName === activeDatabaseName) {
-    await Promise.all([databaseWriteQueue.catch(() => undefined), mediaDatabaseWriteQueue.catch(() => undefined)]);
+    await databaseWriteQueue.catch(() => undefined);
     const current = databasePromise ? await databasePromise.catch(() => null) : null;
     databasePromise = null;
     await current?.closeAsync().catch(() => undefined);
@@ -115,7 +114,7 @@ export async function listPendingMediaDownloads() {
 
 export async function saveMediaDownloadRecord(record: MediaDownloadRecord) {
   const database = await getDatabase();
-  await enqueueMediaDatabaseWrite(() => database.runAsync(
+  await enqueueDatabaseWrite(() => database.runAsync(
     `insert into media_downloads (
       localUri, messageId, remoteUri, expectedSizeBytes, downloadedBytes, status, updatedAtMs
     ) values (?, ?, ?, ?, ?, ?, ?)
@@ -140,7 +139,7 @@ export async function saveMediaDownloadRecord(record: MediaDownloadRecord) {
 
 export async function removeMediaDownloadRecord(localUri: string) {
   const database = await getDatabase();
-  await enqueueMediaDatabaseWrite(() => database.runAsync(
+  await enqueueDatabaseWrite(() => database.runAsync(
     'delete from media_downloads where localUri = ?',
     [localUri],
   ).then(() => undefined));
@@ -148,7 +147,7 @@ export async function removeMediaDownloadRecord(localUri: string) {
 
 export async function removeAllMediaDownloadRecords() {
   const database = await getDatabase();
-  await enqueueMediaDatabaseWrite(() => database.runAsync('delete from media_downloads').then(() => undefined));
+  await enqueueDatabaseWrite(() => database.runAsync('delete from media_downloads').then(() => undefined));
 }
 
 export async function getMessagesFromDatabase(conversationId: string) {
@@ -642,6 +641,7 @@ async function openDatabase() {
 
   await database.execAsync(`
     pragma journal_mode = WAL;
+    pragma busy_timeout = 5000;
     create table if not exists messages (
       id text not null,
       conversationId text not null,
@@ -718,13 +718,6 @@ async function resetLocalCallStatsForNewAppVersion(database: SQLite.SQLiteDataba
 async function enqueueDatabaseWrite(operation: () => Promise<void>) {
   const run = databaseWriteQueue.catch(() => undefined).then(operation);
   databaseWriteQueue = run.catch(() => undefined);
-
-  return run;
-}
-
-async function enqueueMediaDatabaseWrite(operation: () => Promise<void>) {
-  const run = mediaDatabaseWriteQueue.catch(() => undefined).then(operation);
-  mediaDatabaseWriteQueue = run.catch(() => undefined);
 
   return run;
 }

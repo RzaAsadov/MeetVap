@@ -25,6 +25,7 @@ import { getClientRequestHeaders, initializeClientInstallationId } from '../lib/
 import { useAppStore } from '../store/useAppStore';
 import { AuthUser, Message } from '../types/domain';
 import { RootStackParamList } from '../types/navigation';
+import { reportServerConnectionFailure, reportServerConnectionSuccess } from '../lib/serverConnectionEvents';
 
 type Navigation = NativeStackNavigationProp<RootStackParamList>;
 const CONVERSATION_REFRESH_THROTTLE_MS = 60_000;
@@ -154,8 +155,15 @@ export function RealtimeBridge() {
       setRealtimeSocket(socket);
 
       socket.on('connect', () => {
+        reportServerConnectionSuccess(serverUrl, 'socket');
         emitAppState(socket);
         refreshConversations();
+      });
+      socket.on('connect_error', () => {
+        reportServerConnectionFailure(serverUrl, 'socket');
+      });
+      socket.on('disconnect', (reason) => {
+        if (reason !== 'io client disconnect') reportServerConnectionFailure(serverUrl, 'socket');
       });
       socket.on('account:suspended', (payload?: { reason?: string }) => {
         notifyAuthSuspension({ code: 'ACCOUNT_BLOCKED', message: payload?.reason });

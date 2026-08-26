@@ -111,11 +111,17 @@ object IncomingCallNotificationHelper {
   fun cancel(context: Context, callId: String?) {
     stopRingtone()
 
+    dismiss(context, callId, removePayload = true)
+  }
+
+  fun dismiss(context: Context, callId: String?, removePayload: Boolean = false) {
     if (callId.isNullOrBlank()) {
       return
     }
 
-    activePayloads.remove(callId)
+    if (removePayload) {
+      activePayloads.remove(callId)
+    }
     val notificationId = NOTIFICATION_ID_BASE + (callId.hashCode() and 0x0fff)
     context.getSystemService(NotificationManager::class.java).cancel(notificationId)
   }
@@ -267,7 +273,7 @@ object IncomingCallNotificationHelper {
     manager.createNotificationChannel(channel)
   }
 
-  private fun startRingtone(context: Context) {
+  fun startRingtone(context: Context) {
     mainHandler.post {
       if (ringtonePlayer?.isPlaying == true) {
         mainHandler.removeCallbacks(stopRingtoneRunnable)

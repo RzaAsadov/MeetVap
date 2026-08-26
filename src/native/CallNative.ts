@@ -55,6 +55,7 @@ type CallNativeModule = {
   shareFile?: (uri: string, mimeType?: string | null, displayName?: string | null) => Promise<boolean>;
   renderImageDrawing?: (uri: string, strokesJson: string, outputFileName?: string | null) => Promise<RenderedImageDrawing>;
   cancelIncomingCall?: (callId?: string | null) => void;
+  dismissIncomingCall?: (callId?: string | null) => void;
   showIncomingCall?: (payload: AndroidIncomingCallPayload) => void;
   startIncomingRingtone?: () => void;
   stopIncomingRingtone?: () => void;
@@ -497,6 +498,14 @@ export function cancelNativeAndroidIncomingCall(callId: string | null | undefine
   }
 
   getCallNativeModule()?.cancelIncomingCall?.(callId);
+}
+
+export function dismissNativeAndroidIncomingCall(callId: string | null | undefined) {
+  if (Platform.OS !== 'android') {
+    return;
+  }
+
+  getCallNativeModule()?.dismissIncomingCall?.(callId);
 }
 
 export function cancelNativeMessageNotifications(

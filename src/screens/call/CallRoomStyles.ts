@@ -653,6 +653,18 @@ export function createCallRoomStyles() {
     gap: spacing.sm,
     paddingHorizontal: spacing.md,
   },
+  persistentVideoMinimizeButton: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.42)',
+    borderRadius: 22,
+    elevation: 6,
+    height: 44,
+    justifyContent: 'center',
+    left: spacing.md,
+    position: 'absolute',
+    width: 44,
+    zIndex: 5,
+  },
   personName: {
     color: colors.textPrimary,
     fontSize: 15,

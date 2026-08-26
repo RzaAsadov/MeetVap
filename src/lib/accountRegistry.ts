@@ -19,13 +19,18 @@ export class AccountLimitError extends Error {
   }
 }
 
+export type AccountServerRoutingMode = 'main-dns-pool' | 'direct-hostname' | 'dns-alias';
+
 export type SavedAccount = {
   accountId: string;
   authState: 'authenticated' | 'reauth-required' | 'suspended';
   avatarUrl?: string | null;
+  canonicalServerUrl?: string;
   databaseName: string;
   displayName: string;
+  lastConnectedAt?: number;
   lastUsedAt: number;
+  serverRoutingMode?: AccountServerRoutingMode;
   serverInstanceId: string;
   serverIdentityResolved?: boolean;
   serverUrl: string;
@@ -133,6 +138,8 @@ export async function getActiveAccountSession() {
 }
 
 export async function saveAuthenticatedAccount(input: {
+  canonicalServerUrl?: string;
+  routingMode?: AccountServerRoutingMode;
   serverInstanceId?: string | null;
   serverUrl: string;
   token: string;
@@ -151,13 +158,16 @@ export async function saveAuthenticatedAccount(input: {
     throw new AccountLimitError();
   }
   const account = createSavedAccount({
+    canonicalServerUrl: input.canonicalServerUrl ?? existing?.canonicalServerUrl,
     databaseName: existing?.databaseName ?? `meetvap_${accountId}.db`,
+    routingMode: input.routingMode ?? existing?.serverRoutingMode,
     serverInstanceId,
     serverUrl,
     user: input.user,
   });
   account.accountId = accountId;
   account.unreadConversationIds = existing?.unreadConversationIds ?? [];
+  account.lastConnectedAt = Date.now();
   account.serverIdentityResolved = true;
   const nextAccounts = [account, ...accounts.filter((item) => item.accountId !== accountId)];
   accountsCache = nextAccounts;
@@ -174,13 +184,16 @@ export async function updateSavedAccountUser(user: AuthUser) {
   const active = await getActiveAccount();
   if (!active) return;
   const account = createSavedAccount({
+    canonicalServerUrl: active.canonicalServerUrl,
     databaseName: active.databaseName,
+    routingMode: active.serverRoutingMode,
     serverInstanceId: active.serverInstanceId,
     serverUrl: active.serverUrl,
     user,
   });
   account.accountId = active.accountId;
   account.lastUsedAt = active.lastUsedAt;
+  account.lastConnectedAt = active.lastConnectedAt;
   account.authState = active.authState;
   account.unreadConversationIds = active.unreadConversationIds ?? [];
   account.serverIdentityResolved = active.serverIdentityResolved;
@@ -196,6 +209,27 @@ export async function resolveSavedAccountServerIdentity(accountId: string, serve
   const accounts = (await listSavedAccounts()).map((item) => (
     item.accountId === accountId
       ? { ...item, serverIdentityResolved: true, serverInstanceId: serverInstanceId.trim() || item.serverUrl }
+      : item
+  ));
+  accountsCache = accounts;
+  await writeAccountIndex(accounts);
+  return accounts.find((item) => item.accountId === accountId) ?? null;
+}
+
+export async function updateSavedAccountServerEndpoint(
+  accountId: string,
+  serverUrl: string,
+  routingMode?: AccountServerRoutingMode,
+) {
+  const normalizedUrl = normalizeServerUrl(serverUrl);
+  const accounts = (await listSavedAccounts()).map((item) => (
+    item.accountId === accountId
+      ? {
+          ...item,
+          ...(routingMode ? { serverRoutingMode: routingMode } : {}),
+          lastConnectedAt: Date.now(),
+          serverUrl: normalizedUrl,
+        }
       : item
   ));
   accountsCache = accounts;
@@ -343,7 +377,9 @@ export function getAccountScopedStorageKey(key: string) {
 }
 
 function createSavedAccount(input: {
+  canonicalServerUrl?: string;
   databaseName: string;
+  routingMode?: AccountServerRoutingMode;
   serverInstanceId: string;
   serverUrl: string;
   user: AuthUser;
@@ -352,9 +388,11 @@ function createSavedAccount(input: {
     accountId: createAccountId(input.serverInstanceId, input.user.id),
     authState: 'authenticated',
     avatarUrl: input.user.avatarUrl,
+    ...(input.canonicalServerUrl ? { canonicalServerUrl: normalizeServerUrl(input.canonicalServerUrl) } : {}),
     databaseName: input.databaseName,
     displayName: input.user.displayName,
     lastUsedAt: Date.now(),
+    serverRoutingMode: input.routingMode,
     serverInstanceId: input.serverInstanceId,
     serverUrl: normalizeServerUrl(input.serverUrl),
     userId: input.user.id,

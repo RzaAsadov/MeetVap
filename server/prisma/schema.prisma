@@ -205,6 +205,7 @@ model Session {
   installationId String?
   deviceModel String?
   osVersion String?
+  publicApiUrl String?
   attestationGraceStartedAt DateTime?
   createdAt DateTime @default(now())
   expiresAt DateTime
@@ -219,6 +220,7 @@ model Session {
   @@index([userId, appBuildNumber])
   @@index([installationId])
   @@index([expiresAt])
+  @@index([publicApiUrl])
 }
 
 model WebPairingSession {
@@ -228,6 +230,7 @@ model WebPairingSession {
   tokenHash String?
   userAgent String?
   ipAddress String?
+  publicApiUrl String?
   approvedAt DateTime?
   consumedAt DateTime?
   createdAt DateTime @default(now())
@@ -329,6 +332,7 @@ model DevicePushToken {
   installationId String?
   deviceModel String?
   osVersion String?
+  publicApiUrl String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -337,6 +341,7 @@ model DevicePushToken {
   @@index([userId])
   @@index([userId, appBuildNumber])
   @@index([installationId])
+  @@index([publicApiUrl])
   @@unique([userId, token, provider])
 }
 
@@ -358,6 +363,7 @@ model Conversation {
   disappearingMessagesDurationMinutes Int?
   disappearingMessagesSetById String?
   disappearingMessagesExpiredAt DateTime?
+  voiceRoomLivekitServerId String?
   lastMessageBody String?
   lastMessageKind MessageKind?
   lastMessageSenderId String?
@@ -1101,6 +1107,7 @@ model LoginDomain {
   contacts               String?
   originIpAddresses      String[] @default([])
   mainServerKeyHash      String   @unique
+  mainServerKeyEncrypted String?
   expiresAt              DateTime?
   maxUserCount           Int?
   isActive               Boolean  @default(true)

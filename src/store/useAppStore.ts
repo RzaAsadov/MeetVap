@@ -16,8 +16,8 @@ import { deleteAccountMediaCache, downloadRemoteMediaFile, getMessageMediaCacheU
 import { logMessageDeliveryDiagnostic, refreshRemoteMessageDeliveryDiagnostics, shouldCollectMessageDeliveryDiagnostics } from '../lib/messageDeliveryDiagnostics';
 import { dismissAllMessageNotifications, dismissMessageNotificationsForConversation } from '../lib/messageNotifications';
 import { clearAuthToken, clearDeletedConversationAfter, clearStoredConversations, clearStoredSubscriptionStatus, clearStoredUser, DEFAULT_SERVER_URL, eraseLocalChatData, getAuthToken, getDeletedConversationAfter, getDeletedConversationAfters, getServerUrl, getStoredAutoDownloadMedia, getStoredCallLogs, getStoredConversationMediaCacheCursor, getStoredConversationSyncCursors, getStoredConversations, getStoredDarkMode, getStoredDecoyOffline, getStoredErasePinDeletePeers, getStoredLanguage, getStoredLatestMessagesByConversationIds, getStoredMessages, getStoredMessagesByIds, getStoredOlderMessages, getStoredRecentMessages, getStoredSubscriptionStatus, getStoredUser, removeStoredConversationRecords, removeStoredMessageRecords, removeStoredMessages, setDeletedConversationAfter, setServerUrl, setStoredAutoDownloadMedia, setStoredCallLogs, setStoredConversationMediaCacheCursor, setStoredConversationSyncCursors, setStoredDarkMode, setStoredDecoyOffline, setStoredLanguage, setStoredSubscriptionStatus, setStoredUser, upsertStoredConversations, upsertStoredMessages } from '../lib/storage';
-import { getServerInstanceId, resolveLoginServer } from '../lib/loginServerResolution';
-import { activateSavedAccount, getAccountSession, getActiveAccount, initializeAccountRegistry, listSavedAccounts, markActiveAccountAuthState, removeSavedAccount, resolveSavedAccountServerIdentity, saveAuthenticatedAccount, setActiveAccountUnreadConversationIds, type SavedAccount } from '../lib/accountRegistry';
+import { getServerInstanceId, LoginHostUnavailableError, resolveLoginServer, resolveMainLoginFallbackCandidates } from '../lib/loginServerResolution';
+import { activateSavedAccount, getAccountSession, getActiveAccount, initializeAccountRegistry, listSavedAccounts, markActiveAccountAuthState, removeSavedAccount, resolveSavedAccountServerIdentity, saveAuthenticatedAccount, setActiveAccountUnreadConversationIds, updateSavedAccountServerEndpoint, type SavedAccount } from '../lib/accountRegistry';
 import { configureMessageDatabase, deleteMessageDatabase, listActiveLiveLocationShares } from '../lib/messageStore';
 import { syncNativeAccountCredentials } from '../lib/nativeAccountCredentials';
 import { createBypassSubscriptionStatus, createEmptySubscriptionStatus, hasPremiumAccess, isSubscriptionBypassed } from '../lib/subscriptionAccess';
@@ -46,6 +46,10 @@ const messageCacheRequests = new Map<string, Promise<void>>();
 const olderLocalMessageRequests = new Map<string, Promise<number>>();
 const olderLocalMessagesExhaustedBeforeByConversation = new Map<string, number>();
 const uploadControllers = new Map<string, AbortController>();
+
+export function hasActiveMessageUploads() {
+  return uploadControllers.size > 0;
+}
 const incomingMediaCacheRequests = new Map<string, Promise<Message | null>>();
 const queuedIncomingMediaCacheIds = new Set<string>();
 const incomingMediaCacheQueue: Message[] = [];
@@ -379,6 +383,7 @@ export type AppState = {
   syncSystemDarkMode: (isDarkMode: boolean) => void;
   setDecoyOfflineMode: (isDecoyOffline: boolean) => Promise<void>;
   saveServerUrl: (serverUrl: string) => Promise<void>;
+  updateAccountServerUrl: (accountId: string, serverUrl: string) => Promise<void>;
   signInWithPassword: (username: string, password: string) => Promise<void>;
   switchAccount: (accountId: string) => Promise<void>;
   removeAccount: (accountId: string) => Promise<void>;
@@ -783,15 +788,90 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
     });
   },
 
+  async updateAccountServerUrl(accountId, serverUrl) {
+    const current = useAppStore.getState();
+    const isActiveAccount = current.activeAccountId === accountId;
+
+    if (isActiveAccount && (getActiveCallSession() || getActiveMeetingSession())) {
+      throw new Error(t('endCallBeforeSwitchingAccount'));
+    }
+    if (isActiveAccount && (await listActiveLiveLocationShares()).length > 0) {
+      throw new Error(t('stopLiveLocationBeforeSwitchingAccount'));
+    }
+    if (isActiveAccount && hasActiveMessageUploads()) {
+      throw new Error(t('pleaseTryAgain'));
+    }
+
+    const updated = await updateSavedAccountServerEndpoint(accountId, serverUrl);
+
+    if (!updated) {
+      throw new Error(t('accountNeedsSignIn'));
+    }
+
+    const accounts = await listSavedAccounts();
+
+    if (isActiveAccount) {
+      await setServerUrl(updated.serverUrl);
+      set({
+        accounts,
+        appDomains: [],
+        catalogUrl: null,
+        catalogUrlLoadError: null,
+        connectionNotice: null,
+        connectionStatus: 'unknown',
+        helpUrl: null,
+        helpUrlLoadError: null,
+        serverUrl: updated.serverUrl,
+      });
+      void useAppStore.getState().loadCatalogUrl().catch(() => undefined);
+      void useAppStore.getState().loadHelpUrl().catch(() => undefined);
+    } else {
+      set({ accounts });
+    }
+
+    void syncNativeAccountCredentials();
+  },
+
   async signInWithPassword(username, password) {
     if (getActiveCallSession() || getActiveMeetingSession()) throw new Error(t('endCallBeforeSwitchingAccount'));
     if ((await listActiveLiveLocationShares()).length > 0) throw new Error(t('stopLiveLocationBeforeSwitchingAccount'));
     const resolved = await resolveLoginServer(username);
-    const serverUrl = resolved.serverUrl;
-    const response = await login(serverUrl, { password, username: resolved.username });
+    const attemptedServerUrls = new Set<string>();
+    let candidateServerUrls = [...resolved.candidateServerUrls];
+    let authenticated: Awaited<ReturnType<typeof login>> | null = null;
+    let serverUrl = resolved.serverUrl;
+
+    while (candidateServerUrls.length > 0 && !authenticated) {
+      serverUrl = candidateServerUrls.shift() as string;
+      if (attemptedServerUrls.has(serverUrl)) continue;
+      attemptedServerUrls.add(serverUrl);
+
+      try {
+        authenticated = await login(serverUrl, { password, username: resolved.username });
+      } catch (error) {
+        if (error instanceof ApiError) throw error;
+        if ((resolved.source === 'main' || resolved.source === 'main-dns-pool') && candidateServerUrls.length === 0) {
+          const fallbacks = await resolveMainLoginFallbackCandidates();
+          candidateServerUrls = fallbacks
+            .map((candidate) => candidate.serverUrl)
+            .filter((candidate) => !attemptedServerUrls.has(candidate));
+        }
+        if (candidateServerUrls.length === 0) throw new LoginHostUnavailableError(serverUrl);
+      }
+    }
+
+    if (!authenticated) throw new LoginHostUnavailableError(serverUrl);
+    const response = authenticated;
     const serverInstanceId = await getServerInstanceId(serverUrl);
     await drainSessionWork();
-    const account = await saveAuthenticatedAccount({ serverInstanceId, serverUrl, token: response.token, user: response.user });
+    const account = await saveAuthenticatedAccount({
+      canonicalServerUrl: resolved.source === 'main' || resolved.source === 'main-dns-pool' ? DEFAULT_SERVER_URL : undefined,
+      routingMode: resolved.source === 'main' || resolved.source === 'main-dns-pool' ? 'main-dns-pool' : resolved.source,
+      serverInstanceId,
+      serverUrl,
+      token: response.token,
+      user: response.user,
+    });
     await configureMessageDatabase(account.databaseName);
 
     await Promise.all([
@@ -944,7 +1024,14 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
     const response = await register(serverUrl, { displayName, password, username });
     const serverInstanceId = await getServerInstanceId(serverUrl);
     await drainSessionWork();
-    const account = await saveAuthenticatedAccount({ serverInstanceId, serverUrl, token: response.token, user: response.user });
+    const account = await saveAuthenticatedAccount({
+      canonicalServerUrl: serverUrl === DEFAULT_SERVER_URL ? DEFAULT_SERVER_URL : undefined,
+      routingMode: serverUrl === DEFAULT_SERVER_URL ? 'main-dns-pool' : 'direct-hostname',
+      serverInstanceId,
+      serverUrl,
+      token: response.token,
+      user: response.user,
+    });
     await configureMessageDatabase(account.databaseName);
     await Promise.all([setStoredCallLogs([]), setStoredSubscriptionStatus(createEmptySubscriptionStatus())]);
     isLocalSessionResetting = false;
