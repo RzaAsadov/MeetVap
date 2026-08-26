@@ -223,3 +223,9 @@ google-services.json
 /website
 /rasadov
 /E2EE.md
+
+/docker
+/adball.sh
+/backup_sources.sh
+/.dockerignore
+/sdiag.sh
