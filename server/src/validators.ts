@@ -66,6 +66,8 @@ export const usernameAvailabilitySchema = z.object({
 });
 
 export const loginSchema = z.object({
+  loginDomain: z.string().trim().toLowerCase().min(1).max(253)
+    .regex(/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/).optional(),
   password: z.string().min(1),
   locale: appLocaleSchema.optional(),
   platform: z.string().trim().min(1).max(32).optional(),
@@ -196,6 +198,16 @@ export const messageDeletionAckSchema = z.object({
   message: 'Choose at least one deletion',
 });
 
+// Status rows created before delete keys were introduced use the message ID as
+// their durable key. Keep delete/edit acknowledgement keys strict while
+// accepting both generations of internal status keys here.
+export const messageStatusAckSchema = z.object({
+  messageIds: z.array(z.string().min(1).max(128)).max(250).default([]),
+  messageKeys: z.array(z.string().min(1).max(128)).max(250).default([]),
+}).refine((input) => input.messageIds.length > 0 || input.messageKeys.length > 0, {
+  message: 'Choose at least one status update',
+});
+
 export const bulkConversationSyncSchema = z.object({
   conversationIds: z.array(z.string().min(1)).max(100).default([]),
 });
@@ -218,6 +230,16 @@ export const bulkConversationAckSchema = z.object({
     messageKeys: z.array(z.string().regex(/^[A-Za-z0-9]{16}$/)).max(250).default([]),
   }).refine((input) => input.messageIds.length > 0 || input.messageKeys.length > 0, {
     message: 'Choose at least one message',
+  })).max(100).default([]),
+});
+
+export const bulkConversationStatusAckSchema = z.object({
+  items: z.array(z.object({
+    conversationId: z.string().min(1),
+    messageIds: z.array(z.string().min(1).max(128)).max(250).default([]),
+    messageKeys: z.array(z.string().min(1).max(128)).max(250).default([]),
+  }).refine((input) => input.messageIds.length > 0 || input.messageKeys.length > 0, {
+    message: 'Choose at least one status update',
   })).max(100).default([]),
 });
 

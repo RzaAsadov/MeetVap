@@ -220,9 +220,18 @@ export async function updateSavedAccountServerEndpoint(
   accountId: string,
   serverUrl: string,
   routingMode?: AccountServerRoutingMode,
+  expectedCurrentServerUrl?: string,
 ) {
   const normalizedUrl = normalizeServerUrl(serverUrl);
-  const accounts = (await listSavedAccounts()).map((item) => (
+  const currentAccounts = await listSavedAccounts();
+  const target = currentAccounts.find((item) => item.accountId === accountId);
+  if (
+    !target ||
+    (expectedCurrentServerUrl && normalizeServerUrl(target.serverUrl) !== normalizeServerUrl(expectedCurrentServerUrl))
+  ) {
+    return null;
+  }
+  const accounts = currentAccounts.map((item) => (
     item.accountId === accountId
       ? {
           ...item,

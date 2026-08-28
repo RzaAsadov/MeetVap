@@ -426,7 +426,7 @@ async function authenticateChildRequest(req: Request) {
   const domain = await prisma.loginDomain.findFirst({ where: { mainServerKeyHash: keyHash } });
   const requestIp = normalizeIp(getRequestIp(req));
 
-  if (!domain || !domain.isActive || (domain.expiresAt && domain.expiresAt <= new Date())) {
+  if (!domain || domain.isLocal || !domain.isActive || (domain.expiresAt && domain.expiresAt <= new Date())) {
     throw new HttpError(403, 'Child server is not authorized');
   }
   if (!domain.originIpAddresses.map(normalizeIp).includes(requestIp)) {

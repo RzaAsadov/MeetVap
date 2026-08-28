@@ -7,7 +7,6 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { PrimaryButton } from '../components/PrimaryButton';
 import { TextField } from '../components/TextField';
 import { getLanguagePreferenceFlag, getLanguagePreferenceLabel, LANGUAGE_PREFERENCES, t } from '../i18n';
-import { checkUsernameAvailability } from '../lib/backend';
 import { AccountLimitError } from '../lib/accountRegistry';
 import { LoginAliasResolutionError, LoginHostUnavailableError } from '../lib/loginServerResolution';
 import { containsMeetVapKeyword, isProhibitedMeetVapUsername } from '../lib/prohibitedNames';
@@ -29,7 +28,7 @@ export function AuthScreen({ navigation, route }: Props) {
   styles = createStyles();
   const language = useAppStore((state) => state.language);
   const languagePreference = useAppStore((state) => state.languagePreference);
-  const serverUrl = useAppStore((state) => state.serverUrl);
+  const checkRegistrationUsernameAvailability = useAppStore((state) => state.checkRegistrationUsernameAvailability);
   const signInWithPassword = useAppStore((state) => state.signInWithPassword);
   const registerWithPassword = useAppStore((state) => state.registerWithPassword);
   const setLanguagePreference = useAppStore((state) => state.setLanguagePreference);
@@ -145,7 +144,7 @@ export function AuthScreen({ navigation, route }: Props) {
     setCheckingUsername(true);
 
     try {
-      const result = await checkUsernameAvailability(serverUrl ?? '', normalizedUsername);
+      const result = await checkRegistrationUsernameAvailability(normalizedUsername);
 
       if (!result.available) {
         Alert.alert(t('usernameUnavailableTitle'), t('usernameUnavailableDescription'));
@@ -155,6 +154,10 @@ export function AuthScreen({ navigation, route }: Props) {
       setUsername(result.username);
       setRegisterStep('displayName');
     } catch (error) {
+      if (error instanceof LoginHostUnavailableError) {
+        setUnreachableHostname(error.hostname);
+        return;
+      }
       Alert.alert(t('usernameAvailabilityCheckFailed'), error instanceof Error ? error.message : t('pleaseTryAgain'));
     } finally {
       setCheckingUsername(false);

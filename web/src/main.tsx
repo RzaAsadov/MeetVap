@@ -29,6 +29,16 @@ const WEB_CALL_REMOTE_STARTUP_STALL_RESET_MS = 900;
 const WEB_CALL_REMOTE_STARTUP_RESUBSCRIBE_DELAY_MS = 80;
 const WEB_INSTALLATION_ID = getOrCreateWebInstallationId();
 
+function getSocketEndpoint(apiUrl: string) {
+  const parsedUrl = new URL(apiUrl);
+  const apiPath = parsedUrl.pathname.replace(/\/+$/, '');
+
+  return {
+    origin: parsedUrl.origin,
+    path: `${apiPath}/socket.io/`.replace(/\/{2,}/g, '/'),
+  };
+}
+
 function getOrCreateWebInstallationId() {
   const existing = localStorage.getItem(INSTALLATION_ID_KEY)?.trim();
 
@@ -178,6 +188,7 @@ const translations = {
     maximize: 'Maximize',
     message: 'Message',
     messageOptions: 'Message options',
+    reaction: 'Reaction',
     microphone: 'Microphone',
     recordVoice: 'Record voice',
     readLess: 'Read less',
@@ -388,6 +399,7 @@ const translations = {
     maximize: 'Büyüt',
     message: 'Mesaj',
     messageOptions: 'Mesaj seçenekleri',
+    reaction: 'Tepki',
     microphone: 'Mikrofon',
     recordVoice: 'Ses kaydet',
     readLess: 'Daha az göster',
@@ -598,6 +610,7 @@ const translations = {
     maximize: 'Развернуть',
     message: 'Сообщение',
     messageOptions: 'Действия с сообщением',
+    reaction: 'Реакция',
     microphone: 'Микрофон',
     recordVoice: 'Записать голос',
     readLess: 'Скрыть',
@@ -1131,6 +1144,16 @@ type Message = {
   status: 'SENDING' | 'SENT' | 'DELIVERED' | 'READ';
 };
 
+type MessageReactionUpdate = {
+  conversationId: string;
+  emoji: string | null;
+  messageId: string;
+  reactions?: Record<string, string>;
+  userId: string;
+};
+
+const QUICK_MESSAGE_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏', '🤗'] as const;
+
 type ScheduledMessage = {
   body: string;
   conversationId: string;
@@ -1502,6 +1525,8 @@ function App() {
   const [meetingEndSummary, setMeetingEndSummary] = useState<MeetingEndSummary | null>(null);
   const socketRef = useRef<Socket | null>(null);
   const conversationRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const conversationRefreshInFlightRef = useRef(false);
+  const conversationRefreshQueuedRef = useRef(false);
   const callStateRef = useRef<CallState | null>(null);
   const activeCallConnectPromiseRef = useRef<Promise<void> | null>(null);
   const activeCallConnectCallIdRef = useRef<string | null>(null);
@@ -2239,8 +2264,7 @@ function App() {
 
     setConversations((current) => {
       const currentById = new Map(current.map((conversation) => [conversation.id, conversation]));
-
-      return sortConversationsByLastMessage(response.conversations.map((conversation) => {
+      const nextConversations = sortConversationsByLastMessage(response.conversations.map((conversation) => {
         const existing = currentById.get(conversation.id);
         const cachedMessages = cachedMessagesByConversation[conversation.id] ?? [];
 
@@ -2271,6 +2295,8 @@ function App() {
 
         return applyLocalConversationPreview(mergedConversation, cachedMessages);
       }));
+
+      return areConversationListsEquivalent(current, nextConversations) ? current : nextConversations;
     });
     setSelectedConversationId((current) => current ?? response.conversations[0]?.id ?? null);
 
@@ -2383,7 +2409,21 @@ function App() {
 
     conversationRefreshTimerRef.current = setTimeout(() => {
       conversationRefreshTimerRef.current = null;
-      void loadConversations().catch(() => undefined);
+
+      if (conversationRefreshInFlightRef.current) {
+        conversationRefreshQueuedRef.current = true;
+        return;
+      }
+
+      conversationRefreshInFlightRef.current = true;
+      void (async () => {
+        do {
+          conversationRefreshQueuedRef.current = false;
+          await loadConversations().catch(() => undefined);
+        } while (conversationRefreshQueuedRef.current);
+      })().finally(() => {
+        conversationRefreshInFlightRef.current = false;
+      });
     }, 1800);
   }, [loadConversations]);
 
@@ -2419,6 +2459,37 @@ function App() {
       return {
         ...current,
         [conversationId]: mergedMessages,
+      };
+    });
+  }, [user?.id]);
+
+  const applyMessageReaction = useCallback((reaction: MessageReactionUpdate) => {
+    setMessagesByConversation((current) => {
+      const currentMessages = current[reaction.conversationId] ?? [];
+      let didUpdate = false;
+      const nextMessages = currentMessages.map((message) => {
+        if (message.id !== reaction.messageId) {
+          return message;
+        }
+
+        didUpdate = true;
+        return {
+          ...message,
+          metadata: {
+            ...getMessageMetadata(message),
+            reactions: reaction.reactions ?? updateMessageReactions(message, reaction.userId, reaction.emoji),
+          },
+        };
+      });
+
+      if (!didUpdate) {
+        return current;
+      }
+
+      cacheConversationMessages(user?.id, reaction.conversationId, nextMessages);
+      return {
+        ...current,
+        [reaction.conversationId]: nextMessages,
       };
     });
   }, [user?.id]);
@@ -2737,13 +2808,34 @@ function App() {
       updateConversationLastMessageStatus(conversationId, deliveredMessageIds, deliveredMessageKeys, 'DELIVERED');
       updateConversationLastMessageStatus(conversationId, readMessageIds, readMessageKeys, 'READ');
 
-      await authedRequest(`/conversations/${conversationId}/status-updates/ack`, {
-        body: JSON.stringify({
-          messageIds: [...new Set([...deliveredMessageIds, ...readMessageIds])],
-          messageKeys: [...new Set([...deliveredMessageKeys, ...readMessageKeys])],
-        }),
-        method: 'POST',
-      });
+      const acknowledgedMessageIds = [...new Set([...deliveredMessageIds, ...readMessageIds])];
+      // Older servers validate status keys as 16-character deletion keys. Every
+      // modern status row also carries its message ID, so prefer that identity
+      // and include only legacy-compatible keys until all relay APIs are updated.
+      const acknowledgedMessageKeys = [...new Set([...deliveredMessageKeys, ...readMessageKeys])]
+        .filter((messageKey) => /^[A-Za-z0-9]{16}$/.test(messageKey));
+
+      if (acknowledgedMessageIds.length === 0 && acknowledgedMessageKeys.length === 0) {
+        recentStatusSyncAtRef.current.set(conversationId, Date.now());
+        return;
+      }
+
+      const acknowledgementBatchCount = Math.ceil(Math.max(
+        acknowledgedMessageIds.length,
+        acknowledgedMessageKeys.length,
+      ) / 250);
+
+      for (let batchIndex = 0; batchIndex < acknowledgementBatchCount; batchIndex += 1) {
+        const offset = batchIndex * 250;
+
+        await authedRequest(`/conversations/${conversationId}/status-updates/ack`, {
+          body: JSON.stringify({
+            messageIds: acknowledgedMessageIds.slice(offset, offset + 250),
+            messageKeys: acknowledgedMessageKeys.slice(offset, offset + 250),
+          }),
+          method: 'POST',
+        });
+      }
       recentStatusSyncAtRef.current.set(conversationId, Date.now());
     })().finally(() => {
       statusSyncInFlightRef.current.delete(conversationId);
@@ -2940,7 +3032,8 @@ function App() {
     }
 
     let cancelled = false;
-    const cachedMessages = getCachedConversationMessages(user?.id, selectedConversationId);
+    const cachedMessages = getCachedConversationMessages(user?.id, selectedConversationId)
+      .filter(isVisibleChatMessage);
 
     if (cachedMessages.length > 0) {
       setMessagesByConversation((current) => ({
@@ -2959,7 +3052,7 @@ function App() {
           [selectedConversationId]: mergeMessages(storedMessages, current[selectedConversationId] ?? [])
             .filter(isVisibleChatMessage),
         }));
-        const latestMessage = findLatestMessage(storedMessages);
+        const latestMessage = findLatestMessage(storedMessages.filter(isVisibleChatMessage));
 
         if (latestMessage) {
           updateConversationPreviewFromMessage(latestMessage);
@@ -2996,26 +3089,48 @@ function App() {
       return undefined;
     }
 
-    const socket = io(API_URL, {
+    const socketEndpoint = getSocketEndpoint(API_URL);
+    const socket = io(socketEndpoint.origin, {
       auth: { installationId: WEB_INSTALLATION_ID, token },
+      path: socketEndpoint.path,
       reconnection: true,
     });
     socketRef.current = socket;
 
     socket.on('connect', () => {
       socket.emit('app:state', { isForeground: true, state: 'active' });
+      const activeConversationId = selectedConversationIdRef.current;
+
+      if (activeConversationId) {
+        socket.emit('conversation:join', activeConversationId);
+      }
     });
     socket.on('message:new', (message: Message) => {
+      const reactionFallback = getReactionFallback(message);
+
+      if (reactionFallback) {
+        applyMessageReaction({
+          conversationId: message.conversationId,
+          emoji: reactionFallback.emoji,
+          messageId: reactionFallback.messageId,
+          userId: message.senderId,
+        });
+        return;
+      }
+
       mergeConversationMessages(message.conversationId, [message]);
       updateConversationPreviewFromMessage(message);
       void persistAndAcknowledgeWebMessageContent(message.conversationId, [message])
         .catch(() => undefined);
       const isOpenConversation = isPageActivelyViewed() &&
-        message.conversationId === selectedConversationId;
+        message.conversationId === selectedConversationIdRef.current;
       void markMessagesReceived(message.conversationId, [message], isOpenConversation);
       if (!isOpenConversation) {
         showBrowserNotification(message);
       }
+    });
+    socket.on('message:reaction', (reaction: MessageReactionUpdate) => {
+      applyMessageReaction(reaction);
     });
     socket.on('message:delivered', (payload: { conversationId: string; messageIds?: string[]; messageKeys?: string[] }) => {
       updateMessageStatuses(setMessagesByConversation, payload.conversationId, payload.messageIds, payload.messageKeys, 'DELIVERED', user?.id);
@@ -3044,7 +3159,7 @@ function App() {
       setPinnedMessages((current) => current.filter((pin) => pin.message.id !== payload.messageId));
     });
     socket.on('message:pinned', (payload: { conversationId: string; message: Message; pinnedAt: string; scope: 'all' | 'me' }) => {
-      if (payload.conversationId !== selectedConversationId) {
+      if (payload.conversationId !== selectedConversationIdRef.current) {
         return;
       }
 
@@ -3054,7 +3169,7 @@ function App() {
       ]);
     });
     socket.on('message:unpinned', (payload: { conversationId: string; messageId: string; scope: 'all' | 'me' }) => {
-      if (payload.conversationId !== selectedConversationId) {
+      if (payload.conversationId !== selectedConversationIdRef.current) {
         return;
       }
 
@@ -3183,7 +3298,17 @@ function App() {
         socketRef.current = null;
       }
     };
-  }, [loadConversations, loadStatuses, logout, markMessagesReceived, mergeConversationMessages, persistAndAcknowledgeWebMessageContent, scheduleConversationRefresh, scheduleStatusSync, selectedConversationId, stopIncomingRingtone, stopOutgoingRingback, t, token, updateConversationLastMessageStatus, updateConversationPreviewFromMessage, updateKnownUser, user?.id]);
+  }, [applyMessageReaction, loadConversations, loadStatuses, logout, markMessagesReceived, mergeConversationMessages, persistAndAcknowledgeWebMessageContent, scheduleConversationRefresh, scheduleStatusSync, stopIncomingRingtone, stopOutgoingRingback, t, token, updateConversationLastMessageStatus, updateConversationPreviewFromMessage, updateKnownUser, user?.id]);
+
+  const selectedIncomingMessageSignature = useMemo(() => {
+    if (!selectedConversationId || !user?.id) {
+      return '';
+    }
+
+    return buildRequestSignature((messagesByConversation[selectedConversationId] ?? [])
+      .filter((message) => message.senderId !== user.id && !message.id.startsWith('local-'))
+      .map((message) => message.id));
+  }, [messagesByConversation, selectedConversationId, user?.id]);
 
   useEffect(() => {
     if (!selectedConversationId) {
@@ -3207,7 +3332,7 @@ function App() {
       document.removeEventListener('visibilitychange', markVisibleConversationRead);
       window.removeEventListener('focus', markVisibleConversationRead);
     };
-  }, [markMessagesReceived, messagesByConversation, selectedConversationId]);
+  }, [markMessagesReceived, selectedConversationId, selectedIncomingMessageSignature]);
 
   useEffect(() => {
     if (!callState?.room) {
@@ -5193,6 +5318,20 @@ function App() {
     });
   }
 
+  async function reactToWebMessage(message: Message, emoji: string) {
+    setContextMenu(null);
+    const currentReaction = getMessageReactions(message)[user?.id ?? ''];
+    const response = await authedRequest<{ message: Message; reaction: MessageReactionUpdate }>(
+      `/conversations/${message.conversationId}/messages/${message.id}/reaction`,
+      {
+        body: JSON.stringify({ emoji: currentReaction === emoji ? null : emoji }),
+        method: 'POST',
+      },
+    );
+
+    applyMessageReaction(response.reaction);
+  }
+
   function closeMessageEditModal() {
     if (isSavingMessageEdit) {
       return;
@@ -6548,6 +6687,7 @@ function App() {
                   onReplyClick={(messageId) => void jumpToRepliedMessage(messageId)}
                 />
                 <MessageLifecycleNotice language={language} message={row.message} />
+                <MessageReactions currentUserId={user?.id} message={row.message} />
                 {attachmentUploadsByMessageId[row.message.id] ? (
                   <AttachmentUploadProgress
                     state={attachmentUploadsByMessageId[row.message.id]}
@@ -6729,6 +6869,9 @@ function App() {
           </button>
           <MessageComposer
             disabled={!selectedConversation}
+            draftKey={selectedConversationId && user?.id
+              ? `${API_URL}|${user.id}|${selectedConversationId}`
+              : null}
             isSendOptionPending={isApplyingSendOption}
             onLongPressSend={() => openSendOptions('text')}
             onPaste={handleComposerPaste}
@@ -7986,6 +8129,10 @@ function App() {
             void runMessageAction(action, message)
               .catch((error) => setAttachmentError(error instanceof Error ? error.message : t('attachmentFailed')));
           }}
+          onReact={(message, emoji) => {
+            void reactToWebMessage(message, emoji)
+              .catch((error) => setAttachmentError(error instanceof Error ? error.message : t('attachmentFailed')));
+          }}
           t={t}
         />
       ) : null}
@@ -8007,6 +8154,7 @@ function ContextMenu({
   onContactAction,
   onClose,
   onMessageAction,
+  onReact,
   t,
 }: {
   context: ContextMenuState;
@@ -8018,10 +8166,11 @@ function ContextMenu({
   onContactAction: (action: ContactContextAction, contact: AuthUser) => void;
   onClose: () => void;
   onMessageAction: (action: MessageContextAction, message: Message) => void;
+  onReact: (message: Message, emoji: string) => void;
   t: (key: TranslationKey) => string;
 }) {
   const left = Math.min(context.x, Math.max(8, window.innerWidth - 250));
-  const top = Math.min(context.y, Math.max(8, window.innerHeight - 390));
+  const top = Math.min(context.y, Math.max(8, window.innerHeight - 520));
 
   return (
     <div className="context-menu-backdrop" onClick={onClose} onContextMenu={(event) => event.preventDefault()}>
@@ -8036,6 +8185,19 @@ function ContextMenu({
               <ContextMenuButton destructive icon={Trash2} label={t('delete')} onClick={() => onMessageAction('delete-me', context.message)} />
             </>
           ) : <>
+            <div className="context-reactions" role="group" aria-label={t('reaction')}>
+              {QUICK_MESSAGE_REACTIONS.map((emoji) => (
+                <button
+                  aria-label={`${t('reaction')} ${emoji}`}
+                  className={`context-reaction-button ${getMessageReactions(context.message)[currentUserId ?? ''] === emoji ? 'active' : ''}`}
+                  key={emoji}
+                  onClick={() => onReact(context.message, emoji)}
+                  type="button"
+                >
+                  {emoji}
+                </button>
+              ))}
+            </div>
             {context.message.kind === 'TEXT' && context.message.body ? (
               <ContextMenuButton icon={Copy} label={t('copy')} onClick={() => onMessageAction('copy', context.message)} />
             ) : null}
@@ -8123,6 +8285,30 @@ function ContextMenuButton({
       <Icon size={18} />
       <span>{label}</span>
     </button>
+  );
+}
+
+function MessageReactions({ currentUserId, message }: { currentUserId?: string; message: Message }) {
+  const reactions = getMessageReactions(message);
+  const reactionCounts = new Map<string, number>();
+
+  Object.values(reactions).forEach((emoji) => {
+    reactionCounts.set(emoji, (reactionCounts.get(emoji) ?? 0) + 1);
+  });
+
+  if (reactionCounts.size === 0) {
+    return null;
+  }
+
+  return (
+    <div className={`message-reactions ${message.senderId === currentUserId ? 'mine' : ''}`}>
+      {Array.from(reactionCounts).map(([emoji, count]) => (
+        <span className={reactions[currentUserId ?? ''] === emoji ? 'mine' : undefined} key={emoji}>
+          <span aria-hidden>{emoji}</span>
+          {count > 1 ? <small>{count}</small> : null}
+        </span>
+      ))}
+    </div>
   );
 }
 
@@ -8814,16 +9000,42 @@ function useAuthenticatedMediaUrl(
   return mediaUrl;
 }
 
+function useNearViewport<T extends HTMLElement>(enabled = true, rootMargin = '600px 0px') {
+  const elementRef = useRef<T>(null);
+  const [isNearViewport, setNearViewport] = useState(false);
+
+  useEffect(() => {
+    if (!enabled || isNearViewport) {
+      return undefined;
+    }
+
+    const element = elementRef.current;
+
+    if (!element || typeof IntersectionObserver === 'undefined') {
+      setNearViewport(true);
+      return undefined;
+    }
+
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) {
+        setNearViewport(true);
+        observer.disconnect();
+      }
+    }, { rootMargin });
+
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [enabled, isNearViewport, rootMargin]);
+
+  return { elementRef, isNearViewport };
+}
+
 function getServerMediaThumbnailUrl(media?: { thumbnailPath?: string | null } | null) {
   if (!media?.thumbnailPath) {
     return '';
   }
 
-  try {
-    return new URL(media.thumbnailPath, `${API_URL.replace(/\/$/, '')}/`).toString();
-  } catch {
-    return '';
-  }
+  return resolveAssetUrl(media.thumbnailPath);
 }
 
 type CachedMediaRecord = {
@@ -8836,6 +9048,9 @@ type CachedMediaRecord = {
 };
 
 const localMediaBlobsById = new Map<string, Blob>();
+const mediaBlobRequestsById = new Map<string, Promise<Blob>>();
+const failedMediaRequestsById = new Map<string, { failedAt: number; status: number }>();
+const MEDIA_FAILURE_RETRY_MS = 5 * 60_000;
 
 async function loadMediaBlob(
   mediaId: string,
@@ -8849,6 +9064,36 @@ async function loadMediaBlob(
     return localBlob;
   }
 
+  const recentFailure = failedMediaRequestsById.get(mediaId);
+
+  if (recentFailure && Date.now() - recentFailure.failedAt < MEDIA_FAILURE_RETRY_MS) {
+    throw new Error(`Media request failed: ${recentFailure.status}`);
+  }
+
+  const activeRequest = mediaBlobRequestsById.get(mediaId);
+
+  if (activeRequest) {
+    return activeRequest;
+  }
+
+  const request = loadUncachedMediaBlob(mediaId, token, cacheConfig, media)
+    .finally(() => {
+      if (mediaBlobRequestsById.get(mediaId) === request) {
+        mediaBlobRequestsById.delete(mediaId);
+      }
+    });
+
+  mediaBlobRequestsById.set(mediaId, request);
+  return request;
+}
+
+async function loadUncachedMediaBlob(
+  mediaId: string,
+  token: string,
+  cacheConfig: WebMediaCacheConfig,
+  media?: NonNullable<Message['media']>,
+) {
+
   const cachedBlob = await getCachedMediaBlob(mediaId).catch(() => null);
 
   if (cachedBlob) {
@@ -8860,10 +9105,13 @@ async function loadMediaBlob(
   });
 
   if (!response.ok) {
+    failedMediaRequestsById.set(mediaId, { failedAt: Date.now(), status: response.status });
     throw new Error(`Media request failed: ${response.status}`);
   }
 
   const blob = await response.blob();
+
+  failedMediaRequestsById.delete(mediaId);
 
   if (shouldCacheMediaBlob(blob, media, cacheConfig)) {
     void putCachedMediaBlob(mediaId, blob, media, cacheConfig).catch(() => undefined);
@@ -9083,11 +9331,12 @@ async function normalizeClipboardImageBlob(blob: Blob) {
 }
 
 function AuthenticatedImageMedia({ cacheConfig, caption, media, onContentReady, onOpenMedia, previewUrl, t, token }: { cacheConfig: WebMediaCacheConfig; caption?: string; media: NonNullable<Message['media']>; onContentReady?: () => void; onOpenMedia?: (viewer: MediaViewerState) => void; previewUrl?: string | null; t: (key: TranslationKey) => string; token: string | null }) {
-  const imageUrl = useAuthenticatedMediaUrl(media.id, token, previewUrl, onContentReady, cacheConfig, media);
+  const { elementRef, isNearViewport } = useNearViewport<HTMLDivElement>();
+  const imageUrl = useAuthenticatedMediaUrl(media.id, token, previewUrl, onContentReady, cacheConfig, media, !!previewUrl || isNearViewport);
   const [aspectRatio, setAspectRatio] = useState(4 / 3);
 
   return (
-    <div className="media-preview image-preview">
+    <div className="media-preview image-preview" ref={elementRef}>
       <button
         className="media-preview-open"
         disabled={!imageUrl}
@@ -9105,12 +9354,13 @@ function AuthenticatedImageMedia({ cacheConfig, caption, media, onContentReady, 
 }
 
 function AuthenticatedVideoMedia({ cacheConfig, caption, media, onContentReady, onOpenMedia, previewUrl, t, token }: { cacheConfig: WebMediaCacheConfig; caption?: string; media: NonNullable<Message['media']>; onContentReady?: () => void; onOpenMedia?: (viewer: MediaViewerState) => void; previewUrl?: string | null; t: (key: TranslationKey) => string; token: string | null }) {
+  const { elementRef, isNearViewport } = useNearViewport<HTMLDivElement>();
   const configuredThumbnailUrl = getServerMediaThumbnailUrl(media);
   const [failedThumbnailUrl, setFailedThumbnailUrl] = useState('');
   const [fullVideoRequested, setFullVideoRequested] = useState(false);
   const openWhenReadyRef = useRef(false);
   const thumbnailUrl = configuredThumbnailUrl === failedThumbnailUrl ? '' : configuredThumbnailUrl;
-  const shouldLoadFullVideo = !!previewUrl || !thumbnailUrl || fullVideoRequested;
+  const shouldLoadFullVideo = !!previewUrl || fullVideoRequested || (!thumbnailUrl && isNearViewport);
   const videoUrl = useAuthenticatedMediaUrl(media.id, token, previewUrl, onContentReady, cacheConfig, media, shouldLoadFullVideo);
   const [aspectRatio, setAspectRatio] = useState(16 / 9);
 
@@ -9134,7 +9384,7 @@ function AuthenticatedVideoMedia({ cacheConfig, caption, media, onContentReady, 
   };
 
   return (
-    <div className="media-preview video-preview">
+    <div className="media-preview video-preview" ref={elementRef}>
       <button
         className="media-preview-open video-preview-open"
         disabled={!previewUrl && (!media.id || !token)}
@@ -9189,7 +9439,9 @@ function AuthenticatedVoiceMedia({
   t: (key: TranslationKey) => string;
   token: string | null;
 }) {
-  const voiceUrl = useAuthenticatedMediaUrl(media.id, token, previewUrl, onContentReady, cacheConfig, media);
+  const [mediaRequested, setMediaRequested] = useState(!!previewUrl);
+  const playWhenReadyRef = useRef(false);
+  const voiceUrl = useAuthenticatedMediaUrl(media.id, token, previewUrl, onContentReady, cacheConfig, media, !!previewUrl || mediaRequested);
   const audioRef = useRef<HTMLAudioElement>(null);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(media.durationSec ?? 0);
@@ -9203,10 +9455,27 @@ function AuthenticatedVoiceMedia({
     setPlaybackRate(1);
   }, [media.durationSec, voiceUrl]);
 
+  useEffect(() => {
+    const audio = audioRef.current;
+
+    if (!voiceUrl || !audio || !playWhenReadyRef.current) {
+      return;
+    }
+
+    playWhenReadyRef.current = false;
+    void audio.play().catch(() => setPlaying(false));
+  }, [voiceUrl]);
+
   const togglePlayback = async () => {
     const audio = audioRef.current;
 
-    if (!audio || !voiceUrl) {
+    if (!voiceUrl) {
+      playWhenReadyRef.current = true;
+      setMediaRequested(true);
+      return;
+    }
+
+    if (!audio) {
       return;
     }
 
@@ -9242,7 +9511,7 @@ function AuthenticatedVoiceMedia({
       <button
         aria-label={t(isPlaying ? 'pauseVoiceMessage' : 'playVoiceMessage')}
         className="voice-play-button"
-        disabled={!voiceUrl}
+        disabled={!media.id || !token}
         onClick={() => void togglePlayback()}
         title={t(isPlaying ? 'pauseVoiceMessage' : 'playVoiceMessage')}
         type="button"
@@ -9301,13 +9570,37 @@ function AuthenticatedVoiceMedia({
 }
 
 function AuthenticatedFileMedia({ media, onContentReady, token }: { media: NonNullable<Message['media']>; onContentReady?: () => void; token: string | null }) {
-  const fileUrl = useAuthenticatedMediaUrl(media.id, token, undefined, onContentReady);
+  const [isDownloading, setDownloading] = useState(false);
 
-  if (!fileUrl) {
-    return <span>{media.originalName}</span>;
-  }
+  return (
+    <button
+      className="authenticated-file-download"
+      disabled={!media.id || !token || isDownloading}
+      onClick={() => {
+        if (!media.id || !token || isDownloading) {
+          return;
+        }
 
-  return <a download={media.originalName} href={fileUrl}>{media.originalName}</a>;
+        setDownloading(true);
+        void loadMediaBlob(media.id, token, DEFAULT_WEB_MEDIA_CACHE_CONFIG, media)
+          .then((blob) => {
+            const objectUrl = URL.createObjectURL(blob);
+            const anchor = document.createElement('a');
+
+            anchor.download = media.originalName;
+            anchor.href = objectUrl;
+            anchor.click();
+            setTimeout(() => URL.revokeObjectURL(objectUrl), 1_000);
+            onContentReady?.();
+          })
+          .finally(() => setDownloading(false));
+      }}
+      type="button"
+    >
+      {isDownloading ? <LoaderCircle aria-hidden className="spin" size={16} /> : <Download aria-hidden size={16} />}
+      <span>{media.originalName}</span>
+    </button>
+  );
 }
 
 function DirectMediaTile({
@@ -9428,17 +9721,57 @@ function AttachmentUploadProgress({ state, t }: { state: AttachmentUploadState; 
 function Avatar({ title, url }: { title: string; url?: string | null }) {
   const [imageFailed, setImageFailed] = useState(false);
   const [authenticatedImageUrl, setAuthenticatedImageUrl] = useState<string | null>(null);
-  const [didTryAuthenticatedLoad, setDidTryAuthenticatedLoad] = useState(false);
   const authenticatedImageUrlRef = useRef<string | null>(null);
 
   useEffect(() => {
     setImageFailed(false);
-    setDidTryAuthenticatedLoad(false);
     if (authenticatedImageUrlRef.current) {
       URL.revokeObjectURL(authenticatedImageUrlRef.current);
       authenticatedImageUrlRef.current = null;
     }
     setAuthenticatedImageUrl(null);
+  }, [url]);
+
+  useEffect(() => {
+    if (!url || !isMeetVapMediaUrl(url)) {
+      return undefined;
+    }
+
+    let cancelled = false;
+    const token = localStorage.getItem(TOKEN_KEY);
+
+    void fetch(resolveAssetUrl(url), {
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    })
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error(`Avatar request failed: ${response.status}`);
+        }
+
+        return response.blob();
+      })
+      .then((blob) => {
+        if (cancelled) {
+          return;
+        }
+
+        const objectUrl = URL.createObjectURL(blob);
+
+        if (authenticatedImageUrlRef.current) {
+          URL.revokeObjectURL(authenticatedImageUrlRef.current);
+        }
+        authenticatedImageUrlRef.current = objectUrl;
+        setAuthenticatedImageUrl(objectUrl);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setImageFailed(true);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, [url]);
 
   useEffect(() => () => {
@@ -9447,42 +9780,16 @@ function Avatar({ title, url }: { title: string; url?: string | null }) {
     }
   }, []);
 
-  if (url && !imageFailed) {
+  const isMeetVapMedia = !!url && isMeetVapMediaUrl(url);
+  const imageUrl = isMeetVapMedia ? authenticatedImageUrl : url ? resolveAssetUrl(url) : null;
+
+  if (imageUrl && !imageFailed) {
     return (
       <img
         alt=""
         className="avatar"
-        onError={() => {
-          if (didTryAuthenticatedLoad || !isMeetVapMediaUrl(url)) {
-            setImageFailed(true);
-            return;
-          }
-
-          setDidTryAuthenticatedLoad(true);
-          const token = localStorage.getItem(TOKEN_KEY);
-
-          void fetch(resolveAssetUrl(url), {
-            headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-          })
-            .then((response) => {
-              if (!response.ok) {
-                throw new Error('Avatar failed');
-              }
-
-              return response.blob();
-            })
-            .then((blob) => {
-              const objectUrl = URL.createObjectURL(blob);
-
-              if (authenticatedImageUrlRef.current) {
-                URL.revokeObjectURL(authenticatedImageUrlRef.current);
-              }
-              authenticatedImageUrlRef.current = objectUrl;
-              setAuthenticatedImageUrl(objectUrl);
-            })
-            .catch(() => setImageFailed(true));
-        }}
-        src={authenticatedImageUrl ?? resolveAssetUrl(url)}
+        onError={() => setImageFailed(true)}
+        src={imageUrl}
       />
     );
   }
@@ -10016,6 +10323,17 @@ function mergeMessages(current: Message[], incoming: Message[]) {
   ));
 }
 
+function areConversationListsEquivalent(current: Conversation[], next: Conversation[]) {
+  if (current.length !== next.length) {
+    return false;
+  }
+
+  return current.every((conversation, index) => (
+    conversation.id === next[index]?.id &&
+    JSON.stringify(conversation) === JSON.stringify(next[index])
+  ));
+}
+
 function mapScheduledWebMessage(message: ScheduledMessage, sender?: AuthUser): Message {
   return {
     body: message.body,
@@ -10116,16 +10434,26 @@ function updateMessageStatuses(
       return current;
     }
 
-    const nextMessages = conversationMessages.map((message) => (
-      message.senderId === currentUserId &&
-      (
-        (!targetIds && !targetKeys) ||
-        targetIds?.has(message.id) ||
-        (!!targetKeys && !!getMessageDeleteKey(message) && targetKeys.has(getMessageDeleteKey(message) as string))
-      ) && getMessageStatusRank(status) > getMessageStatusRank(message.status)
-        ? { ...message, status }
-        : message
-    ));
+    let didUpdate = false;
+    const nextMessages = conversationMessages.map((message) => {
+      const shouldUpdate = message.senderId === currentUserId &&
+        (
+          (!targetIds && !targetKeys) ||
+          targetIds?.has(message.id) ||
+          (!!targetKeys && !!getMessageDeleteKey(message) && targetKeys.has(getMessageDeleteKey(message) as string))
+        ) && getMessageStatusRank(status) > getMessageStatusRank(message.status);
+
+      if (!shouldUpdate) {
+        return message;
+      }
+
+      didUpdate = true;
+      return { ...message, status };
+    });
+
+    if (!didUpdate) {
+      return current;
+    }
 
     cacheConversationMessages(currentUserId, conversationId, nextMessages);
     return {
@@ -10160,6 +10488,10 @@ function getMessageStatusRank(status: Message['status']) {
 }
 
 function resolveAssetUrl(url: string) {
+  if (url === 'meetvap://logo') {
+    return '/adaptive-icon.png';
+  }
+
   if (url.startsWith('data:') || url.startsWith('blob:')) {
     return url;
   }
@@ -10293,6 +10625,10 @@ async function persistConversationMessages(userId: string | undefined, conversat
 }
 
 function isVisibleChatMessage(message: Message) {
+  if (getReactionFallback(message)) {
+    return false;
+  }
+
   if (message.kind === 'CALL') {
     return true;
   }
@@ -10306,6 +10642,50 @@ function isVisibleChatMessage(message: Message) {
   }
 
   return false;
+}
+
+function getMessageMetadata(message: Message) {
+  return message.metadata && typeof message.metadata === 'object'
+    ? message.metadata as Record<string, unknown>
+    : {};
+}
+
+function getMessageReactions(message: Message) {
+  const reactions = getMessageMetadata(message).reactions;
+
+  if (!reactions || typeof reactions !== 'object' || Array.isArray(reactions)) {
+    return {} as Record<string, string>;
+  }
+
+  return Object.fromEntries(
+    Object.entries(reactions).filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
+  );
+}
+
+function updateMessageReactions(message: Message, userId: string, emoji: string | null) {
+  const reactions = { ...getMessageReactions(message) };
+
+  if (emoji) {
+    reactions[userId] = emoji;
+  } else {
+    delete reactions[userId];
+  }
+
+  return reactions;
+}
+
+function getReactionFallback(message: Message) {
+  const fallback = getMessageMetadata(message).reactionFallback;
+
+  if (!fallback || typeof fallback !== 'object' || Array.isArray(fallback)) {
+    return null;
+  }
+
+  const { emoji, messageId } = fallback as Record<string, unknown>;
+
+  return typeof emoji === 'string' && typeof messageId === 'string'
+    ? { emoji, messageId }
+    : null;
 }
 
 function isDurableChatMessage(message: Message) {

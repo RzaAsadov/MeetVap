@@ -56,7 +56,6 @@ export async function apiRequest<T>(path: string, options: RequestOptions): Prom
       body,
       headers,
     });
-    reportServerConnectionSuccess(serverUrl, 'api');
   } catch (error) {
     if (!(error instanceof Error && error.name === 'AbortError')) {
       reportServerConnectionFailure(serverUrl, 'api');
@@ -66,6 +65,14 @@ export async function apiRequest<T>(path: string, options: RequestOptions): Prom
 
   const responseText = await response.text();
   const parsedResponse = parseApiResponseText(responseText, response.headers.get(MASK_HEADER));
+  const isMeetVapResponse = response.headers.get(MASK_HEADER) === MASK_VERSION ||
+    response.headers.get('content-type')?.toLowerCase().includes('application/json') === true;
+
+  if (response.ok || (response.status < 500 && isMeetVapResponse)) {
+    reportServerConnectionSuccess(serverUrl, 'api');
+  } else {
+    reportServerConnectionFailure(serverUrl, 'api');
+  }
 
   if (!response.ok) {
     let parsedError: string | undefined;

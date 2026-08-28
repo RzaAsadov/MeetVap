@@ -117,6 +117,7 @@ model User {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
   authVersion  Int      @default(0)
+  loginDomainId String?
 
   memberships      ConversationMember[]
   conversationDeletions ConversationDeletion[]
@@ -160,9 +161,11 @@ model User {
   disappearingMessageViews DisappearingMessageView[]
   statusUpdates    StatusUpdate[] @relation("StatusAuthor")
   statusViews      StatusView[] @relation("StatusViewer")
+  loginDomain      LoginDomain? @relation(fields: [loginDomainId], references: [id], onDelete: Restrict)
 
   @@index([username])
   @@index([publicShareCode])
+  @@index([loginDomainId])
 }
 
 model Contact {
@@ -1106,17 +1109,19 @@ model LoginDomain {
   description            String?
   contacts               String?
   originIpAddresses      String[] @default([])
-  mainServerKeyHash      String   @unique
+  mainServerKeyHash      String?  @unique
   mainServerKeyEncrypted String?
   expiresAt              DateTime?
   maxUserCount           Int?
   isActive               Boolean  @default(true)
+  isLocal                Boolean  @default(true)
   createdByAdminUsername String?
   updatedByAdminUsername String?
   createdAt              DateTime @default(now())
   updatedAt              DateTime @updatedAt
   usernames              LoginDomainUsername[]
   childUsers             ChildServerUser[]
+  localUsers             User[]
 
   @@index([isActive, expiresAt])
   @@index([createdAt])

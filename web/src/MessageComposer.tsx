@@ -1,8 +1,10 @@
 import { Send } from 'lucide-react';
-import React, { forwardRef, memo, useEffect, useImperativeHandle, useRef, useState } from 'react';
+import React, { forwardRef, memo, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react';
 
 const LONG_PRESS_MS = 500;
 const MAX_TEXTAREA_HEIGHT = 148;
+const DRAFT_STORAGE_PREFIX = 'meetvap.web.draft.v1.';
+const DRAFT_SAVE_DELAY_MS = 250;
 
 export type MessageComposerHandle = {
   append: (text: string) => void;
@@ -14,6 +16,7 @@ export type MessageComposerHandle = {
 
 type MessageComposerProps = {
   disabled: boolean;
+  draftKey: string | null;
   isSendOptionPending: boolean;
   onLongPressSend: () => void;
   onPaste: (event: React.ClipboardEvent<HTMLTextAreaElement>) => void;
@@ -24,6 +27,7 @@ type MessageComposerProps = {
 
 export const MessageComposer = memo(forwardRef<MessageComposerHandle, MessageComposerProps>(function MessageComposer({
   disabled,
+  draftKey,
   isSendOptionPending,
   onLongPressSend,
   onPaste,
@@ -31,15 +35,41 @@ export const MessageComposer = memo(forwardRef<MessageComposerHandle, MessageCom
   placeholder,
   sendLabel,
 }, ref) {
-  const [value, setValue] = useState('');
-  const valueRef = useRef('');
+  const [value, setValue] = useState(() => readDraft(draftKey));
+  const valueRef = useRef(value);
+  const activeDraftKeyRef = useRef(draftKey);
+  const draftSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const suppressNextClickRef = useRef(false);
 
-  function updateValue(nextValue: string) {
+  function cancelDraftSave() {
+    if (draftSaveTimerRef.current) {
+      clearTimeout(draftSaveTimerRef.current);
+      draftSaveTimerRef.current = null;
+    }
+  }
+
+  function flushDraft() {
+    cancelDraftSave();
+    persistDraft(activeDraftKeyRef.current, valueRef.current);
+  }
+
+  function scheduleDraftSave() {
+    cancelDraftSave();
+    draftSaveTimerRef.current = setTimeout(() => {
+      draftSaveTimerRef.current = null;
+      persistDraft(activeDraftKeyRef.current, valueRef.current);
+    }, DRAFT_SAVE_DELAY_MS);
+  }
+
+  function updateValue(nextValue: string, persist = true) {
     valueRef.current = nextValue;
     setValue(nextValue);
+
+    if (persist) {
+      scheduleDraftSave();
+    }
   }
 
   function stopLongPressTimer() {
@@ -55,7 +85,9 @@ export const MessageComposer = memo(forwardRef<MessageComposerHandle, MessageCom
       requestAnimationFrame(() => textareaRef.current?.focus());
     },
     clear() {
-      updateValue('');
+      cancelDraftSave();
+      updateValue('', false);
+      persistDraft(activeDraftKeyRef.current, '');
     },
     focus() {
       textareaRef.current?.focus();
@@ -67,6 +99,16 @@ export const MessageComposer = memo(forwardRef<MessageComposerHandle, MessageCom
       updateValue(text);
     },
   }), []);
+
+  useLayoutEffect(() => {
+    if (activeDraftKeyRef.current === draftKey) {
+      return;
+    }
+
+    flushDraft();
+    activeDraftKeyRef.current = draftKey;
+    updateValue(readDraft(draftKey), false);
+  }, [draftKey]);
 
   useEffect(() => {
     const textarea = textareaRef.current;
@@ -81,7 +123,10 @@ export const MessageComposer = memo(forwardRef<MessageComposerHandle, MessageCom
     textarea.style.overflowY = textarea.scrollHeight > MAX_TEXTAREA_HEIGHT ? 'auto' : 'hidden';
   }, [value]);
 
-  useEffect(() => () => stopLongPressTimer(), []);
+  useEffect(() => () => {
+    stopLongPressTimer();
+    flushDraft();
+  }, []);
 
   function submit() {
     const body = valueRef.current.trim();
@@ -144,3 +189,36 @@ export const MessageComposer = memo(forwardRef<MessageComposerHandle, MessageCom
   );
 }));
 
+function getDraftStorageKey(draftKey: string) {
+  return `${DRAFT_STORAGE_PREFIX}${draftKey}`;
+}
+
+function readDraft(draftKey: string | null) {
+  if (!draftKey) {
+    return '';
+  }
+
+  try {
+    return localStorage.getItem(getDraftStorageKey(draftKey)) ?? '';
+  } catch {
+    return '';
+  }
+}
+
+function persistDraft(draftKey: string | null, value: string) {
+  if (!draftKey) {
+    return;
+  }
+
+  try {
+    const storageKey = getDraftStorageKey(draftKey);
+
+    if (value.length > 0) {
+      localStorage.setItem(storageKey, value);
+    } else {
+      localStorage.removeItem(storageKey);
+    }
+  } catch {
+    // Draft persistence is best-effort when browser storage is unavailable.
+  }
+}

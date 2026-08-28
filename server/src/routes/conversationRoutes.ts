@@ -25,7 +25,7 @@ import { getPremiumFeatureAccessMap, hasPremiumFeatureAccess, requirePremiumFeat
 import { getVideoThumbnailPublicPath, removeVideoThumbnail } from '../videoThumbnails';
 import { ensureMeetVapDirectConversationForUser, getMeetVapSystemUserId } from '../systemAccount';
 import { assertNotBlockedBetween } from './userRoutes';
-import { bulkConversationAckSchema, bulkConversationDeltaSchema, bulkConversationSyncSchema, bulkDeleteConversationsSchema, createDirectConversationSchema, createGroupConversationSchema, createMessageSchema, createScheduledMessageSchema, declineGroupInviteSchema, deleteConversationSchema, deleteMessageSchema, editMessageSchema, messageDeletionAckSchema, messageIdsSchema, messageReactionSchema, openDisappearingMessageSchema, quickReplySchema, transferGroupOwnershipSchema, updateConversationMuteSchema, updateDisappearingMessagesSchema, updateGroupAliasSchema, updateGroupAvatarSchema, updateGroupMembersSchema, updateGroupSettingsSchema, updateGroupTitleSchema, updateVoiceRoomParticipantSchema } from '../validators';
+import { bulkConversationAckSchema, bulkConversationDeltaSchema, bulkConversationStatusAckSchema, bulkConversationSyncSchema, bulkDeleteConversationsSchema, createDirectConversationSchema, createGroupConversationSchema, createMessageSchema, createScheduledMessageSchema, declineGroupInviteSchema, deleteConversationSchema, deleteMessageSchema, editMessageSchema, messageDeletionAckSchema, messageIdsSchema, messageReactionSchema, messageStatusAckSchema, openDisappearingMessageSchema, quickReplySchema, transferGroupOwnershipSchema, updateConversationMuteSchema, updateDisappearingMessagesSchema, updateGroupAliasSchema, updateGroupAvatarSchema, updateGroupMembersSchema, updateGroupSettingsSchema, updateGroupTitleSchema, updateVoiceRoomParticipantSchema } from '../validators';
 import { operationalConfig } from '../operationalConfig';
 import { enforceRateLimit } from '../rateLimits';
 import { cacheDeletePattern, cacheGetJson, cacheSetJson } from '../redisCache';
@@ -3183,7 +3183,7 @@ conversationRoutes.post('/sync/status-updates', async (req, res, next) => {
 conversationRoutes.post('/sync/status-updates/ack', async (req, res, next) => {
   try {
     const currentUser = getAuthedUser(req);
-    const input = bulkConversationAckSchema.parse(req.body);
+    const input = bulkConversationStatusAckSchema.parse(req.body);
     const conversationIds = await getAcceptedConversationIds(input.items.map((item) => item.conversationId), currentUser.id);
     const acceptedConversationIds = new Set(conversationIds);
     const ackedAt = new Date();
@@ -3368,7 +3368,7 @@ conversationRoutes.get('/:conversationId/status-updates', async (req, res, next)
 conversationRoutes.post('/:conversationId/status-updates/ack', async (req, res, next) => {
   try {
     const currentUser = getAuthedUser(req);
-    const input = messageDeletionAckSchema.parse(req.body);
+    const input = messageStatusAckSchema.parse(req.body);
     await assertGroupInviteAccepted(req.params.conversationId, currentUser.id);
 
     if (input.messageIds.length === 0 && input.messageKeys.length === 0) {

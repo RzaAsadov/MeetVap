@@ -240,7 +240,7 @@ export async function checkUsernameAvailability(serverUrl: string, username: str
   });
 }
 
-export async function login(serverUrl: string, input: { username: string; password: string }) {
+export async function login(serverUrl: string, input: { username: string; password: string; loginDomain?: string }) {
   const response = await apiRequest<BackendAuthResponse>('/auth/login', {
     body: JSON.stringify({
       ...input,
@@ -1093,31 +1093,49 @@ export async function acknowledgeMessageStatusUpdates(serverUrl: string, convers
     return;
   }
 
-  await apiRequest<{ ok: true }>(`/conversations/${conversationId}/status-updates/ack`, {
-    body: JSON.stringify({ messageIds, messageKeys }),
-    method: 'POST',
-    serverUrl,
-  });
+  const batchCount = Math.ceil(Math.max(messageIds.length, messageKeys.length) / 250);
+
+  for (let batchIndex = 0; batchIndex < batchCount; batchIndex += 1) {
+    const offset = batchIndex * 250;
+
+    await apiRequest<{ ok: true }>(`/conversations/${conversationId}/status-updates/ack`, {
+      body: JSON.stringify({
+        messageIds: messageIds.slice(offset, offset + 250),
+        messageKeys: messageKeys.slice(offset, offset + 250),
+      }),
+      method: 'POST',
+      serverUrl,
+    });
+  }
 }
 
 export async function acknowledgeBulkMessageStatusUpdates(serverUrl: string, items: Array<{ conversationId: string; messageIds: string[]; messageKeys?: string[] }>) {
-  const ackItems = items
-    .map((item) => ({
-      conversationId: item.conversationId,
-      messageIds: item.messageIds,
-      messageKeys: item.messageKeys ?? [],
-    }))
-    .filter((item) => item.messageIds.length > 0 || item.messageKeys.length > 0);
+  const ackItems = items.flatMap((item) => {
+    const messageKeys = item.messageKeys ?? [];
+    const batchCount = Math.ceil(Math.max(item.messageIds.length, messageKeys.length) / 250);
+
+    return Array.from({ length: batchCount }, (_, batchIndex) => {
+      const offset = batchIndex * 250;
+
+      return {
+        conversationId: item.conversationId,
+        messageIds: item.messageIds.slice(offset, offset + 250),
+        messageKeys: messageKeys.slice(offset, offset + 250),
+      };
+    });
+  }).filter((item) => item.messageIds.length > 0 || item.messageKeys.length > 0);
 
   if (ackItems.length === 0) {
     return;
   }
 
-  await apiRequest<{ ok: true }>('/conversations/sync/status-updates/ack', {
-    body: JSON.stringify({ items: ackItems }),
-    method: 'POST',
-    serverUrl,
-  });
+  for (let index = 0; index < ackItems.length; index += 100) {
+    await apiRequest<{ ok: true }>('/conversations/sync/status-updates/ack', {
+      body: JSON.stringify({ items: ackItems.slice(index, index + 100) }),
+      method: 'POST',
+      serverUrl,
+    });
+  }
 }
 
 export async function acknowledgeMessageContent(serverUrl: string, conversationId: string, messageIds: string[]) {

@@ -223,6 +223,23 @@ async function init() {
       "lastLoginAt" timestamp(3)
     )
   `);
+  await pool.query('alter table "LoginDomain" add column if not exists "isLocal" boolean not null default false');
+  await pool.query('alter table "LoginDomain" alter column "isLocal" set default true');
+  await pool.query('alter table "LoginDomain" alter column "mainServerKeyHash" drop not null');
+  await pool.query('alter table "AdminUser" add column if not exists "serverScope" text not null default \'MAIN\'');
+  await pool.query('alter table "AdminUser" add column if not exists "scopeDomainId" text');
+  await pool.query(`
+    do $$ begin
+      if not exists (select 1 from pg_constraint where conname = 'AdminUser_serverScope_check') then
+        alter table "AdminUser" add constraint "AdminUser_serverScope_check"
+          check ("serverScope" in ('MAIN', 'DOMAIN'));
+      end if;
+      if not exists (select 1 from pg_constraint where conname = 'AdminUser_scopeDomainId_fkey') then
+        alter table "AdminUser" add constraint "AdminUser_scopeDomainId_fkey"
+          foreign key ("scopeDomainId") references "LoginDomain"(id) on delete restrict on update cascade;
+      end if;
+    end $$
+  `);
   await pool.query(`
     create table if not exists "SupportTicketReplyAdmin" (
       "messageId" text primary key references "Message"(id) on delete cascade,
@@ -411,7 +428,12 @@ async function getAdminFromRequest(req) {
     return null;
   }
 
-  const admin = (await pool.query('select * from "AdminUser" where id = $1 and "isActive" = true', [session.id])).rows[0];
+  const admin = (await pool.query(`
+    select au.*, ld.domain as "scopeDomain", ld.hostname as "scopeHostname", ld."isLocal" as "scopeIsLocal"
+    from "AdminUser" au
+    left join "LoginDomain" ld on ld.id = au."scopeDomainId"
+    where au.id = $1 and au."isActive" = true
+  `, [session.id])).rows[0];
 
   if (!admin) {
     return null;
@@ -421,6 +443,11 @@ async function getAdminFromRequest(req) {
     id: admin.id,
     isSuperAdmin: false,
     permissions: normalizeAdminPermissions(admin.permissions),
+    scopeDomain: admin.scopeDomain || null,
+    scopeDomainId: admin.scopeDomainId || null,
+    scopeHostname: admin.scopeHostname || null,
+    scopeIsLocal: admin.scopeIsLocal === true,
+    serverScope: admin.serverScope === 'DOMAIN' && admin.scopeDomainId ? 'DOMAIN' : 'MAIN',
     source: 'db',
     username: admin.username,
   };
@@ -476,6 +503,8 @@ function createConfigSuperAdmin() {
     id: 'config',
     isSuperAdmin: true,
     permissions: Object.fromEntries([...ADMIN_SECTIONS, 'admins'].map((section) => [section, 'edit'])),
+    scopeDomainId: null,
+    serverScope: 'GLOBAL',
     source: 'config',
     username: config.admin.username,
   };
@@ -530,6 +559,158 @@ function parseAdminPermissions(body) {
 
 function normalizeAdminUsername(value) {
   return String(value || '').trim().toLowerCase();
+}
+
+async function parseAdminServerScope(body) {
+  const value = String(body.serverScope || 'MAIN');
+
+  if (value === 'MAIN') return { scopeDomainId: null, serverScope: 'MAIN' };
+  if (!value.startsWith('DOMAIN:')) throw new Error('Invalid admin server scope.');
+
+  const scopeDomainId = value.slice('DOMAIN:'.length);
+  const domain = (await pool.query('select id from "LoginDomain" where id = $1', [scopeDomainId])).rows[0];
+  if (!domain) throw new Error('Selected sub-domain does not exist.');
+  return { scopeDomainId, serverScope: 'DOMAIN' };
+}
+
+async function getAdminScopeDomains() {
+  return (await pool.query('select id, domain, hostname, "isLocal" from "LoginDomain" order by "isLocal" desc, domain asc')).rows;
+}
+
+function getAdminScope(admin = getCurrentAdmin()) {
+  if (admin?.isSuperAdmin) return { domainId: null, isLocal: false, kind: 'GLOBAL' };
+  if (admin?.serverScope === 'DOMAIN' && admin.scopeDomainId) {
+    return { domainId: admin.scopeDomainId, isLocal: admin.scopeIsLocal === true, kind: 'DOMAIN' };
+  }
+  return { domainId: null, isLocal: true, kind: 'MAIN' };
+}
+
+function addScopedUserFilter(params, filters, userAlias = 'u', admin = getCurrentAdmin()) {
+  const scope = getAdminScope(admin);
+
+  if (scope.kind === 'GLOBAL') return;
+  if (scope.kind === 'MAIN') {
+    filters.push(`${userAlias}."loginDomainId" is null`);
+    return;
+  }
+  if (!scope.isLocal) {
+    filters.push('false');
+    return;
+  }
+
+  params.push(scope.domainId);
+  filters.push(`${userAlias}."loginDomainId" = $${params.length}`);
+}
+
+async function canAdminAccessUser(userId, admin = getCurrentAdmin()) {
+  const scope = getAdminScope(admin);
+  if (scope.kind === 'GLOBAL') return true;
+  if (scope.kind === 'DOMAIN' && !scope.isLocal) return false;
+
+  const user = (await pool.query('select "loginDomainId" from "User" where id = $1', [userId])).rows[0];
+  if (!user) return false;
+  return scope.kind === 'MAIN' ? user.loginDomainId == null : user.loginDomainId === scope.domainId;
+}
+
+function requireScopedUser(req, res, next) {
+  canAdminAccessUser(req.params.id, req.admin)
+    .then((allowed) => {
+      if (!allowed) {
+        res.status(404).send(page({ active: 'users', body: empty('User not found.'), title: 'Not found' }));
+        return;
+      }
+      next();
+    })
+    .catch(next);
+}
+
+function scopedResourceMiddleware({ active, lookup, notFound }) {
+  return (req, res, next) => {
+    lookup(req)
+      .then((allowed) => {
+        if (!allowed) {
+          res.status(404).send(page({ active, body: empty(notFound), title: 'Not found' }));
+          return;
+        }
+        next();
+      })
+      .catch(next);
+  };
+}
+
+async function canAdminAccessConversation(conversationId, admin = getCurrentAdmin()) {
+  const scope = getAdminScope(admin);
+  if (scope.kind === 'GLOBAL') return true;
+  if (scope.kind === 'DOMAIN' && !scope.isLocal) return false;
+  const params = [conversationId];
+  const filters = [];
+  addScopedConversationFilter(params, filters, 'c', admin);
+  const result = await pool.query(`select 1 from "Conversation" c where c.id = $1 and ${filters.join(' and ')} limit 1`, params);
+  return result.rowCount > 0;
+}
+
+const requireScopedCall = scopedResourceMiddleware({
+  active: 'calls',
+  notFound: 'Call not found.',
+  lookup: async (req) => {
+    const call = (await pool.query('select "conversationId" from "Call" where id = $1', [req.params.id])).rows[0];
+    return !!call && canAdminAccessConversation(call.conversationId, req.admin);
+  },
+});
+
+const requireScopedGroup = scopedResourceMiddleware({
+  active: 'groups',
+  notFound: 'Group not found.',
+  lookup: (req) => canAdminAccessConversation(req.params.id, req.admin),
+});
+
+const requireScopedSupportTicket = scopedResourceMiddleware({
+  active: 'support',
+  notFound: 'Support ticket not found.',
+  lookup: async (req) => !!(await getSupportTicket(req.params.conversationId)),
+});
+
+const requireScopedSubscription = scopedResourceMiddleware({
+  active: 'subscriptions',
+  notFound: 'Subscription not found.',
+  lookup: async (req) => {
+    const row = (await pool.query('select "userId" from "SubscriptionEntitlement" where id = $1', [req.params.id])).rows[0];
+    return !!row && canAdminAccessUser(row.userId, req.admin);
+  },
+});
+
+const requireScopedReport = scopedResourceMiddleware({
+  active: 'reports',
+  notFound: 'Report not found.',
+  lookup: async (req) => {
+    const row = (await pool.query('select "reporterId" from "Report" where id = $1', [req.params.id])).rows[0];
+    return !!row && canAdminAccessUser(row.reporterId, req.admin);
+  },
+});
+
+function addScopedConversationFilter(params, filters, conversationAlias = 'c', admin = getCurrentAdmin()) {
+  const scope = getAdminScope(admin);
+  if (scope.kind === 'GLOBAL') return;
+  if (scope.kind === 'DOMAIN' && !scope.isLocal) {
+    filters.push('false');
+    return;
+  }
+
+  if (scope.kind === 'MAIN') {
+    filters.push(`exists (
+      select 1 from "ConversationMember" scm
+      join "User" su on su.id = scm."userId"
+      where scm."conversationId" = ${conversationAlias}.id and su."loginDomainId" is null
+    )`);
+    return;
+  }
+
+  params.push(scope.domainId);
+  filters.push(`exists (
+    select 1 from "ConversationMember" scm
+    join "User" su on su.id = scm."userId"
+    where scm."conversationId" = ${conversationAlias}.id and su."loginDomainId" = $${params.length}
+  )`);
 }
 
 function sectionLabel(section) {
@@ -1230,12 +1411,13 @@ app.post('/logout', requireAdmin, (_req, res) => {
   res.redirect('/login');
 });
 
-app.get('/sub-domains', requireAdmin, requireSection('subdomains'), async (_req, res, next) => {
+app.get('/sub-domains', requireAdmin, requireSection('subdomains'), requireSuperAdmin, async (_req, res, next) => {
   try {
     const domains = (await pool.query(`
       select d.*,
         count(u.id)::int as "usernameCount",
         coalesce(sum(u."requestCount"), 0)::bigint as "requestCount",
+        (select count(*)::int from "User" lu where lu."loginDomainId" = d.id) as "localUserCount",
         (select count(*)::int from "ChildServerUser" cu where cu."domainId" = d.id and cu."deletedAt" is null) as "childUserCount"
       from "LoginDomain" d
       left join "LoginDomainUsername" u on u."domainId" = d.id
@@ -1269,17 +1451,18 @@ app.get('/sub-domains', requireAdmin, requireSection('subdomains'), async (_req,
   }
 });
 
-app.post('/sub-domains', requireAdmin, requireSection('subdomains', 'edit'), async (req, res, next) => {
+app.post('/sub-domains', requireAdmin, requireSection('subdomains', 'edit'), requireSuperAdmin, async (req, res, next) => {
   try {
     const input = parseLoginDomainForm(req.body, true);
     await pool.query(`
       insert into "LoginDomain" (
         id, domain, hostname, description, contacts, "originIpAddresses", "mainServerKeyHash", "mainServerKeyEncrypted",
-        "expiresAt", "maxUserCount", "isActive", "createdByAdminUsername", "updatedByAdminUsername"
-      ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,true,$11,$11)
+        "expiresAt", "maxUserCount", "isActive", "isLocal", "createdByAdminUsername", "updatedByAdminUsername"
+      ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,true,$11,$12,$12)
     `, [cuid(), input.domain, input.hostname, input.description, input.contacts, input.originIpAddresses,
-      hashMainServerKey(input.mainServerKey), encryptMainServerKey(input.mainServerKey), input.expiresAt,
-      input.maxUserCount, req.admin.username]);
+      input.mainServerKey ? hashMainServerKey(input.mainServerKey) : null,
+      input.mainServerKey ? encryptMainServerKey(input.mainServerKey) : null, input.expiresAt,
+      input.maxUserCount, input.isLocal, req.admin.username]);
     res.redirect('/sub-domains');
   } catch (error) {
     if (error?.code === '23505') {
@@ -1290,18 +1473,36 @@ app.post('/sub-domains', requireAdmin, requireSection('subdomains', 'edit'), asy
   }
 });
 
-app.post('/sub-domains/:id', requireAdmin, requireSection('subdomains', 'edit'), async (req, res, next) => {
+app.post('/sub-domains/:id', requireAdmin, requireSection('subdomains', 'edit'), requireSuperAdmin, async (req, res, next) => {
   try {
     const input = parseLoginDomainForm(req.body, false);
+    const current = (await pool.query(`
+      select d."isLocal", count(distinct cu.id)::int as "childUsers", count(distinct lu.id)::int as "localUsers"
+      from "LoginDomain" d left join "ChildServerUser" cu on cu."domainId" = d.id and cu."deletedAt" is null
+      left join "User" lu on lu."loginDomainId" = d.id
+      where d.id = $1 group by d.id
+    `, [req.params.id])).rows[0];
+    if (!current) throw new Error('Sub-domain not found.');
+    if (input.isLocal && !current.isLocal && Number(current.childUsers) > 0) {
+      throw new Error('A child domain with synchronized users cannot be converted to local.');
+    }
+    if (!input.isLocal && current.isLocal && Number(current.localUsers) > 0) {
+      throw new Error('A local domain with assigned users cannot be converted to a child domain.');
+    }
+    if (!input.isLocal && current.isLocal && !input.mainServerKey) {
+      throw new Error('A main server key is required when converting a local domain to a child domain.');
+    }
     const params = [input.domain, input.hostname, input.description, input.contacts, input.originIpAddresses,
-      input.expiresAt, input.maxUserCount, req.admin.username, req.params.id];
+      input.expiresAt, input.maxUserCount, input.isLocal, req.admin.username, req.params.id];
     await pool.query(`
       update "LoginDomain" set domain=$1, hostname=$2, description=$3, contacts=$4,
-        "originIpAddresses"=$5, "expiresAt"=$6, "maxUserCount"=$7,
-        "updatedByAdminUsername"=$8, "updatedAt"=current_timestamp
-      where id=$9
+        "originIpAddresses"=$5, "expiresAt"=$6, "maxUserCount"=$7, "isLocal"=$8,
+        "updatedByAdminUsername"=$9, "updatedAt"=current_timestamp,
+        "mainServerKeyHash"=case when $8 then null else "mainServerKeyHash" end,
+        "mainServerKeyEncrypted"=case when $8 then null else "mainServerKeyEncrypted" end
+      where id=$10
     `, params);
-    if (input.mainServerKey) {
+    if (!input.isLocal && input.mainServerKey) {
       await pool.query(`
         update "LoginDomain" set "mainServerKeyHash"=$1, "mainServerKeyEncrypted"=$2,
           "updatedAt"=current_timestamp where id=$3
@@ -1313,15 +1514,23 @@ app.post('/sub-domains/:id', requireAdmin, requireSection('subdomains', 'edit'),
   }
 });
 
-app.post('/sub-domains/:id/toggle', requireAdmin, requireSection('subdomains', 'edit'), async (req, res, next) => {
+app.post('/sub-domains/:id/toggle', requireAdmin, requireSection('subdomains', 'edit'), requireSuperAdmin, async (req, res, next) => {
   try {
     await pool.query('update "LoginDomain" set "isActive"=not "isActive", "updatedByAdminUsername"=$1, "updatedAt"=current_timestamp where id=$2', [req.admin.username, req.params.id]);
     res.redirect('/sub-domains');
   } catch (error) { next(error); }
 });
 
-app.post('/sub-domains/:id/delete', requireAdmin, requireSection('subdomains', 'edit'), async (req, res, next) => {
+app.post('/sub-domains/:id/delete', requireAdmin, requireSection('subdomains', 'edit'), requireSuperAdmin, async (req, res, next) => {
   try {
+    const usage = (await pool.query(`
+      select
+        (select count(*) from "User" where "loginDomainId" = $1)::int as "localUsers",
+        (select count(*) from "AdminUser" where "scopeDomainId" = $1)::int as admins
+    `, [req.params.id])).rows[0];
+    if (Number(usage?.localUsers) > 0 || Number(usage?.admins) > 0) {
+      throw new Error('Move assigned users and admins before deleting this domain.');
+    }
     await pool.query('delete from "LoginDomain" where id=$1', [req.params.id]);
     res.redirect('/sub-domains');
   } catch (error) { next(error); }
@@ -1329,20 +1538,20 @@ app.post('/sub-domains/:id/delete', requireAdmin, requireSection('subdomains', '
 
 app.get('/admins', requireAdmin, requireSuperAdmin, async (_req, res, next) => {
   try {
-    const admins = await getAdminUsers();
+    const [admins, domains] = await Promise.all([getAdminUsers(), getAdminScopeDomains()]);
     res.send(page({
       active: 'admins',
       body: `
         ${hero('Admins', 'Database-backed admin users. The config.json admin remains the permanent superadmin and is the only account allowed to manage admins.', logout())}
         <section class="detail-grid">
-          ${panel('Add admin', adminUserForm())}
+          ${panel('Add admin', adminUserForm(null, domains))}
           ${panel('Main admin', detailList([
             ['Username', escapeHtml(config.admin.username)],
             ['Source', 'config.json'],
             ['Permissions', 'Superadmin · all sections edit mode'],
           ]))}
         </section>
-        ${panel('Database admins', adminUsersTable(admins.rows))}
+        ${panel('Database admins', adminUsersTable(admins.rows, domains))}
       `,
       title: 'Admins',
     }));
@@ -1361,10 +1570,12 @@ app.post('/admins', requireAdmin, requireSuperAdmin, async (req, res, next) => {
     if (password.length < 8) throw new Error('Password must be at least 8 characters.');
 
     const passwordHash = await bcrypt.hash(password, 12);
+    const scope = await parseAdminServerScope(req.body);
     await pool.query(`
-      insert into "AdminUser" (id, username, "passwordHash", permissions, "createdBy")
-      values ($1, $2, $3, $4::jsonb, $5)
-    `, [cuid(), username, passwordHash, JSON.stringify(parseAdminPermissions(req.body)), req.admin.username]);
+      insert into "AdminUser" (id, username, "passwordHash", permissions, "createdBy", "serverScope", "scopeDomainId")
+      values ($1, $2, $3, $4::jsonb, $5, $6, $7)
+    `, [cuid(), username, passwordHash, JSON.stringify(parseAdminPermissions(req.body)), req.admin.username,
+      scope.serverScope, scope.scopeDomainId]);
     res.redirect('/admins');
   } catch (error) {
     next(error);
@@ -1373,11 +1584,14 @@ app.post('/admins', requireAdmin, requireSuperAdmin, async (req, res, next) => {
 
 app.post('/admins/:id', requireAdmin, requireSuperAdmin, async (req, res, next) => {
   try {
+    const scope = await parseAdminServerScope(req.body);
     await pool.query(`
       update "AdminUser"
-      set permissions = $1::jsonb, "isActive" = $2, "updatedAt" = current_timestamp
-      where id = $3
-    `, [JSON.stringify(parseAdminPermissions(req.body)), req.body.isActive === 'on', req.params.id]);
+      set permissions = $1::jsonb, "isActive" = $2, "serverScope" = $3, "scopeDomainId" = $4,
+        "updatedAt" = current_timestamp
+      where id = $5
+    `, [JSON.stringify(parseAdminPermissions(req.body)), req.body.isActive === 'on', scope.serverScope,
+      scope.scopeDomainId, req.params.id]);
 
     const password = String(req.body.password || '');
     if (password) {
@@ -1463,6 +1677,10 @@ app.post('/partners/:id', requireAdmin, requireSection('partners', 'edit'), asyn
 
 app.get('/api/live', requireAdmin, requireSection('dashboard'), async (_req, res, next) => {
   try {
+    if (getAdminScope(_req.admin).kind !== 'GLOBAL') {
+      res.status(403).json({ error: 'Real-time global metrics are available only to the superadmin.' });
+      return;
+    }
     res.json(await getLiveMetrics());
   } catch (error) {
     next(error);
@@ -1517,6 +1735,10 @@ app.get('/operations', requireAdmin, requireSection('operations'), async (_req, 
 
 app.get('/', requireAdmin, async (_req, res, next) => {
   try {
+    if (getAdminScope(_req.admin).kind !== 'GLOBAL') {
+      res.send(await scopedDashboardPage(_req.admin));
+      return;
+    }
     const canOpenRealtimeCallRows = _req.admin?.isSuperAdmin === true;
     const canSeeLiveKit = canRead('calls');
     const [overview, live, reportMix, recentUsers, heavyMedia, activeCalls, recentSubs, messageMix, groupSummary, liveKitSnapshot] = await Promise.all([
@@ -1606,8 +1828,66 @@ app.get('/', requireAdmin, async (_req, res, next) => {
   }
 });
 
+async function scopedDashboardPage(admin) {
+  const scope = getAdminScope(admin);
+  if (scope.kind === 'DOMAIN' && !scope.isLocal) {
+    const childUsers = await getChildUsers('', scope.domainId);
+    return page({
+      active: 'dashboard',
+      body: `${hero('Dashboard', `Child server scope: ${admin.scopeDomain}.`, logout())}
+        ${metricTriplet([{ label: 'Users', value: number(childUsers.length) }])}
+        ${panel('Recent users', childUsersTable(childUsers.slice(0, 20)))}`,
+      title: 'Dashboard',
+    });
+  }
+
+  const [{ rows: users, pagination }, calls, groups, subscriptions, reports] = await Promise.all([
+    getUsers({ direction: 'desc', q: '', sort: 'created_at', page: 1, pageSize: 8 }),
+    getCalls(),
+    getGroups(),
+    getSubscriptions({ limit: 8 }),
+    getReports('', ''),
+  ]);
+  const scopeLabel = scope.kind === 'MAIN' ? 'Main' : `Local: ${admin.scopeDomain}`;
+  return page({
+    active: 'dashboard',
+    body: `${hero('Dashboard', `${scopeLabel} server scope.`, logout())}
+      <section class="metric-grid">${metricTriplet([
+        { label: 'Users', value: number(pagination.total) },
+        { label: 'Calls', value: number(calls.length) },
+        { label: 'Groups', value: number(groups.length) },
+      ])}${metricTriplet([
+        { label: 'Subscriptions', value: number(subscriptions.rows.length) },
+        { label: 'Reports', value: number(reports.length) },
+      ])}</section>
+      <section class="dash-grid">
+        ${panel('Recent users', userMiniTable(users), { action: '<a class="btn secondary" href="/users">All users</a>' })}
+        ${panel('Recent subscriptions', subscriptionMiniTable(subscriptions.rows), { action: '<a class="btn secondary" href="/subscriptions">All subscriptions</a>' })}
+        ${panel('Recent calls', calls.length ? callCards(calls.slice(0, 8), { clickable: true }) : empty('No calls.'))}
+      </section>`,
+    title: 'Dashboard',
+  });
+}
+
 app.post('/users', requireAdmin, requireSection('users', 'edit'), async (req, res, next) => {
   try {
+    const adminScope = getAdminScope(req.admin);
+    if (adminScope.kind === 'DOMAIN' && !adminScope.isLocal) {
+      throw new Error('Users for a child server must be created on that child server.');
+    }
+    let loginDomainId = adminScope.kind === 'DOMAIN' ? adminScope.domainId : null;
+    if (adminScope.kind === 'GLOBAL') {
+      const requestedDomain = String(req.body.userDomain || 'MAIN');
+      if (requestedDomain !== 'MAIN') {
+        if (!requestedDomain.startsWith('DOMAIN:')) throw new Error('Invalid user domain.');
+        loginDomainId = requestedDomain.slice('DOMAIN:'.length);
+        const localDomain = (await pool.query(
+          'select id from "LoginDomain" where id = $1 and "isLocal" = true',
+          [loginDomainId],
+        )).rows[0];
+        if (!localDomain) throw new Error('Selected local domain does not exist.');
+      }
+    }
     const requestedUsername = String(req.body.nickname || '').trim().toLowerCase();
     const requestedPassword = String(req.body.password || '');
     const requestedDisplayName = String(req.body.displayName || '').trim();
@@ -1650,6 +1930,20 @@ app.post('/users', requireAdmin, requireSection('users', 'edit'), async (req, re
     const now = new Date();
     const id = cuid();
 
+    if (loginDomainId) {
+      const domain = (await pool.query(`
+        select d."isActive", d."expiresAt", d."maxUserCount", count(u.id)::int as users
+        from "LoginDomain" d left join "User" u on u."loginDomainId" = d.id
+        where d.id = $1 and d."isLocal" = true group by d.id
+      `, [loginDomainId])).rows[0];
+      if (!domain || !domain.isActive || (domain.expiresAt && new Date(domain.expiresAt) <= now)) {
+        throw new Error('This local domain is inactive or expired.');
+      }
+      if (domain.maxUserCount != null && Number(domain.users) >= Number(domain.maxUserCount)) {
+        throw new Error('This local domain has reached its maximum user count.');
+      }
+    }
+
     await pool.query(`
       insert into "User" (
         id,
@@ -1665,11 +1959,15 @@ app.post('/users', requireAdmin, requireSection('users', 'edit'), async (req, re
         "termsAcceptedPlatform",
         "termsAcceptedLocale",
         "termsVersion",
+        "loginDomainId",
         "createdAt",
         "updatedAt"
       )
-      values ($1, $2, $3, $4, false, true, 'admin', 'en', $5, $6, 'admin', 'en', '2026-05-30', $6, $6)
-    `, [id, displayName, username, passwordHash, `MeetVap Admin (${req.admin.username})`, now]);
+      values ($1, $2, $3, $4, false, true, 'admin', 'en', $5, $6, 'admin', 'en', '2026-05-30', $7, $6, $6)
+    `, [id, displayName, username, passwordHash, `MeetVap Admin (${req.admin.username})`, now, loginDomainId]);
+    const createdDomain = loginDomainId
+      ? (await pool.query('select domain from "LoginDomain" where id = $1', [loginDomainId])).rows[0]
+      : null;
 
     res.send(page({
       active: 'users',
@@ -1681,6 +1979,7 @@ app.post('/users', requireAdmin, requireSection('users', 'edit'), async (req, re
             <div class="info-row"><span>${escapeHtml(translateText('Nickname'))}</span><code>${escapeHtml(username)}</code></div>
             <div class="info-row"><span>${escapeHtml(translateText('Password'))}</span><code>${escapeHtml(password)}</code></div>
             <div class="info-row"><span>${escapeHtml(translateText('Display name'))}</span><strong>${escapeHtml(displayName)}</strong></div>
+            <div class="info-row"><span>${escapeHtml(translateText('Server'))}</span><strong>${escapeHtml(createdDomain ? `Local: ${createdDomain.domain}` : 'Main')}</strong></div>
           </div>
           ${(generatedUsername || generatedPassword) ? `<p class="subtle">${escapeHtml(translateText('Generated credentials are shown only on this page.'))}</p>` : ''}
         </section>
@@ -1700,24 +1999,34 @@ app.get('/users', requireAdmin, requireSection('users'), async (req, res, next) 
     const adminBlocked = req.query.adminBlocked === '1';
     const pageNum = Math.max(1, parseInt(req.query.page, 10) || 1);
     const pageSize = Math.min(100, Math.max(1, parseInt(req.query.pageSize, 10) || 20));
-    const serverDomains = (await pool.query('select id, domain from "LoginDomain" order by domain asc')).rows;
+    const serverDomains = (await pool.query('select id, domain, "isLocal" from "LoginDomain" order by domain asc')).rows;
+    const localServerDomains = serverDomains.filter((domain) => domain.isLocal === true);
+    const adminScope = getAdminScope(req.admin);
+    const canCreateUser = canEdit('users') && !(adminScope.kind === 'DOMAIN' && !adminScope.isLocal);
     const requestedServer = String(req.query.server || 'all');
-    const allowedServerFilters = new Set(['all', 'main', ...serverDomains.map((domain) => `child:${domain.id}`)]);
-    const serverFilter = allowedServerFilters.has(requestedServer) ? requestedServer : 'all';
-    const selectedChildDomainId = serverFilter.startsWith('child:') ? serverFilter.slice(6) : null;
-    const includeMainUsers = serverFilter === 'all' || serverFilter === 'main';
-    const includeChildUsers = !adminBlocked && serverFilter !== 'main';
+    const allowedServerFilters = new Set(['all', 'main', ...serverDomains.map((domain) => `domain:${domain.id}`)]);
+    let serverFilter = allowedServerFilters.has(requestedServer) ? requestedServer : 'all';
+    if (adminScope.kind === 'MAIN') serverFilter = 'main';
+    if (adminScope.kind === 'DOMAIN') serverFilter = `domain:${adminScope.domainId}`;
+    const selectedDomainId = serverFilter.startsWith('domain:') ? serverFilter.slice(7) : null;
+    const selectedDomain = selectedDomainId ? serverDomains.find((domain) => domain.id === selectedDomainId) : null;
+    const includeLocalUsers = serverFilter === 'all' || serverFilter === 'main' || selectedDomain?.isLocal === true;
+    const includeChildUsers = !adminBlocked && (serverFilter === 'all' || selectedDomain?.isLocal === false);
+    const localDomainId = selectedDomain?.isLocal ? selectedDomain.id : null;
+    const mainOnly = serverFilter === 'main';
 
     const [{ rows, pagination }, childUsers] = await Promise.all([
-      includeMainUsers ? getUsers({
+      includeLocalUsers ? getUsers({
         adminBlocked,
         direction,
+        loginDomainId: localDomainId,
+        mainOnly,
         q,
         sort,
         page: pageNum,
         pageSize,
       }) : Promise.resolve(emptyUserPagination(pageSize)),
-      includeChildUsers ? getChildUsers(q, selectedChildDomainId) : Promise.resolve([]),
+      includeChildUsers ? getChildUsers(q, selectedDomain?.isLocal === false ? selectedDomain.id : null) : Promise.resolve([]),
     ]);
 
     // preserve current filters/sort when building page links
@@ -1738,8 +2047,8 @@ app.get('/users', requireAdmin, requireSection('users'), async (req, res, next) 
     res.send(page({
       active: 'users',
       body: `
-        ${hero('Users', `${number(pagination.total)} main users and ${number(childUsers.length)} child users shown.`, `<div class="actions">${canEdit('users') ? `<button type="button" onclick="document.getElementById('user-create-modal').showModal()">${escapeHtml(translateText('Add user'))}</button>` : ''}<a class="btn secondary" href="/undelivered-messages">${escapeHtml(translateText('Undelivered messages'))}</a>${logout()}</div>`)}
-        ${canEdit('users') ? `
+        ${hero('Users', `${number(pagination.total)} current-server users and ${number(childUsers.length)} child users shown.`, `<div class="actions">${canCreateUser ? `<button type="button" onclick="document.getElementById('user-create-modal').showModal()">${escapeHtml(translateText('Add user'))}</button>` : ''}<a class="btn secondary" href="/undelivered-messages">${escapeHtml(translateText('Undelivered messages'))}</a>${logout()}</div>`)}
+        ${canCreateUser ? `
           <dialog class="admin-modal" id="user-create-modal">
             <form class="admin-modal-card" method="post" action="/users">
               <div class="admin-modal-head">
@@ -1747,6 +2056,10 @@ app.get('/users', requireAdmin, requireSection('users'), async (req, res, next) 
                 <button class="secondary small" type="button" onclick="this.closest('dialog').close()">×</button>
               </div>
               <div class="admin-modal-body">
+                ${adminScope.kind === 'GLOBAL' ? `<label>${escapeHtml(translateText('Server'))}${selectLabeled('userDomain', 'MAIN', [
+                  ['MAIN', 'Main'],
+                  ...localServerDomains.map((domain) => [`DOMAIN:${domain.id}`, `Local: ${domain.domain}`]),
+                ])}</label>` : `<input name="userDomain" type="hidden" value="${escapeAttr(adminScope.kind === 'DOMAIN' ? `DOMAIN:${adminScope.domainId}` : 'MAIN')}"><label>${escapeHtml(translateText('Server'))}<span class="pill soft">${escapeHtml(adminScope.kind === 'DOMAIN' ? `Local: ${req.admin.scopeDomain}` : 'Main')}</span></label>`}
                 <label>${escapeHtml(translateText('Nickname'))}<input autocomplete="off" maxlength="32" minlength="6" name="nickname" pattern="[A-Za-z0-9_]+" placeholder="${escapeAttr(translateText('Generated when empty'))}"></label>
                 <label>${escapeHtml(translateText('Password'))}<input autocomplete="new-password" maxlength="200" minlength="7" name="password" placeholder="${escapeAttr(translateText('Generated when empty'))}" type="password"></label>
                 <label>${escapeHtml(translateText('Display name'))}<input maxlength="80" name="displayName" placeholder="${escapeAttr(translateText('Uses nickname when empty'))}"></label>
@@ -1760,17 +2073,16 @@ app.get('/users', requireAdmin, requireSection('users'), async (req, res, next) 
         ` : ''}
         <form class="toolbar" method="get">
           <label>Search <input name="q" value="${escapeAttr(q)}" placeholder="${escapeAttr(translateText('Username or display name'))}"></label>
-          <label>${escapeHtml(translateText('Server'))} ${selectLabeled('server', serverFilter, [
-            ['all', 'All servers'],
-            ['main', 'Main'],
-            ...serverDomains.map((domain) => [`child:${domain.id}`, domain.domain]),
-          ])}</label>
+          ${adminScope.kind === 'GLOBAL' ? `<label>${escapeHtml(translateText('Server'))} ${selectLabeled('server', serverFilter, [
+            ['all', 'All servers'], ['main', 'Main'],
+            ...serverDomains.map((domain) => [`domain:${domain.id}`, `${domain.isLocal ? 'Local' : 'Child'}: ${domain.domain}`]),
+          ])}</label>` : `<input type="hidden" name="server" value="${escapeAttr(serverFilter)}"><span class="pill soft">${escapeHtml(adminScope.kind === 'MAIN' ? 'Main' : `${adminScope.isLocal ? 'Local' : 'Child'}: ${req.admin.scopeDomain}`)}</span>`}
           <label>Sort ${selectLabeled('sort', sort, userSortOptions())}</label>
           <label>Order ${selectLabeled('dir', direction, [['desc', 'Newest first'], ['asc', 'Oldest first']])}</label>
           <label class="check"><input name="adminBlocked" type="checkbox" value="1" ${adminBlocked ? 'checked' : ''}> ${escapeHtml(translateText('Admin blocked'))}</label>
           <button>Apply</button>
         </form>
-        ${includeMainUsers ? `<div class="panel"><div class="panel-head"><h2>${escapeHtml(translateText('Main server users'))}</h2></div><div class="table-wrap users-table-wrap"><table class="users-card-table">
+        ${includeLocalUsers ? `<div class="panel"><div class="panel-head"><h2>${escapeHtml(translateText(mainOnly ? 'Main users' : selectedDomain?.domain || 'Current server users'))}</h2></div><div class="table-wrap users-table-wrap"><table class="users-card-table">
           <thead><tr>${[
             'User', 'Server', 'Registered', 'Last online', 'Last sign-in', 'Contacts', 'Messages',
             'Voice 1d/7d/15d/30d', 'Voice duration',
@@ -1780,12 +2092,12 @@ app.get('/users', requireAdmin, requireSection('users'), async (req, res, next) 
         </table></div></div>
         ${renderPagination(pagination, pageUrl)}` : ''}
         ${includeChildUsers ? panel(
-          selectedChildDomainId
-            ? serverDomains.find((domain) => domain.id === selectedChildDomainId)?.domain || 'Child server users'
+          selectedDomain?.isLocal === false
+            ? selectedDomain.domain || 'Child server users'
             : 'Child server users',
           childUsersTable(childUsers),
         ) : ''}
-        ${!includeMainUsers && !includeChildUsers ? panel('Users', empty('Admin blocked filtering is available only for main server users.')) : ''}
+        ${!includeLocalUsers && !includeChildUsers ? panel('Users', empty('No users are available for this server scope.')) : ''}
       `,
       title: 'Users',
     }));
@@ -1868,7 +2180,7 @@ app.get('/undelivered-messages', requireAdmin, requireSection('users'), async (r
   }
 });
 
-app.get('/users/:id', requireAdmin, requireSection('users'), async (req, res, next) => {
+app.get('/users/:id', requireAdmin, requireSection('users'), requireScopedUser, async (req, res, next) => {
   try {
     const id = req.params.id;
     const showSensitiveUserDetails = canEdit('users');
@@ -2069,7 +2381,7 @@ app.get('/users/:id', requireAdmin, requireSection('users'), async (req, res, ne
   }
 });
 
-app.post('/users/:id/block', requireAdmin, requireSection('users', 'edit'), requireSuperAdmin, async (req, res, next) => {
+app.post('/users/:id/block', requireAdmin, requireSection('users', 'edit'), requireSuperAdmin, requireScopedUser, async (req, res, next) => {
   try {
     const result = await callInternalModeration(`/users/${encodeURIComponent(req.params.id)}/suspend`, {
       adminUsername: req.admin.username,
@@ -2090,7 +2402,7 @@ app.post('/users/:id/block', requireAdmin, requireSection('users', 'edit'), requ
   }
 });
 
-app.post('/users/:id/unblock', requireAdmin, requireSection('users', 'edit'), requireSuperAdmin, async (req, res, next) => {
+app.post('/users/:id/unblock', requireAdmin, requireSection('users', 'edit'), requireSuperAdmin, requireScopedUser, async (req, res, next) => {
   try {
     await callInternalModeration(`/users/${encodeURIComponent(req.params.id)}/unblock`, {
       adminUsername: req.admin.username,
@@ -2102,7 +2414,7 @@ app.post('/users/:id/unblock', requireAdmin, requireSection('users', 'edit'), re
   }
 });
 
-app.post('/users/:id/delete', requireAdmin, requireSection('users', 'edit'), requireSuperAdmin, async (req, res, next) => {
+app.post('/users/:id/delete', requireAdmin, requireSection('users', 'edit'), requireSuperAdmin, requireScopedUser, async (req, res, next) => {
   try {
     await pool.query('delete from "User" where id = $1', [req.params.id]);
     res.redirect('/users');
@@ -2111,7 +2423,7 @@ app.post('/users/:id/delete', requireAdmin, requireSection('users', 'edit'), req
   }
 });
 
-app.post('/users/:id/password', requireAdmin, requireSection('users', 'edit'), async (req, res, next) => {
+app.post('/users/:id/password', requireAdmin, requireSection('users', 'edit'), requireScopedUser, async (req, res, next) => {
   try {
     const password = String(req.body.password || '');
 
@@ -2134,7 +2446,7 @@ app.post('/users/:id/password', requireAdmin, requireSection('users', 'edit'), a
   }
 });
 
-app.post('/users/:id/contacts', requireAdmin, requireSection('users', 'edit'), requireSuperAdmin, async (req, res, next) => {
+app.post('/users/:id/contacts', requireAdmin, requireSection('users', 'edit'), requireSuperAdmin, requireScopedUser, async (req, res, next) => {
   try {
     const username = normalizeUsername(req.body.username);
     const contact = await getUserByUsername(username);
@@ -2152,7 +2464,7 @@ app.post('/users/:id/contacts', requireAdmin, requireSection('users', 'edit'), r
   }
 });
 
-app.post('/users/:id/contacts/:contactId/delete', requireAdmin, requireSection('users', 'edit'), requireSuperAdmin, async (req, res, next) => {
+app.post('/users/:id/contacts/:contactId/delete', requireAdmin, requireSection('users', 'edit'), requireSuperAdmin, requireScopedUser, async (req, res, next) => {
   try {
     await pool.query('delete from "Contact" where "ownerId" = $1 and "contactId" = $2', [req.params.id, req.params.contactId]);
     res.redirect(`/users/${encodeURIComponent(req.params.id)}#contacts`);
@@ -2161,7 +2473,7 @@ app.post('/users/:id/contacts/:contactId/delete', requireAdmin, requireSection('
   }
 });
 
-app.post('/users/:id/subscriptions/manual', requireAdmin, async (req, res, next) => {
+app.post('/users/:id/subscriptions/manual', requireAdmin, requireScopedUser, async (req, res, next) => {
   try {
     if (!canManageManualPayments(req.admin)) {
       res.status(403).send(page({ active: 'users', body: empty('This admin account cannot access this section.'), title: 'Forbidden' }));
@@ -2225,7 +2537,7 @@ app.post('/users/:id/subscriptions/manual', requireAdmin, async (req, res, next)
   }
 });
 
-app.post('/users/:id/catalog-url', requireAdmin, requireSection('users', 'edit'), requireSuperAdmin, async (req, res, next) => {
+app.post('/users/:id/catalog-url', requireAdmin, requireSection('users', 'edit'), requireSuperAdmin, requireScopedUser, async (req, res, next) => {
   try {
     const catalogUrl = normalizeCatalogUrl(req.body.catalogUrl);
     const result = await pool.query('update "User" set "catalogUrl" = $1, "updatedAt" = current_timestamp where id = $2', [catalogUrl, req.params.id]);
@@ -2241,7 +2553,7 @@ app.post('/users/:id/catalog-url', requireAdmin, requireSection('users', 'edit')
   }
 });
 
-app.post('/users/:id/diagnostics', requireAdmin, requireSection('users', 'edit'), requireSuperAdmin, async (req, res, next) => {
+app.post('/users/:id/diagnostics', requireAdmin, requireSection('users', 'edit'), requireSuperAdmin, requireScopedUser, async (req, res, next) => {
   try {
     const diagnosticMode = req.body.diagnosticMode === '1';
     const callDiagnosticMode = req.body.callDiagnosticMode === '1';
@@ -2305,7 +2617,7 @@ app.get('/livekit', requireAdmin, requireSection('calls'), async (_req, res, nex
   }
 });
 
-app.get('/calls/:id', requireAdmin, requireSection('calls'), async (req, res, next) => {
+app.get('/calls/:id', requireAdmin, requireSection('calls'), requireScopedCall, async (req, res, next) => {
   try {
     const storedCall = (await pool.query(`
       select c.*, cv.title, cv.type, cv."ownerId", count(cp.id)::int participant_count,
@@ -2370,7 +2682,7 @@ app.get('/groups', requireAdmin, requireSection('groups'), async (req, res, next
   }
 });
 
-app.get('/groups/:id', requireAdmin, requireSection('groups'), async (req, res, next) => {
+app.get('/groups/:id', requireAdmin, requireSection('groups'), requireScopedGroup, async (req, res, next) => {
   try {
     await sendGroupDetailPage(req, res);
   } catch (error) {
@@ -2378,7 +2690,7 @@ app.get('/groups/:id', requireAdmin, requireSection('groups'), async (req, res, 
   }
 });
 
-app.post('/groups/:id/settings', requireAdmin, requireSection('groups', 'edit'), async (req, res, next) => {
+app.post('/groups/:id/settings', requireAdmin, requireSection('groups', 'edit'), requireScopedGroup, async (req, res, next) => {
   try {
     await pool.query(`
       update "Conversation"
@@ -2397,7 +2709,7 @@ app.post('/groups/:id/settings', requireAdmin, requireSection('groups', 'edit'),
   }
 });
 
-app.post('/groups/:id/members', requireAdmin, requireSection('groups', 'edit'), async (req, res, next) => {
+app.post('/groups/:id/members', requireAdmin, requireSection('groups', 'edit'), requireScopedGroup, async (req, res, next) => {
   try {
     const username = normalizeUsername(req.body.username);
     const user = await getUserByUsername(username);
@@ -2414,7 +2726,7 @@ app.post('/groups/:id/members', requireAdmin, requireSection('groups', 'edit'), 
   }
 });
 
-app.post('/groups/:id/members/:userId/remove', requireAdmin, requireSection('groups', 'edit'), async (req, res, next) => {
+app.post('/groups/:id/members/:userId/remove', requireAdmin, requireSection('groups', 'edit'), requireScopedGroup, async (req, res, next) => {
   try {
     const group = await getGroup(req.params.id);
     if (group?.ownerId === req.params.userId) throw new Error('Transfer ownership before removing the owner.');
@@ -2425,7 +2737,7 @@ app.post('/groups/:id/members/:userId/remove', requireAdmin, requireSection('gro
   }
 });
 
-app.post('/groups/:id/admins/:userId/toggle', requireAdmin, requireSection('groups', 'edit'), async (req, res, next) => {
+app.post('/groups/:id/admins/:userId/toggle', requireAdmin, requireSection('groups', 'edit'), requireScopedGroup, async (req, res, next) => {
   try {
     const group = await getGroup(req.params.id);
     if (group?.ownerId === req.params.userId) throw new Error('Owner admin rights cannot be removed.');
@@ -2440,7 +2752,7 @@ app.post('/groups/:id/admins/:userId/toggle', requireAdmin, requireSection('grou
   }
 });
 
-app.post('/groups/:id/owner', requireAdmin, requireSection('groups', 'edit'), async (req, res, next) => {
+app.post('/groups/:id/owner', requireAdmin, requireSection('groups', 'edit'), requireScopedGroup, async (req, res, next) => {
   try {
     const userId = String(req.body.userId || '');
     await pool.query('update "Conversation" set "ownerId" = $1, "updatedAt" = current_timestamp where id = $2 and type = $3', [userId, req.params.id, 'GROUP']);
@@ -2451,7 +2763,7 @@ app.post('/groups/:id/owner', requireAdmin, requireSection('groups', 'edit'), as
   }
 });
 
-app.post('/groups/:id/webhooks', requireAdmin, requireSection('groups', 'edit'), async (req, res, next) => {
+app.post('/groups/:id/webhooks', requireAdmin, requireSection('groups', 'edit'), requireScopedGroup, async (req, res, next) => {
   try {
     const group = await getGroup(req.params.id);
     if (!group) throw new Error('Group not found.');
@@ -2472,7 +2784,7 @@ app.post('/groups/:id/webhooks', requireAdmin, requireSection('groups', 'edit'),
   }
 });
 
-app.post('/groups/:id/webhooks/:webhookId/toggle', requireAdmin, requireSection('groups', 'edit'), async (req, res, next) => {
+app.post('/groups/:id/webhooks/:webhookId/toggle', requireAdmin, requireSection('groups', 'edit'), requireScopedGroup, async (req, res, next) => {
   try {
     await pool.query(`
       update "GroupWebhook"
@@ -2485,7 +2797,7 @@ app.post('/groups/:id/webhooks/:webhookId/toggle', requireAdmin, requireSection(
   }
 });
 
-app.post('/groups/:id/webhooks/:webhookId/revoke', requireAdmin, requireSection('groups', 'edit'), async (req, res, next) => {
+app.post('/groups/:id/webhooks/:webhookId/revoke', requireAdmin, requireSection('groups', 'edit'), requireScopedGroup, async (req, res, next) => {
   try {
     await pool.query(`
       update "GroupWebhook"
@@ -2656,7 +2968,7 @@ app.post('/redeem-codes/:id/disable', requireAdmin, requireSection('subscription
   }
 });
 
-app.get('/subscriptions/:id', requireAdmin, requireSection('subscriptions'), async (req, res, next) => {
+app.get('/subscriptions/:id', requireAdmin, requireSection('subscriptions'), requireScopedSubscription, async (req, res, next) => {
   try {
     const sub = (await getSubscriptions({ id: req.params.id })).rows[0];
     if (!sub) {
@@ -2731,7 +3043,7 @@ app.get('/reports', requireAdmin, requireSection('reports'), async (req, res, ne
   }
 });
 
-app.get('/reports/:id', requireAdmin, requireSection('reports'), async (req, res, next) => {
+app.get('/reports/:id', requireAdmin, requireSection('reports'), requireScopedReport, async (req, res, next) => {
   try {
     const report = (await pool.query(`
       select r.*, ru.username reporter_username, ru."displayName" reporter_name,
@@ -2780,7 +3092,7 @@ app.get('/reports/:id', requireAdmin, requireSection('reports'), async (req, res
   }
 });
 
-app.post('/reports/:id/status', requireAdmin, requireSection('reports', 'edit'), async (req, res, next) => {
+app.post('/reports/:id/status', requireAdmin, requireSection('reports', 'edit'), requireScopedReport, async (req, res, next) => {
   try {
     const status = ['OPEN', 'RESOLVED', 'DISMISSED'].includes(req.body.status) ? req.body.status : 'OPEN';
     await pool.query(`
@@ -2817,7 +3129,7 @@ app.get('/support-tickets', requireAdmin, requireSection('support'), async (req,
   }
 });
 
-app.get('/support-tickets/:conversationId', requireAdmin, requireSection('support'), async (req, res, next) => {
+app.get('/support-tickets/:conversationId', requireAdmin, requireSection('support'), requireScopedSupportTicket, async (req, res, next) => {
   try {
     const ticket = await getSupportTicket(req.params.conversationId);
 
@@ -2847,7 +3159,7 @@ app.get('/support-tickets/:conversationId', requireAdmin, requireSection('suppor
   }
 });
 
-app.post('/support-tickets/:conversationId/messages', requireAdmin, requireSection('support', 'edit'), async (req, res, next) => {
+app.post('/support-tickets/:conversationId/messages', requireAdmin, requireSection('support', 'edit'), requireScopedSupportTicket, async (req, res, next) => {
   try {
     const ticket = await getSupportTicket(req.params.conversationId);
 
@@ -2870,7 +3182,7 @@ app.post('/support-tickets/:conversationId/messages', requireAdmin, requireSecti
   }
 });
 
-app.post('/support-tickets/:conversationId/messages/:messageId/edit', requireAdmin, requireSection('support', 'edit'), async (req, res, next) => {
+app.post('/support-tickets/:conversationId/messages/:messageId/edit', requireAdmin, requireSection('support', 'edit'), requireScopedSupportTicket, async (req, res, next) => {
   try {
     const ticket = await getSupportTicket(req.params.conversationId);
 
@@ -3312,6 +3624,8 @@ async function getUndeliveredMessageStats(q = '') {
     filters.push(`(u.username ilike $${params.length} or u."displayName" ilike $${params.length})`);
   }
 
+  addScopedUserFilter(params, filters, 'u');
+
   const where = filters.length ? `where ${filters.join(' and ')}` : '';
   const sql = `
     with undelivered as (
@@ -3370,7 +3684,7 @@ async function getUndeliveredMessageStats(q = '') {
   };
 }
 
-async function getUsers({ adminBlocked = false, direction, q, sort, page = 1, pageSize = 20 }) {
+async function getUsers({ adminBlocked = false, direction, loginDomainId = null, mainOnly = false, q, sort, page = 1, pageSize = 20 }) {
   const params = [];
   const filters = [];
 
@@ -3381,6 +3695,15 @@ async function getUsers({ adminBlocked = false, direction, q, sort, page = 1, pa
 
   if (adminBlocked) {
     filters.push('abu."userId" is not null');
+  }
+
+  if (mainOnly) {
+    filters.push('u."loginDomainId" is null');
+  } else if (loginDomainId) {
+    params.push(loginDomainId);
+    filters.push(`u."loginDomainId" = $${params.length}`);
+  } else {
+    addScopedUserFilter(params, filters, 'u');
   }
 
   const where = filters.length ? `where ${filters.join(' and ')}` : '';
@@ -3425,7 +3748,7 @@ async function getUsers({ adminBlocked = false, direction, q, sort, page = 1, pa
       where "userId" in (select id from paged_users)
       order by "userId", "createdAt" desc
     )
-    select pu.*,
+    select pu.*, ld.domain as login_domain,
       pu."lastSeenAt" last_online_at,
       s.last_signin_at, s.latest_ip, s.latest_user_agent,
       coalesce(cn.count,0)::int contacts_count,
@@ -3443,6 +3766,7 @@ async function getUsers({ adminBlocked = false, direction, q, sort, page = 1, pa
       coalesce(cs.video_duration_sec,0)::bigint video_duration_sec,
       abu."createdAt" blocked_at
     from paged_users pu
+    left join "LoginDomain" ld on ld.id = pu."loginDomainId"
     left join (select "ownerId", count(*) from "Contact" where "ownerId" in (select id from paged_users) group by "ownerId") cn on cn."ownerId" = pu.id
     left join "UserMessageStats" ums on ums."userId" = pu.id
     left join call_stats cs on cs."userId" = pu.id
@@ -3496,6 +3820,8 @@ async function getChildUsers(q, domainId = null) {
     filters.push(`cu."domainId" = $${params.length}`);
   }
 
+  filters.push('d."isLocal" = false');
+
   const where = filters.length > 0 ? `where ${filters.join(' and ')}` : '';
 
   return (await pool.query(`
@@ -3513,7 +3839,10 @@ async function getUser(id) {
 }
 
 async function getUserByUsername(username) {
-  return (await pool.query('select id, username, "displayName" from "User" where lower(username) = lower($1)', [username])).rows[0];
+  const params = [username];
+  const filters = ['lower(u.username) = lower($1)'];
+  addScopedUserFilter(params, filters, 'u');
+  return (await pool.query(`select u.id, u.username, u."displayName" from "User" u where ${filters.join(' and ')}`, params)).rows[0];
 }
 
 function baseUserQuery() {
@@ -3695,6 +4024,15 @@ async function getCalls({ mode = '', status = 'all' } = {}) {
         and cp_active."leftAt" is null
     )`);
   }
+  const scope = getAdminScope();
+  if (scope.kind === 'DOMAIN' && !scope.isLocal) {
+    where.push('false');
+  } else if (scope.kind === 'MAIN') {
+    where.push(`exists (select 1 from "CallParticipant" scp join "User" su on su.id = scp."userId" where scp."callId" = c.id and su."loginDomainId" is null)`);
+  } else if (scope.kind === 'DOMAIN') {
+    params.push(scope.domainId);
+    where.push(`exists (select 1 from "CallParticipant" scp join "User" su on su.id = scp."userId" where scp."callId" = c.id and su."loginDomainId" = $${params.length})`);
+  }
   const rows = (await pool.query(`
     select c.*, cv.title, cv.type,
       count(cp.id)::int participants,
@@ -3729,6 +4067,9 @@ function getCallParticipants(callId) {
 
 async function getGroups(q = '') {
   const params = q ? [`%${q}%`] : [];
+  const filters = [];
+  if (q) filters.push(`(c.title ilike $1 or ou.username ilike $1 or ou."displayName" ilike $1)`);
+  addScopedConversationFilter(params, filters, 'c');
   return (await pool.query(`
     select c.*, ou.username owner_username, ou."displayName" owner_name,
       count(cm.id)::int members,
@@ -3738,7 +4079,7 @@ async function getGroups(q = '') {
     left join "User" ou on ou.id = c."ownerId"
     left join "ConversationMember" cm on cm."conversationId" = c.id
     where c.type = 'GROUP'
-      ${q ? 'and (c.title ilike $1 or ou.username ilike $1 or ou."displayName" ilike $1)' : ''}
+      ${filters.length ? `and ${filters.join(' and ')}` : ''}
     group by c.id, ou.id
     order by c."updatedAt" desc
     limit 300
@@ -3746,6 +4087,9 @@ async function getGroups(q = '') {
 }
 
 async function getGroup(id) {
+  const params = [id];
+  const filters = [];
+  addScopedConversationFilter(params, filters, 'c');
   return (await pool.query(`
     select c.*, ou.username owner_username, ou."displayName" owner_name,
       count(cm.id)::int members,
@@ -3756,9 +4100,9 @@ async function getGroup(id) {
     from "Conversation" c
     left join "User" ou on ou.id = c."ownerId"
     left join "ConversationMember" cm on cm."conversationId" = c.id
-    where c.id = $1 and c.type = 'GROUP'
+    where c.id = $1 and c.type = 'GROUP' ${filters.length ? `and ${filters.join(' and ')}` : ''}
     group by c.id, ou.id
-  `, [id])).rows[0];
+  `, params)).rows[0];
 }
 
 function getGroupMembers(id) {
@@ -3813,9 +4157,12 @@ function getGroupWebhookDeliveries(id) {
 
 function getAdminUsers() {
   return pool.query(`
-    select id, username, permissions, "isActive", "createdBy", "createdAt", "updatedAt", "lastLoginAt"
-    from "AdminUser"
-    order by "createdAt" desc
+    select au.id, au.username, au.permissions, au."isActive", au."createdBy", au."createdAt", au."updatedAt",
+      au."lastLoginAt", au."serverScope", au."scopeDomainId", ld.domain as "scopeDomain",
+      ld."isLocal" as "scopeIsLocal"
+    from "AdminUser" au
+    left join "LoginDomain" ld on ld.id = au."scopeDomainId"
+    order by au."createdAt" desc
   `);
 }
 
@@ -3901,6 +4248,7 @@ async function getSubscriptions({ id = '', userId = '', platform = '', status = 
     params.push(status);
     where.push(`se.status = $${params.length}`);
   }
+  addScopedUserFilter(params, where, 'u');
   params.push(limit);
   return pool.query(`
     select se.*, u.username, u."displayName"
@@ -3962,6 +4310,7 @@ async function getReports(type, status = '') {
     params.push(status);
     where.push(`r."status" = $${params.length}`);
   }
+  addScopedUserFilter(params, where, 'ru');
   return (await pool.query(`
     select r.*, ru.username reporter_username, ru."displayName" reporter_name,
       tu.username target_username, tu."displayName" target_user_name,
@@ -3978,6 +4327,9 @@ async function getReports(type, status = '') {
 }
 
 async function getSupportTickets() {
+  const params = [];
+  const filters = [];
+  addScopedUserFilter(params, filters, 'u');
   return (await pool.query(`
     with support_user as (
       select id
@@ -4020,7 +4372,7 @@ async function getSupportTickets() {
       order by m2."createdAt" desc
       limit 1
     ) last_admin on true
-    where exists (
+    where ${filters.length ? `${filters.join(' and ')} and` : ''} exists (
       select 1
       from "Message" message_exists
       where message_exists."conversationId" = c.id
@@ -4029,10 +4381,13 @@ async function getSupportTickets() {
     group by c.id, su.id, u.id, sm."lastReadAt", last_admin."lastAdminReplyAt", last_admin."lastAdminUsername"
     order by unread_count desc, coalesce(c."lastMessageAt", c."updatedAt") desc
     limit 300
-  `)).rows;
+  `, params)).rows;
 }
 
 async function getSupportTicket(conversationId) {
+  const params = [conversationId];
+  const filters = [];
+  addScopedUserFilter(params, filters, 'u');
   return (await pool.query(`
     with support_user as (
       select id
@@ -4075,10 +4430,10 @@ async function getSupportTicket(conversationId) {
       order by m2."createdAt" desc
       limit 1
     ) last_admin on true
-    where c.id = $1
+    where c.id = $1 ${filters.length ? `and ${filters.join(' and ')}` : ''}
     group by c.id, su.id, u.id, sm."lastReadAt", last_admin."lastAdminReplyAt", last_admin."lastAdminUsername"
     limit 1
-  `, [conversationId])).rows[0] || null;
+  `, params)).rows[0] || null;
 }
 
 async function getSupportTicketMessages(conversationId) {
@@ -4170,11 +4525,13 @@ function page({ active, body, live = false, title }) {
     ['operations', '/operations', 'Operations'],
     ...(admin?.isSuperAdmin ? [['admins', '/admins', 'Admins']] : []),
   ].filter(([id]) => (
-    id === 'dashboard' ||
-    id === 'admins' ||
-    (id === 'redeem-codes' ? hasAdminPermission(admin, 'subscriptions', 'read') : false) ||
-    (id === 'livekit' ? hasAdminPermission(admin, 'calls', 'read') : false) ||
-    (id === 'undelivered' ? hasAdminPermission(admin, 'users', 'read') : hasAdminPermission(admin, id, 'read'))
+    (id !== 'subdomains' || admin?.isSuperAdmin === true) && (
+      id === 'dashboard' ||
+      id === 'admins' ||
+      (id === 'redeem-codes' ? hasAdminPermission(admin, 'subscriptions', 'read') : false) ||
+      (id === 'livekit' ? hasAdminPermission(admin, 'calls', 'read') : false) ||
+      (id === 'undelivered' ? hasAdminPermission(admin, 'users', 'read') : hasAdminPermission(admin, id, 'read'))
+    )
   ));
   const navHtml = nav.map(([id, href, label]) => `<a class="${active === id ? 'active' : ''}" href="${href}">${label}</a>`).join('');
   return layout({
@@ -4306,7 +4663,7 @@ function userRow(u) {
 
   return `<tr>
     <td data-label="${escapeAttr(translateText('User'))}">${userLink(u.id, u.displayName, u.username)}<div class="users-inline-status">${statusPill}</div></td>
-    <td data-label="${escapeAttr(translateText('Server'))}"><span class="pill soft">${escapeHtml(translateText('Main'))}</span></td>
+    <td data-label="${escapeAttr(translateText('Server'))}"><span class="pill soft">${escapeHtml(u.login_domain || translateText('Main'))}</span></td>
     <td data-label="${escapeAttr(translateText('Registered'))}">${date(u.createdAt)}</td>
     <td data-label="${escapeAttr(translateText('Last online'))}">${date(u.last_online_at)}</td>
     <td data-label="${escapeAttr(translateText('Last sign-in'))}">${date(u.last_signin_at)}</td>
@@ -4867,14 +5224,21 @@ function callConversationLabel(call) {
   return call.participant_names || call.title || displayConversationType(call.type) || call.conversationId;
 }
 
-function adminUserForm(admin = null) {
+function adminUserForm(admin = null, domains = []) {
   const permissions = normalizeAdminPermissions(admin?.permissions);
   const isExisting = !!admin;
+  const selectedScope = admin?.serverScope === 'DOMAIN' && admin.scopeDomainId
+    ? `DOMAIN:${admin.scopeDomainId}`
+    : 'MAIN';
   return `<form class="stack" method="post" action="${isExisting ? `/admins/${escapeAttr(admin.id)}` : '/admins'}">
     ${isExisting ? `<div><strong>${escapeHtml(admin.username)}</strong><br><span class="subtle">${escapeHtml(admin.id)}</span></div>` : `<label>${escapeHtml(translateText('Username'))} <input name="username" autocomplete="off" required></label>`}
     <label>${escapeHtml(translateText(isExisting ? 'New password' : 'Password'))} <input name="password" type="password" autocomplete="new-password" ${isExisting ? `placeholder="${escapeAttr(translateText('Leave empty to keep current password'))}"` : 'required'} minlength="8"></label>
+    <label>${escapeHtml(translateText('Server'))} ${selectLabeled('serverScope', selectedScope, [
+      ['MAIN', 'Main'],
+      ...domains.map((domain) => [`DOMAIN:${domain.id}`, `${domain.isLocal ? 'Local' : 'Child'}: ${domain.domain}`]),
+    ])}</label>
     <div class="permissions-grid">
-      ${ADMIN_SECTIONS.filter((section) => section !== 'dashboard').map((section) => `
+      ${ADMIN_SECTIONS.filter((section) => !['dashboard', 'subdomains'].includes(section)).map((section) => `
         <label>${escapeHtml(sectionLabel(section))}
           ${select(`${section}Permission`, permissions[section], ADMIN_PERMISSION_LEVELS)}
         </label>
@@ -4885,15 +5249,15 @@ function adminUserForm(admin = null) {
   </form>`;
 }
 
-function adminUsersTable(rows) {
+function adminUsersTable(rows, domains = []) {
   return rows.length ? `<div class="table-wrap"><table>
     <thead><tr><th>${escapeHtml(translateText('Admin'))}</th><th>${escapeHtml(translateText('Permissions'))}</th><th>${escapeHtml(translateText('Status'))}</th><th>${escapeHtml(translateText('Last login'))}</th><th>${escapeHtml(translateText('Edit'))}</th></tr></thead>
     <tbody>${rows.map((admin) => `<tr>
-      <td><strong>${escapeHtml(admin.username)}</strong><br><span class="subtle">${escapeHtml(translateText('Created by'))} ${escapeHtml(admin.createdBy || translateText('unknown'))} · ${date(admin.createdAt)}</span></td>
+      <td><strong>${escapeHtml(admin.username)}</strong><br><span class="subtle">${escapeHtml(translateText('Created by'))} ${escapeHtml(admin.createdBy || translateText('unknown'))} · ${date(admin.createdAt)}</span><br><span class="pill soft">${escapeHtml(admin.serverScope === 'DOMAIN' ? `${admin.scopeIsLocal ? 'Local' : 'Child'}: ${admin.scopeDomain || 'Unknown'}` : translateText('Main'))}</span></td>
       <td>${adminPermissionPills(admin.permissions)}</td>
       <td>${admin.isActive ? `<span class="pill good">${escapeHtml(translateText('Active'))}</span>` : `<span class="pill danger">${escapeHtml(translateText('Disabled'))}</span>`}</td>
       <td>${date(admin.lastLoginAt)}</td>
-      <td><details class="admin-details"><summary>${escapeHtml(translateText('Edit'))}</summary>${adminUserForm(admin)}</details></td>
+      <td><details class="admin-details"><summary>${escapeHtml(translateText('Edit'))}</summary>${adminUserForm(admin, domains)}</details></td>
     </tr>`).join('')}</tbody>
   </table></div>` : empty('No database admins yet.');
 }
@@ -4910,23 +5274,18 @@ function parseLoginDomainForm(body, requireKey) {
   const domain = normalizeLoginDomainSelector(body.domain);
   if (!domain) throw new Error('Invalid domain selector. Use a value such as company or company.example.com.');
 
-  let hostname;
-  try {
-    const url = new URL(String(body.hostname || '').trim());
-    if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash || (url.pathname && url.pathname !== '/')) throw new Error();
-    hostname = url.origin;
-  } catch {
-    throw new Error('Hostname must be an HTTPS API origin, for example https://api.example.com.');
-  }
+  const isLocal = body.isLocal === 'on';
+
+  const hostname = isLocal ? getLocalLoginDomainHostname() : normalizeChildDomainHostname(body.hostname);
 
   const mainServerKey = String(body.mainServerKey || '').trim();
-  if (requireKey && mainServerKey.length < 24) throw new Error('Main server key must contain at least 24 characters.');
+  if (!isLocal && requireKey && mainServerKey.length < 24) throw new Error('Main server key must contain at least 24 characters.');
   if (mainServerKey && mainServerKey.length < 24) throw new Error('New main server key must contain at least 24 characters.');
   if (mainServerKey && !/^[A-Za-z0-9_-]+$/.test(mainServerKey)) {
     throw new Error('Main server key may contain only ASCII letters, numbers, underscores, and hyphens.');
   }
   const originIpAddresses = [...new Set(String(body.originIpAddresses || '').split(/[\s,]+/).map(normalizeAdminIp).filter(Boolean))];
-  if (originIpAddresses.length === 0) throw new Error('At least one child origin IP is required.');
+  if (!isLocal && originIpAddresses.length === 0) throw new Error('At least one child origin IP is required.');
 
   const expiresAtRaw = String(body.expiresAt || '').trim();
   const expiresAt = expiresAtRaw ? new Date(expiresAtRaw) : null;
@@ -4941,10 +5300,29 @@ function parseLoginDomainForm(body, requireKey) {
     domain,
     expiresAt,
     hostname,
-    mainServerKey,
+    isLocal,
+    mainServerKey: isLocal ? '' : mainServerKey,
     maxUserCount,
-    originIpAddresses,
+    originIpAddresses: isLocal ? [] : originIpAddresses,
   };
+}
+
+function normalizeChildDomainHostname(value) {
+  try {
+    const url = new URL(String(value || '').trim());
+    if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash || (url.pathname && url.pathname !== '/')) throw new Error();
+    return url.origin;
+  } catch {
+    throw new Error('Hostname must be an HTTPS API origin, for example https://api.example.com.');
+  }
+}
+
+function getLocalLoginDomainHostname() {
+  const endpoints = Array.isArray(backendPolicy.publicApi?.endpoints) ? backendPolicy.publicApi.endpoints : [];
+  const defaultHost = String(backendPolicy.publicApi?.defaultHost || '').toLowerCase();
+  const endpoint = endpoints.find((item) => String(item?.host || '').toLowerCase() === defaultHost) || endpoints[0];
+  const candidate = endpoint?.url || config.backendPublicUrl;
+  return normalizeChildDomainHostname(candidate);
 }
 
 function normalizeLoginDomainSelector(value) {
@@ -5058,6 +5436,7 @@ function loginDomainEditModal(domain, modalId) {
 }
 
 function loginDomainForm(domain, generatedKey = '') {
+  const isLocal = domain ? domain.isLocal === true : true;
   const currentMainServerKey = domain ? decryptMainServerKey(domain.mainServerKeyEncrypted) : generatedKey;
   const keyHelp = domain
     ? currentMainServerKey
@@ -5067,11 +5446,15 @@ function loginDomainForm(domain, generatedKey = '') {
 
   return `<div class="stack">
     <label>${escapeHtml(translateText('Domain'))}<input name="domain" maxlength="253" required value="${escapeAttr(domain?.domain || '')}" placeholder="company or company.example.com"><span class="subtle">${escapeHtml(translateText('Enter the value used after @. URLs and @ prefixes are normalized automatically.'))}</span></label>
-    <label>${escapeHtml(translateText('Hostname'))}<input name="hostname" type="url" required value="${escapeAttr(domain?.hostname || '')}" placeholder="https://api.company.com"></label>
+    <label class="check"><input name="isLocal" type="checkbox" ${isLocal ? 'checked' : ''} onchange="const child=this.closest('.stack').querySelector('[data-child-domain-fields]');child.hidden=this.checked;child.querySelectorAll('[data-child-required]').forEach((input)=>input.required=!this.checked)"> ${escapeHtml(translateText('Is local'))}<span class="subtle">${escapeHtml(translateText('Local domains use this server and do not authorize child-server requests.'))}</span></label>
     <label>${escapeHtml(translateText('Description'))}<textarea name="description" maxlength="2000" rows="3">${escapeHtml(domain?.description || '')}</textarea></label>
     <label>${escapeHtml(translateText('Contacts'))}<textarea name="contacts" maxlength="2000" rows="3">${escapeHtml(domain?.contacts || '')}</textarea></label>
-    <label>${escapeHtml(translateText('Allowed origin IP addresses'))}<textarea name="originIpAddresses" rows="3" required placeholder="203.0.113.10">${escapeHtml((domain?.originIpAddresses || []).join('\n'))}</textarea></label>
-    <label>${escapeHtml(translateText('Main server key'))}<input name="mainServerKey" ${domain ? '' : 'required'} minlength="24" value="${escapeAttr(currentMainServerKey)}" autocomplete="off" spellcheck="false"><span class="subtle">${escapeHtml(translateText(keyHelp))}</span></label>
+    <div class="stack" data-child-domain-fields ${isLocal ? 'hidden' : ''}>
+      <label>${escapeHtml(translateText('Hostname'))}<input data-child-required name="hostname" type="url" ${isLocal ? '' : 'required'} value="${escapeAttr(domain?.hostname || '')}" placeholder="https://api.company.com"></label>
+      <label>${escapeHtml(translateText('Allowed origin IP addresses'))}<textarea data-child-required name="originIpAddresses" rows="3" ${isLocal ? '' : 'required'} placeholder="203.0.113.10">${escapeHtml((domain?.originIpAddresses || []).join('\n'))}</textarea></label>
+      <label>${escapeHtml(translateText('Main server key'))}<input data-child-required name="mainServerKey" ${!domain && !isLocal ? 'required' : ''} minlength="24" value="${escapeAttr(currentMainServerKey)}" autocomplete="off" spellcheck="false"><span class="subtle">${escapeHtml(translateText(keyHelp))}</span></label>
+    </div>
+    ${isLocal ? `<div class="notice">${escapeHtml(translateText('Current server'))}: <strong>${escapeHtml(getLocalLoginDomainHostname())}</strong></div>` : ''}
     <label>${escapeHtml(translateText('Expires'))}<input name="expiresAt" type="datetime-local" value="${escapeAttr(dateTimeLocal(domain?.expiresAt))}"></label>
     <label>${escapeHtml(translateText('Maximum users'))}<input name="maxUserCount" type="number" min="1" value="${escapeAttr(domain?.maxUserCount ?? '')}" placeholder="Unlimited"></label>
     <button>${escapeHtml(translateText(domain ? 'Save' : 'Create'))}</button>
@@ -5086,9 +5469,9 @@ function loginDomainsTable(domains, usernamesByDomain, childUsersByDomain) {
       const modalId = `login-domain-${domain.id}`;
       const editModalId = `login-domain-edit-${domain.id}`;
       return `<tr>
-        <td><button class="link-button" type="button" onclick="document.getElementById('${escapeAttr(modalId)}').showModal()"><strong>${escapeHtml(domain.domain)}</strong></button><br><span class="subtle">${escapeHtml(domain.description || '')}</span></td>
-        <td>${escapeHtml(domain.hostname)}<br><span class="subtle">${escapeHtml((domain.originIpAddresses || []).join(', '))}</span></td>
-        <td>${number(domain.childUserCount)} / ${domain.maxUserCount == null ? '∞' : number(domain.maxUserCount)}</td>
+        <td><button class="link-button" type="button" onclick="document.getElementById('${escapeAttr(modalId)}').showModal()"><strong>${escapeHtml(domain.domain)}</strong></button><br><span class="pill soft">${escapeHtml(domain.isLocal ? 'Local' : 'Child')}</span><br><span class="subtle">${escapeHtml(domain.description || '')}</span></td>
+        <td>${escapeHtml(domain.isLocal ? getLocalLoginDomainHostname() : domain.hostname)}${domain.isLocal ? '' : `<br><span class="subtle">${escapeHtml((domain.originIpAddresses || []).join(', '))}</span>`}</td>
+        <td>${number(domain.isLocal ? domain.localUserCount : domain.childUserCount)} / ${domain.maxUserCount == null ? '∞' : number(domain.maxUserCount)}</td>
         <td>${number(domain.requestCount)}</td><td>${date(domain.expiresAt)}</td>
         <td>${expired ? `<span class="pill danger">${escapeHtml(translateText('Expired'))}</span>` : domain.isActive ? `<span class="pill good">${escapeHtml(translateText('Active'))}</span>` : `<span class="pill danger">${escapeHtml(translateText('Disabled'))}</span>`}</td>
         <td>${canEdit('subdomains') ? `<button class="secondary small" type="button" onclick="document.getElementById('${escapeAttr(editModalId)}').showModal()">${escapeHtml(translateText('Edit'))}</button>` : ''}</td>
@@ -5111,10 +5494,10 @@ function loginDomainStatsModal(domain, usernames, childUsers, modalId) {
   const activeChildUsers = childUsers.filter((item) => !item.deletedAt);
   return `<dialog class="admin-modal admin-modal-wide" id="${escapeAttr(modalId)}"><section class="admin-modal-card">
     <div class="admin-modal-head"><div><h3>${escapeHtml(domain.domain)}</h3><span class="subtle">${escapeHtml(domain.hostname)}</span></div><button class="secondary small" type="button" onclick="this.closest('dialog').close()">×</button></div>
-    <div class="metric-grid"><div class="metric-card"><div class="metric-label">${escapeHtml(translateText('Child users'))}</div><div class="metric-value">${number(activeChildUsers.length)}</div></div><div class="metric-card"><div class="metric-label">${escapeHtml(translateText('Login selectors'))}</div><div class="metric-value">${number(usernames.length)}</div></div><div class="metric-card"><div class="metric-label">${escapeHtml(translateText('Requests'))}</div><div class="metric-value">${number(usernames.reduce((sum, item) => sum + Number(item.requestCount || 0), 0))}</div></div></div>
-    <h4>${escapeHtml(translateText('Child users'))}</h4>
+    <div class="metric-grid"><div class="metric-card"><div class="metric-label">${escapeHtml(translateText(domain.isLocal ? 'Local users' : 'Child users'))}</div><div class="metric-value">${number(domain.isLocal ? domain.localUserCount : activeChildUsers.length)}</div></div><div class="metric-card"><div class="metric-label">${escapeHtml(translateText('Login selectors'))}</div><div class="metric-value">${number(usernames.length)}</div></div><div class="metric-card"><div class="metric-label">${escapeHtml(translateText('Requests'))}</div><div class="metric-value">${number(usernames.reduce((sum, item) => sum + Number(item.requestCount || 0), 0))}</div></div></div>
+    ${domain.isLocal ? '' : `<h4>${escapeHtml(translateText('Child users'))}</h4>
     <input placeholder="${escapeAttr(translateText('Search username'))}" oninput="const q=this.value.toLowerCase();this.closest('section').querySelectorAll('[data-child-user]').forEach(r=>r.hidden=!r.dataset.username.includes(q))">
-    <div class="table-wrap"><table><thead><tr><th>${escapeHtml(translateText('Username'))}</th><th>${escapeHtml(translateText('Display name'))}</th><th>${escapeHtml(translateText('Device'))}</th><th>${escapeHtml(translateText('Language'))}</th><th>${escapeHtml(translateText('App'))}</th><th>${escapeHtml(translateText('Last login'))}</th><th>${escapeHtml(translateText('Last seen'))}</th><th>${escapeHtml(translateText('Status'))}</th></tr></thead><tbody>${childUsers.map((item) => `<tr data-child-user data-username="${escapeAttr(`${item.username} ${item.displayName || ''}`.toLowerCase())}"><td>${escapeHtml(item.username)}</td><td>${escapeHtml(item.displayName || '')}</td><td>${escapeHtml(formatChildDevice(item))}</td><td>${escapeHtml(item.latestLocale || item.registrationLocale || '')}</td><td>${escapeHtml(formatChildApp(item))}</td><td>${date(item.lastLoginAt)}</td><td>${date(item.lastSeenAt)}</td><td>${item.deletedAt ? `<span class="pill danger">${escapeHtml(translateText('Deleted'))}</span>` : `<span class="pill good">${escapeHtml(translateText('Active'))}</span>`}</td></tr>`).join('')}</tbody></table></div>
+    <div class="table-wrap"><table><thead><tr><th>${escapeHtml(translateText('Username'))}</th><th>${escapeHtml(translateText('Display name'))}</th><th>${escapeHtml(translateText('Device'))}</th><th>${escapeHtml(translateText('Language'))}</th><th>${escapeHtml(translateText('App'))}</th><th>${escapeHtml(translateText('Last login'))}</th><th>${escapeHtml(translateText('Last seen'))}</th><th>${escapeHtml(translateText('Status'))}</th></tr></thead><tbody>${childUsers.map((item) => `<tr data-child-user data-username="${escapeAttr(`${item.username} ${item.displayName || ''}`.toLowerCase())}"><td>${escapeHtml(item.username)}</td><td>${escapeHtml(item.displayName || '')}</td><td>${escapeHtml(formatChildDevice(item))}</td><td>${escapeHtml(item.latestLocale || item.registrationLocale || '')}</td><td>${escapeHtml(formatChildApp(item))}</td><td>${date(item.lastLoginAt)}</td><td>${date(item.lastSeenAt)}</td><td>${item.deletedAt ? `<span class="pill danger">${escapeHtml(translateText('Deleted'))}</span>` : `<span class="pill good">${escapeHtml(translateText('Active'))}</span>`}</td></tr>`).join('')}</tbody></table></div>`}
     <h4>${escapeHtml(translateText('Login routing requests'))}</h4>
     <div class="table-wrap"><table><thead><tr><th>${escapeHtml(translateText('Username'))}</th><th>${escapeHtml(translateText('Requests'))}</th><th>${escapeHtml(translateText('Platform'))}</th><th>${escapeHtml(translateText('First requested'))}</th><th>${escapeHtml(translateText('Last requested'))}</th></tr></thead><tbody>${usernames.map((item) => `<tr><td>${escapeHtml(item.username)}</td><td>${number(item.requestCount)}</td><td>${escapeHtml(item.platform || '')}</td><td>${date(item.firstRequestedAt)}</td><td>${date(item.lastRequestedAt)}</td></tr>`).join('')}</tbody></table></div>
     ${canEdit('subdomains') ? `<div class="actions"><form method="post" action="/sub-domains/${escapeAttr(domain.id)}/toggle"><button class="secondary">${escapeHtml(translateText(domain.isActive ? 'Deactivate' : 'Activate'))}</button></form><button type="button" onclick="this.closest('dialog').close();document.getElementById('login-domain-edit-${escapeAttr(domain.id)}').showModal()">${escapeHtml(translateText('Edit'))}</button></div>` : ''}

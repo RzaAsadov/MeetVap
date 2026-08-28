@@ -48,7 +48,9 @@ authRoutes.post('/domain-resolution', async (req, res, next) => {
       });
 
       if (!existing && domain.maxUserCount !== null) {
-        const allocated = await tx.loginDomainUsername.count({ where: { domainId: domain.id } });
+        const allocated = domain.isLocal
+          ? await tx.user.count({ where: { loginDomainId: domain.id } })
+          : await tx.loginDomainUsername.count({ where: { domainId: domain.id } });
         if (allocated >= domain.maxUserCount) {
           throw new HttpError(403, 'Login domain user limit reached', { code: 'LOGIN_DOMAIN_LIMIT_REACHED' });
         }
@@ -67,7 +69,7 @@ authRoutes.post('/domain-resolution', async (req, res, next) => {
     res.json({
       domain: result.domain,
       expiresAt: result.expiresAt?.toISOString() ?? null,
-      hostname: result.hostname,
+      hostname: result.isLocal ? getPublicApiUrlForRequest(req) : result.hostname,
     });
   } catch (error) {
     next(error);
@@ -184,7 +186,7 @@ authRoutes.post('/login', async (req, res, next) => {
   try {
     await assertRequestDeviceAllowed(req, { required: true });
     const input = loginSchema.parse(req.body);
-    const user = await prisma.user.findUnique({
+    let user = await prisma.user.findUnique({
       where: { username: input.username },
     });
 
@@ -194,6 +196,10 @@ authRoutes.post('/login', async (req, res, next) => {
 
     if (await isAdminBlocked(user.id)) {
       throw new HttpError(403, 'This account is blocked');
+    }
+
+    if (operationalConfig.serverRole === 'main' && input.loginDomain) {
+      user = await assignLocalLoginDomain(user.id, input.loginDomain);
     }
 
     await prisma.user.update({
@@ -265,6 +271,52 @@ async function getPreventPeerScreenshots(userId: string) {
   `;
 
   return rows[0]?.preventPeerScreenshots !== false;
+}
+
+async function assignLocalLoginDomain(userId: string, selector: string) {
+  return prisma.$transaction(async (tx) => {
+    const [domain, currentUser] = await Promise.all([
+      tx.loginDomain.findUnique({ where: { domain: selector } }),
+      tx.user.findUnique({ where: { id: userId } }),
+    ]);
+
+    // A hostname used only as a public API relay is not necessarily a managed
+    // login domain, so an unknown selector does not change account tenancy.
+    if (!domain) {
+      if (!currentUser) throw new HttpError(401, 'Invalid username or password');
+      return currentUser;
+    }
+    if (!domain.isLocal) {
+      throw new HttpError(409, 'This login domain belongs to a child server', {
+        code: 'LOGIN_DOMAIN_REQUIRES_CHILD_SERVER',
+      });
+    }
+    if (!domain.isActive) {
+      throw new HttpError(403, 'Login domain is inactive', { code: 'LOGIN_DOMAIN_INACTIVE' });
+    }
+    if (domain.expiresAt && domain.expiresAt <= new Date()) {
+      throw new HttpError(403, 'Login domain has expired', { code: 'LOGIN_DOMAIN_EXPIRED' });
+    }
+    if (!currentUser) throw new HttpError(401, 'Invalid username or password');
+    if (currentUser.loginDomainId && currentUser.loginDomainId !== domain.id) {
+      throw new HttpError(403, 'This account belongs to another login domain', {
+        code: 'LOGIN_DOMAIN_ACCOUNT_MISMATCH',
+      });
+    }
+    if (currentUser.loginDomainId === domain.id) return currentUser;
+
+    if (domain.maxUserCount !== null) {
+      const allocated = await tx.user.count({ where: { loginDomainId: domain.id } });
+      if (allocated >= domain.maxUserCount) {
+        throw new HttpError(403, 'Login domain user limit reached', { code: 'LOGIN_DOMAIN_LIMIT_REACHED' });
+      }
+    }
+
+    return tx.user.update({
+      data: { loginDomainId: domain.id },
+      where: { id: userId },
+    });
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
 }
 
 function getRequestIp(req: Request) {

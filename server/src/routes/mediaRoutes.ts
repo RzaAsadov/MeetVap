@@ -23,6 +23,14 @@ const MAX_CHUNKED_UPLOAD_BYTES = operationalConfig.uploads.maxAttachmentBytes;
 // Keep this lower bound until legacy upload support is intentionally removed.
 const LEGACY_MIN_CHUNK_BYTES = 1024 * 1024;
 
+// Web and API can intentionally use different relay origins. Apply this to
+// success and error responses so browsers expose the real HTTP result instead
+// of replacing it with ERR_BLOCKED_BY_RESPONSE.NotSameOrigin.
+mediaRoutes.use((_req, res, next) => {
+  res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+  next();
+});
+
 mediaRoutes.get('/:mediaId/file', async (req, res, next) => {
   try {
     const media = await prisma.mediaFile.findUnique({

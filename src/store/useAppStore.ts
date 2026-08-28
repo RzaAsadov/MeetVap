@@ -4,7 +4,7 @@ import { AppState as NativeAppState, Appearance } from 'react-native';
 
 import { ApiError } from '../lib/api';
 import { AppLanguage, isLanguagePreference, LanguagePreference, resolveLanguage, setI18nLanguage, t } from '../i18n';
-import { acknowledgeBulkMessageDeletions, acknowledgeBulkMessageEdits, acknowledgeBulkMessageStatusUpdates, acknowledgeMessageContent, acknowledgeMessageDeletions, acknowledgeMessageEdits, acknowledgeMessageStatusUpdates, addContact, addGroupAdmins as addGroupAdminsRequest, addGroupMembers as addGroupMembersRequest, blockUser, bulkDeleteConversations, createDirectConversation, createForwardedMessage, createGroupConversation, createMediaMessage, createScheduledMessage, createStatus as createStatusRequest, createTextMessage, createVoiceMessage, createVoiceRoomConversation, declineGroupInvite as declineGroupInviteRequest, deleteAccount as deleteAccountRequest, deleteCallMessageByCallId as deleteCallMessageByCallIdRequest, deleteContact as deleteContactRequest, deleteConversation as deleteConversationRequest, deleteConversationForAnyone as deleteConversationForAnyoneRequest, deleteGroup as deleteGroupRequest, deleteMessage as deleteMessageRequest, deleteScheduledMessage as deleteScheduledMessageRequest, deleteStatus as deleteStatusRequest, editMessage as editMessageRequest, getCatalogConfig, getHelpConfig, getMe, getStatusSummary, getSubscriptionStatus as getSubscriptionStatusRequest, listBlockedUsers, listBulkMessageDeletions, listBulkMessageStatusUpdates, listContacts, listConversationDeltas, listConversations, listMessageDeletions, listMessageEdits, listMessages, listMessageStatusUpdates, listPendingMessages, listStatuses, login, markAllConversationsRead, markConversationRead, markStatusViewed as markStatusViewedRequest, openDisappearingMessage as openDisappearingMessageRequest, reactToMessage as reactToMessageRequest, register, removeGroupMember as removeGroupMemberRequest, replyToStatus as replyToStatusRequest, reportContent, revokeGroupAdmin as revokeGroupAdminRequest, transferGroupOwnership as transferGroupOwnershipRequest, unblockUser, unregisterPushTokens, updateConversationMute as updateConversationMuteRequest, updateDisappearingMessages as updateDisappearingMessagesRequest, updateGroupAlias as updateGroupAliasRequest, updateGroupAvatar as updateGroupAvatarRequest, updateGroupSettings as updateGroupSettingsRequest, updateGroupTitle as updateGroupTitleRequest, updateMyAvatar, updateMyPassword, updateMyProfile, updatePrivacy as updatePrivacyRequest, uploadMediaFile } from '../lib/backend';
+import { acknowledgeBulkMessageDeletions, acknowledgeBulkMessageEdits, acknowledgeBulkMessageStatusUpdates, acknowledgeMessageContent, acknowledgeMessageDeletions, acknowledgeMessageEdits, acknowledgeMessageStatusUpdates, addContact, addGroupAdmins as addGroupAdminsRequest, addGroupMembers as addGroupMembersRequest, blockUser, bulkDeleteConversations, checkUsernameAvailability, createDirectConversation, createForwardedMessage, createGroupConversation, createMediaMessage, createScheduledMessage, createStatus as createStatusRequest, createTextMessage, createVoiceMessage, createVoiceRoomConversation, declineGroupInvite as declineGroupInviteRequest, deleteAccount as deleteAccountRequest, deleteCallMessageByCallId as deleteCallMessageByCallIdRequest, deleteContact as deleteContactRequest, deleteConversation as deleteConversationRequest, deleteConversationForAnyone as deleteConversationForAnyoneRequest, deleteGroup as deleteGroupRequest, deleteMessage as deleteMessageRequest, deleteScheduledMessage as deleteScheduledMessageRequest, deleteStatus as deleteStatusRequest, editMessage as editMessageRequest, getCatalogConfig, getHelpConfig, getMe, getStatusSummary, getSubscriptionStatus as getSubscriptionStatusRequest, listBlockedUsers, listBulkMessageDeletions, listBulkMessageStatusUpdates, listContacts, listConversationDeltas, listConversations, listMessageDeletions, listMessageEdits, listMessages, listMessageStatusUpdates, listPendingMessages, listStatuses, login, markAllConversationsRead, markConversationRead, markStatusViewed as markStatusViewedRequest, openDisappearingMessage as openDisappearingMessageRequest, reactToMessage as reactToMessageRequest, register, removeGroupMember as removeGroupMemberRequest, replyToStatus as replyToStatusRequest, reportContent, revokeGroupAdmin as revokeGroupAdminRequest, transferGroupOwnership as transferGroupOwnershipRequest, unblockUser, unregisterPushTokens, updateConversationMute as updateConversationMuteRequest, updateDisappearingMessages as updateDisappearingMessagesRequest, updateGroupAlias as updateGroupAliasRequest, updateGroupAvatar as updateGroupAvatarRequest, updateGroupSettings as updateGroupSettingsRequest, updateGroupTitle as updateGroupTitleRequest, updateMyAvatar, updateMyPassword, updateMyProfile, updatePrivacy as updatePrivacyRequest, uploadMediaFile } from '../lib/backend';
 import type { ConversationMuteDurationMinutes } from '../lib/conversationMute';
 import type { ConversationListFilter } from '../lib/conversationList';
 import type { DisappearingMessagesDurationMinutes } from '../lib/disappearingMessages';
@@ -16,7 +16,7 @@ import { deleteAccountMediaCache, downloadRemoteMediaFile, getMessageMediaCacheU
 import { logMessageDeliveryDiagnostic, refreshRemoteMessageDeliveryDiagnostics, shouldCollectMessageDeliveryDiagnostics } from '../lib/messageDeliveryDiagnostics';
 import { dismissAllMessageNotifications, dismissMessageNotificationsForConversation } from '../lib/messageNotifications';
 import { clearAuthToken, clearDeletedConversationAfter, clearStoredConversations, clearStoredSubscriptionStatus, clearStoredUser, DEFAULT_SERVER_URL, eraseLocalChatData, getAuthToken, getDeletedConversationAfter, getDeletedConversationAfters, getServerUrl, getStoredAutoDownloadMedia, getStoredCallLogs, getStoredConversationMediaCacheCursor, getStoredConversationSyncCursors, getStoredConversations, getStoredDarkMode, getStoredDecoyOffline, getStoredErasePinDeletePeers, getStoredLanguage, getStoredLatestMessagesByConversationIds, getStoredMessages, getStoredMessagesByIds, getStoredOlderMessages, getStoredRecentMessages, getStoredSubscriptionStatus, getStoredUser, removeStoredConversationRecords, removeStoredMessageRecords, removeStoredMessages, setDeletedConversationAfter, setServerUrl, setStoredAutoDownloadMedia, setStoredCallLogs, setStoredConversationMediaCacheCursor, setStoredConversationSyncCursors, setStoredDarkMode, setStoredDecoyOffline, setStoredLanguage, setStoredSubscriptionStatus, setStoredUser, upsertStoredConversations, upsertStoredMessages } from '../lib/storage';
-import { getServerInstanceId, LoginHostUnavailableError, resolveLoginServer, resolveMainLoginFallbackCandidates } from '../lib/loginServerResolution';
+import { getServerInstanceId, LoginHostUnavailableError, resolveLoginServer, resolveMainLoginFallbackCandidates, resolveMainServer } from '../lib/loginServerResolution';
 import { activateSavedAccount, getAccountSession, getActiveAccount, initializeAccountRegistry, listSavedAccounts, markActiveAccountAuthState, removeSavedAccount, resolveSavedAccountServerIdentity, saveAuthenticatedAccount, setActiveAccountUnreadConversationIds, updateSavedAccountServerEndpoint, type SavedAccount } from '../lib/accountRegistry';
 import { configureMessageDatabase, deleteMessageDatabase, listActiveLiveLocationShares } from '../lib/messageStore';
 import { syncNativeAccountCredentials } from '../lib/nativeAccountCredentials';
@@ -387,6 +387,7 @@ export type AppState = {
   signInWithPassword: (username: string, password: string) => Promise<void>;
   switchAccount: (accountId: string) => Promise<void>;
   removeAccount: (accountId: string) => Promise<void>;
+  checkRegistrationUsernameAvailability: (username: string) => Promise<{ available: boolean; username: string }>;
   registerWithPassword: (displayName: string, username: string, password: string) => Promise<void>;
   deleteAccountForever: (password: string) => Promise<void>;
   wipeChatsOnlyData: (preservePeerConversationIds?: string[]) => Promise<void>;
@@ -465,6 +466,37 @@ export type AppState = {
   markConversationMessagesRead: (conversationId: string, readerId: string, readAt?: string, messageIds?: string[], messageKeys?: string[]) => void;
   signOut: () => Promise<void>;
 };
+
+async function requestFromMainServer<T>(request: (serverUrl: string) => Promise<T>) {
+  const resolved = await resolveMainServer();
+  const attemptedServerUrls = new Set<string>();
+  let candidateServerUrls = [...resolved.candidateServerUrls];
+  let didLoadFallbacks = resolved.source === 'main-dns-pool';
+  let lastAttemptedServerUrl = resolved.serverUrl;
+
+  while (candidateServerUrls.length > 0) {
+    const serverUrl = candidateServerUrls.shift() as string;
+    if (attemptedServerUrls.has(serverUrl)) continue;
+    attemptedServerUrls.add(serverUrl);
+    lastAttemptedServerUrl = serverUrl;
+
+    try {
+      return { response: await request(serverUrl), serverUrl };
+    } catch (error) {
+      if (error instanceof ApiError) throw error;
+
+      if (candidateServerUrls.length === 0 && !didLoadFallbacks) {
+        didLoadFallbacks = true;
+        const fallbacks = await resolveMainLoginFallbackCandidates();
+        candidateServerUrls = fallbacks
+          .map((candidate) => candidate.serverUrl)
+          .filter((candidate) => !attemptedServerUrls.has(candidate));
+      }
+    }
+  }
+
+  throw new LoginHostUnavailableError(lastAttemptedServerUrl);
+}
 
 export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((set) => ({
   accounts: [],
@@ -847,7 +879,11 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
       attemptedServerUrls.add(serverUrl);
 
       try {
-        authenticated = await login(serverUrl, { password, username: resolved.username });
+        authenticated = await login(serverUrl, {
+          ...(resolved.loginDomain ? { loginDomain: resolved.loginDomain } : {}),
+          password,
+          username: resolved.username,
+        });
       } catch (error) {
         if (error instanceof ApiError) throw error;
         if ((resolved.source === 'main' || resolved.source === 'main-dns-pool') && candidateServerUrls.length === 0) {
@@ -1012,21 +1048,24 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
     });
   },
 
+  async checkRegistrationUsernameAvailability(username) {
+    const { response } = await requestFromMainServer((serverUrl) => (
+      checkUsernameAvailability(serverUrl, username)
+    ));
+    return response;
+  },
+
   async registerWithPassword(displayName, username, password) {
     if (getActiveCallSession() || getActiveMeetingSession()) throw new Error(t('endCallBeforeSwitchingAccount'));
     if ((await listActiveLiveLocationShares()).length > 0) throw new Error(t('stopLiveLocationBeforeSwitchingAccount'));
-    const { serverUrl } = useAppStore.getState();
-
-    if (!serverUrl) {
-      throw new Error(t('serverUrlNotConfigured'));
-    }
-
-    const response = await register(serverUrl, { displayName, password, username });
+    const { response, serverUrl } = await requestFromMainServer((candidateServerUrl) => (
+      register(candidateServerUrl, { displayName, password, username })
+    ));
     const serverInstanceId = await getServerInstanceId(serverUrl);
     await drainSessionWork();
     const account = await saveAuthenticatedAccount({
-      canonicalServerUrl: serverUrl === DEFAULT_SERVER_URL ? DEFAULT_SERVER_URL : undefined,
-      routingMode: serverUrl === DEFAULT_SERVER_URL ? 'main-dns-pool' : 'direct-hostname',
+      canonicalServerUrl: DEFAULT_SERVER_URL,
+      routingMode: 'main-dns-pool',
       serverInstanceId,
       serverUrl,
       token: response.token,
@@ -1050,6 +1089,8 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
       blockedUsersLastFetchedAt: 0,
       callLogs: [],
       catalogUrl: null,
+      connectionNotice: null,
+      connectionStatus: 'unknown',
       helpUrl: null,
       contacts: [],
       conversations: [],
@@ -1066,6 +1107,8 @@ export const useAppStore: UseBoundStore<StoreApi<AppState>> = create<AppState>((
       unviewedStatusAuthorIds: [],
       subscriptionStatus: null,
       unreadConversationIds: [],
+      serverUrl,
+      uploadProgressByMessageId: {},
       user: response.user,
     });
     try {
