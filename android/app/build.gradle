@@ -180,8 +180,8 @@ dependencies {
     implementation("com.google.firebase:firebase-messaging")
     // Keep Media3 aligned with expo-video. Newer Media3 releases change the
     // LoadControl ABI and crash Expo's video player at runtime.
-    implementation("androidx.media3:media3-common:1.8.0")
-    implementation("androidx.media3:media3-transformer:1.8.0")
+    implementation("androidx.media3:media3-common:1.11.0")
+    implementation("androidx.media3:media3-transformer:1.11.0")
     implementation("com.google.android.play:integrity:1.6.0")
 
     def isGifEnabled = (findProperty('expo.gif.enabled') ?: "") == "true";
