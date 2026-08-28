@@ -176,7 +176,7 @@ dependencies {
     // react-native-screens currently requests Material 1.13.0. Material 1.14.0
     // avoids its deprecated Android 15 edge-to-edge window operations on API 35+.
     implementation("com.google.android.material:material:1.14.0")
-    implementation(platform("com.google.firebase:firebase-bom:34.16.0"))
+    implementation(platform("com.google.firebase:firebase-bom:34.18.0"))
     implementation("com.google.firebase:firebase-messaging")
     // Keep Media3 aligned with expo-video. Newer Media3 releases change the
     // LoadControl ABI and crash Expo's video player at runtime.
