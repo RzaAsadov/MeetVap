@@ -1,0 +1,12 @@
+# MeetVap
+
+MeetVap is an open-source, full-stack video conferencing and messaging application. 
+
+## Repository Structure
+- `/server`: The Express.js backend and LiveKit integrations.
+- `/meet` & `/web`: The frontend web applications.
+- `/src/screens`: The React Native mobile application screens.
+- `/admin`: The custom admin dashboard.
+
+## Links
+- GitHub: https://github.com/RzaAsadov/MeetVap
